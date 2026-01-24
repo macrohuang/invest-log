@@ -1,0 +1,273 @@
+{% extends "base.html" %}
+
+{% block title %}Holdings Detail - Invest Log{% endblock %}
+
+{% block content %}
+<h1>Holdings Detail</h1>
+
+{% if message %}
+<div class="alert alert-{{ message_type }}" id="alertMessage">
+    <span>{{ message }}</span>
+    <button class="alert-close" onclick="this.parentElement.style.display='none'">&times;</button>
+</div>
+{% endif %}
+
+{% if holdings_by_symbol %}
+{% for currency, data in holdings_by_symbol.items() %}
+<div class="holdings-section">
+    <div class="section-header">
+        <h2>{{ currency }}</h2>
+        <div class="section-totals">
+            <span class="total-label">Cost:</span>
+            <span class="total-value">{% if currency == 'CNY' %}¥{% elif currency == 'USD' %}${% else %}HK${% endif %}{{ "%.2f"|format(data.total_cost) }}</span>
+            <span class="total-label">Market:</span>
+            <span class="total-value">{% if currency == 'CNY' %}¥{% elif currency == 'USD' %}${% else %}HK${% endif %}{{ "%.2f"|format(data.total_market_value) }}</span>
+            <span class="total-label">P&L:</span>
+            <span class="total-value {% if data.total_pnl >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">
+                {% if data.total_pnl >= 0 %}+{% endif %}{{ "%.2f"|format(data.total_pnl) }}
+            </span>
+        </div>
+    </div>
+    
+    <table>
+        <thead>
+            <tr>
+                <th>Symbol</th>
+                <th>Type</th>
+                <th>Shares</th>
+                <th>Avg Cost</th>
+                <th>Latest Price</th>
+                <th>Cost Basis</th>
+                <th>Market Value</th>
+                <th>P&L</th>
+                <th>%</th>
+                <th>Actions</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for s in data.symbols %}
+            <tr>
+                <td><strong><a href="/symbol/{{ s.symbol }}?currency={{ currency }}">{{ s.symbol }}</a></strong></td>
+                <td><span class="badge badge-asset-{{ s.asset_type }}">{{ s.asset_type_label }}</span></td>
+                <td>{{ "%.4f"|format(s.total_shares) }}</td>
+                <td>{{ "%.2f"|format(s.avg_cost) }}</td>
+                <td>
+                    {% if s.latest_price is not none %}
+                    {{ "%.2f"|format(s.latest_price) }}
+                    {% else %}
+                    <span class="text-muted">-</span>
+                    {% endif %}
+                </td>
+                <td>{{ "%.2f"|format(s.cost_basis) }}</td>
+                <td>{{ "%.2f"|format(s.market_value) }}</td>
+                <td>
+                    {% if s.unrealized_pnl is not none %}
+                    <span class="{% if s.unrealized_pnl >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">
+                        {% if s.unrealized_pnl >= 0 %}+{% endif %}{{ "%.2f"|format(s.unrealized_pnl) }}
+                        <small>({% if s.pnl_percent >= 0 %}+{% endif %}{{ s.pnl_percent }}%)</small>
+                    </span>
+                    {% else %}
+                    <span class="text-muted">-</span>
+                    {% endif %}
+                </td>
+                <td>{{ s.percent }}%</td>
+                <td class="actions-cell">
+                    <button class="btn-small btn-update" 
+                            data-symbol="{{ s.symbol }}" 
+                            data-currency="{{ currency }}" 
+                            onclick="autoUpdatePrice(this)">Auto</button>
+                    <button class="btn-small btn-manual" 
+                            data-symbol="{{ s.symbol }}" 
+                            data-currency="{{ currency }}" 
+                            data-price="{{ s.latest_price or 0 }}"
+                            onclick="manualUpdatePrice(this)">Manual</button>
+                    <button class="btn-small btn-trade" 
+                            data-symbol="{{ s.symbol }}" 
+                            data-currency="{{ currency }}" 
+                            data-account="{{ s.account_id }}" 
+                            data-asset="{{ s.asset_type }}"
+                            onclick="openTradeModal(this)">Trade</button>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endfor %}
+
+<!-- Update Price Form (hidden) -->
+<form id="updatePriceForm" method="POST" action="/holdings/update-price" style="display:none;">
+    <input type="hidden" name="symbol" id="update_symbol">
+    <input type="hidden" name="currency" id="update_currency">
+</form>
+
+<!-- Trade Modal -->
+<div id="tradeModal" class="modal" style="display:none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Quick Trade - <span id="trade_symbol_display"></span></h3>
+            <button class="modal-close" onclick="closeTradeModal()">&times;</button>
+        </div>
+        <form method="POST" action="/holdings/quick-trade">
+            <input type="hidden" name="symbol" id="trade_symbol">
+            <input type="hidden" name="currency" id="trade_currency">
+            <input type="hidden" name="account_id" id="trade_account_id">
+            <input type="hidden" name="asset_type" id="trade_asset_type">
+            
+            <div class="form-group">
+                <label>Transaction Type</label>
+                <select name="transaction_type" id="quick_trade_type" required>
+                    <option value="BUY">BUY</option>
+                    <option value="SELL">SELL</option>
+                    <option value="INCOME">INCOME (Cash)</option>
+                    <option value="DIVIDEND">DIVIDEND</option>
+                </select>
+            </div>
+            
+            <div class="form-group" id="quick_link_cash_group">
+                <label class="checkbox-label">
+                    <input type="checkbox" name="link_cash" id="quick_link_cash" value="true">
+                    Link to Cash Account
+                </label>
+            </div>
+            
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Quantity</label>
+                    <input type="number" name="quantity" step="0.0001" required>
+                </div>
+                <div class="form-group">
+                    <label>Price</label>
+                    <input type="number" name="price" step="0.01" required>
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label>Commission</label>
+                <input type="number" name="commission" step="0.01" value="0">
+            </div>
+            
+            <div class="form-group">
+                <label>Notes</label>
+                <input type="text" name="notes">
+            </div>
+            
+            <div class="form-actions">
+                <button type="button" class="btn-secondary" onclick="closeTradeModal()">Cancel</button>
+                <button type="submit" class="btn-primary">Submit Trade</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Manual Price Update Modal -->
+<div id="manualPriceModal" class="modal" style="display:none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Manual Price Update - <span id="manual_symbol_display"></span></h3>
+            <button class="modal-close" onclick="closeManualPriceModal()">&times;</button>
+        </div>
+        <form method="POST" action="/holdings/manual-update-price">
+            <input type="hidden" name="symbol" id="manual_update_symbol">
+            <input type="hidden" name="currency" id="manual_update_currency">
+            
+            <div class="form-group">
+                <label>Latest Price</label>
+                <input type="number" name="price" id="manual_update_price" step="0.0001" required>
+            </div>
+            
+            <div class="form-actions">
+                <button type="button" class="btn-secondary" onclick="closeManualPriceModal()">Cancel</button>
+                <button type="submit" class="btn-primary">Update Price</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+function autoUpdatePrice(btn) {
+    const symbol = btn.getAttribute('data-symbol');
+    const currency = btn.getAttribute('data-currency');
+    updatePrice(symbol, currency);
+}
+
+function manualUpdatePrice(btn) {
+    const symbol = btn.getAttribute('data-symbol');
+    const currency = btn.getAttribute('data-currency');
+    const price = btn.getAttribute('data-price');
+    showManualPriceModal(symbol, currency, price);
+}
+
+function openTradeModal(btn) {
+    const symbol = btn.getAttribute('data-symbol');
+    const currency = btn.getAttribute('data-currency');
+    const accountId = btn.getAttribute('data-account');
+    const assetType = btn.getAttribute('data-asset');
+    showTradeModal(symbol, currency, accountId, assetType);
+}
+
+function updatePrice(symbol, currency) {
+    document.getElementById('update_symbol').value = symbol;
+    document.getElementById('update_currency').value = currency;
+    
+    if (confirm('Fetch latest price for ' + symbol + '?')) {
+        document.getElementById('updatePriceForm').submit();
+    }
+}
+
+function showManualPriceModal(symbol, currency, currentPrice) {
+    document.getElementById('manual_update_symbol').value = symbol;
+    document.getElementById('manual_update_currency').value = currency;
+    document.getElementById('manual_update_price').value = currentPrice;
+    document.getElementById('manual_symbol_display').textContent = symbol + ' (' + currency + ')';
+    document.getElementById('manualPriceModal').style.display = 'flex';
+}
+
+function closeManualPriceModal() {
+    document.getElementById('manualPriceModal').style.display = 'none';
+}
+
+function showTradeModal(symbol, currency, accountId, assetType) {
+    document.getElementById('trade_symbol').value = symbol;
+    document.getElementById('trade_currency').value = currency;
+    document.getElementById('trade_account_id').value = accountId;
+    document.getElementById('trade_asset_type').value = assetType;
+    document.getElementById('trade_symbol_display').textContent = symbol + ' (' + currency + ')';
+    
+    const typeSelect = document.getElementById('quick_trade_type');
+    const linkCashGroup = document.getElementById('quick_link_cash_group');
+    
+    function updateLinkCashVisibility() {
+        const type = typeSelect.value;
+        if ((type === 'BUY' || type === 'SELL') && symbol.toUpperCase() !== 'CASH') {
+            linkCashGroup.style.display = 'block';
+        } else {
+            linkCashGroup.style.display = 'none';
+        }
+    }
+    
+    typeSelect.onchange = updateLinkCashVisibility;
+    updateLinkCashVisibility();
+    
+    document.getElementById('tradeModal').style.display = 'flex';
+}
+
+function closeTradeModal() {
+    document.getElementById('tradeModal').style.display = 'none';
+}
+
+// Close modals on outside click
+window.addEventListener('click', function(e) {
+    const tradeModal = document.getElementById('tradeModal');
+    const manualPriceModal = document.getElementById('manualPriceModal');
+    if (e.target === tradeModal) closeTradeModal();
+    if (e.target === manualPriceModal) closeManualPriceModal();
+});
+</script>
+
+{% else %}
+<div class="empty-state">
+    <p>No holdings yet. <a href="/add">Add a transaction</a> to get started.</p>
+</div>
+{% endif %}
+{% endblock %}

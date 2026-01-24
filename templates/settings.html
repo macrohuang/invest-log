@@ -1,0 +1,201 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - Invest Log{% endblock %}
+
+{% block content %}
+<h1>Settings</h1>
+
+{% if message %}
+<div class="alert alert-{{ message_type }}" id="alertMessage">
+    <span>{{ message }}</span>
+    <button class="alert-close" onclick="this.parentElement.style.display='none'">&times;</button>
+</div>
+{% endif %}
+
+<div class="settings-tabs">
+    <button class="tab-link {% if active_tab == 'allocation' %}active{% endif %}" onclick="openTab(event, 'allocation')">Allocation</button>
+    <button class="tab-link {% if active_tab == 'accounts' %}active{% endif %}" onclick="openTab(event, 'accounts')">Accounts</button>
+    <button class="tab-link {% if active_tab == 'asset_types' %}active{% endif %}" onclick="openTab(event, 'asset_types')">Asset Types</button>
+</div>
+
+<!-- Allocation Settings Section -->
+<div id="allocation" class="tab-content {% if active_tab == 'allocation' %}active{% endif %}">
+    <div class="settings-panel">
+        <h2>Allocation Settings</h2>
+        <p class="subtitle">Set target allocation ranges for each currency and asset type. Warnings will be shown when allocations fall outside these ranges.</p>
+
+        <form method="POST" action="/settings" class="settings-form">
+            {% for currency in currencies %}
+            <div class="settings-section">
+                <h3>{{ currency }}</h3>
+                <table class="settings-table">
+                    <thead>
+                        <tr>
+                            <th>Asset Type</th>
+                            <th>Min %</th>
+                            <th>Max %</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for at in asset_types %}
+                        <tr>
+                            <td>{{ at.label }} <code>({{ at.code }})</code></td>
+                            <td>
+                                <input type="number" 
+                                       name="{{ currency }}_{{ at.code }}_min" 
+                                       value="{{ settings_map.get(currency, {}).get(at.code, {}).get('min', '') }}"
+                                       min="0" max="100" step="0.1"
+                                       placeholder="0">
+                            </td>
+                            <td>
+                                <input type="number" 
+                                       name="{{ currency }}_{{ at.code }}_max" 
+                                       value="{{ settings_map.get(currency, {}).get(at.code, {}).get('max', '') }}"
+                                       min="0" max="100" step="0.1"
+                                       placeholder="100">
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endfor %}
+
+            <button type="submit" class="btn btn-primary">Save Allocation Settings</button>
+        </form>
+    </div>
+</div>
+
+<!-- Account Management Section -->
+<div id="accounts" class="tab-content {% if active_tab == 'accounts' %}active{% endif %}">
+    <div class="settings-panel">
+        <h2>Account Management</h2>
+        <p class="subtitle">Manage brokerage and bank accounts.</p>
+        
+        <table class="settings-table">
+            <thead>
+                <tr>
+                    <th>Account ID</th>
+                    <th>Name</th>
+                    <th>Broker</th>
+                    <th>Type</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for acc in accounts %}
+                <tr>
+                    <td><code>{{ acc.account_id }}</code></td>
+                    <td>{{ acc.account_name }}</td>
+                    <td>{{ acc.broker or '-' }}</td>
+                    <td>{{ acc.account_type or '-' }}</td>
+                    <td>
+                        {% if acc.can_delete %}
+                        <form method="POST" action="/settings/delete-account/{{ acc.account_id }}" style="display:inline;">
+                            <button type="submit" class="btn-delete" onclick="return confirm('Delete account {{ acc.account_name }}?')">Delete</button>
+                        </form>
+                        {% else %}
+                        <span class="text-muted">In use</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        
+        <div class="add-form-container">
+            <h3>Add New Account</h3>
+            <form method="POST" action="/settings/add-account" class="form-grid">
+                <div class="form-group">
+                    <label>Account ID</label>
+                    <input type="text" name="account_id" placeholder="e.g. broker-001" required>
+                </div>
+                <div class="form-group">
+                    <label>Account Name</label>
+                    <input type="text" name="account_name" placeholder="e.g. Interactive Brokers" required>
+                </div>
+                <div class="form-group">
+                    <label>Broker</label>
+                    <input type="text" name="broker" placeholder="e.g. IBKR">
+                </div>
+                <div class="form-group">
+                    <label>Type</label>
+                    <input type="text" name="account_type" placeholder="e.g. Margin">
+                </div>
+                <button type="submit" class="btn btn-primary">Add Account</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Asset Type Management Section -->
+<div id="asset_types" class="tab-content {% if active_tab == 'asset_types' %}active{% endif %}">
+    <div class="settings-panel">
+        <h2>Asset Type Management</h2>
+        <p class="subtitle">Manage asset types. Asset types can be used with any currency.</p>
+        
+        <table class="settings-table">
+            <thead>
+                <tr>
+                    <th>Code</th>
+                    <th>Label</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for at in asset_types %}
+                <tr>
+                    <td><code>{{ at.code }}</code></td>
+                    <td>{{ at.label }}</td>
+                    <td>
+                        {% if at.can_delete %}
+                        <form method="POST" action="/settings/delete-asset-type/{{ at.code }}" style="display:inline;">
+                            <button type="submit" class="btn-delete" onclick="return confirm('Delete asset type {{ at.label }}?')">Delete</button>
+                        </form>
+                        {% else %}
+                        <span class="text-muted" title="{{ at.delete_message }}">In use</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        
+        <div class="add-form-container">
+            <h3>Add New Asset Type</h3>
+            <form method="POST" action="/settings/add-asset-type" class="form-inline">
+                <div class="form-group">
+                    <label>Code</label>
+                    <input type="text" name="code" placeholder="e.g. fund" required pattern="[a-zA-Z_]+" title="Letters and underscores only">
+                </div>
+                <div class="form-group">
+                    <label>Label</label>
+                    <input type="text" name="label" placeholder="e.g. 基金" required>
+                </div>
+                <button type="submit" class="btn btn-primary">Add Asset Type</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+function openTab(evt, tabName) {
+    var i, tabcontent, tablinks;
+    tabcontent = document.getElementsByClassName("tab-content");
+    for (i = 0; i < tabcontent.length; i++) {
+        tabcontent[i].classList.remove("active");
+    }
+    tablinks = document.getElementsByClassName("tab-link");
+    for (i = 0; i < tablinks.length; i++) {
+        tablinks[i].classList.remove("active");
+    }
+    document.getElementById(tabName).classList.add("active");
+    evt.currentTarget.classList.add("active");
+    
+    // Update URL without refresh
+    const url = new URL(window.location);
+    url.searchParams.set('tab', tabName);
+    window.history.pushState({}, '', url);
+}
+</script>
+{% endblock %}

@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block title %}Holdings - Invest Log{% endblock %}
+
+{% block content %}
+<h1>Portfolio Holdings</h1>
+
+{% if holdings_by_currency %}
+<div class="currency-charts">
+    {% for currency, data in holdings_by_currency.items() %}
+    <div class="currency-card">
+        <div class="currency-header">
+            <h2>{{ currency }}</h2>
+            <span class="currency-total">
+                {% if currency == 'CNY' %}¥{% elif currency == 'USD' %}${% else %}HK${% endif %}{{ "%.2f"|format(data.total) }}
+            </span>
+        </div>
+        
+        <div class="chart-container">
+            <canvas id="chart-{{ currency }}"></canvas>
+        </div>
+        
+        <div class="allocation-list">
+            {% for alloc in data.allocations %}
+            {% if alloc.amount > 0 or alloc.warning %}
+            <div class="allocation-item {% if alloc.warning %}has-warning{% endif %}">
+                <div class="allocation-info">
+                    <span class="allocation-label">{{ alloc.label }}</span>
+                    <span class="allocation-percent">{{ alloc.percent }}%</span>
+                </div>
+                <div class="allocation-bar-container">
+                    <div class="allocation-bar" style="width: {{ alloc.percent }}%"></div>
+                    {% if alloc.min_percent > 0 or alloc.max_percent < 100 %}
+                    <div class="allocation-range" style="left: {{ alloc.min_percent }}%; width: {{ alloc.max_percent - alloc.min_percent }}%"></div>
+                    {% endif %}
+                </div>
+                {% if alloc.warning %}
+                <div class="allocation-warning">{{ alloc.warning }}</div>
+                {% endif %}
+            </div>
+            {% endif %}
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<script>
+const holdingsData = {{ holdings_by_currency | tojson }};
+const colors = {
+    'stock': '#3b82f6',
+    'bond': '#10b981',
+    'metal': '#f59e0b',
+    'cash': '#8b5cf6'
+};
+const labels = {{ asset_type_labels | tojson }};
+
+Object.keys(holdingsData).forEach(currency => {
+    const data = holdingsData[currency];
+    const allocations = data.allocations.filter(a => a.amount > 0);
+    
+    if (allocations.length > 0) {
+        new Chart(document.getElementById('chart-' + currency), {
+            type: 'doughnut',
+            data: {
+                labels: allocations.map(a => a.label),
+                datasets: [{
+                    data: allocations.map(a => a.amount),
+                    backgroundColor: allocations.map(a => colors[a.asset_type])
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
+                    legend: { display: false }
+                }
+            }
+        });
+    }
+});
+</script>
+
+{% else %}
+<div class="empty-state">
+    <p>No holdings yet. <a href="/add">Add a transaction</a> to get started.</p>
+</div>
+{% endif %}
+{% endblock %}

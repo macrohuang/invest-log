@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+
+{% block title %}{{ symbol }} - Invest Log{% endblock %}
+
+{% block content %}
+<div class="symbol-header">
+    <div>
+        <a href="/holdings" class="back-link">← Back to Holdings</a>
+        <h1>{{ symbol }}</h1>
+        <span class="currency-tag">{{ currency }}</span>
+    </div>
+</div>
+
+{% if holding %}
+<div class="holding-summary">
+    <div class="summary-item">
+        <div class="summary-label">Total Shares</div>
+        <div class="summary-value">{{ "%.4f"|format(holding.total_shares) }}</div>
+    </div>
+    <div class="summary-item">
+        <div class="summary-label">Avg Cost</div>
+        <div class="summary-value">{{ "%.2f"|format(holding.avg_cost) }}</div>
+    </div>
+    <div class="summary-item">
+        <div class="summary-label">Total Value</div>
+        <div class="summary-value highlight">
+            {% if currency == 'CNY' %}¥{% elif currency == 'USD' %}${% else %}HK${% endif %}{{ "%.2f"|format(holding.total_cost) }}
+        </div>
+    </div>
+    <div class="summary-item">
+        <div class="summary-label">Asset Type</div>
+        <div class="summary-value">{{ asset_type_labels.get(holding.asset_type, '股票') }}</div>
+    </div>
+</div>
+
+<div class="adjust-section">
+    <h3>Adjust Value</h3>
+    <form method="POST" action="/symbol/{{ symbol }}/adjust" class="adjust-form">
+        <input type="hidden" name="currency" value="{{ currency }}">
+        <input type="hidden" name="account_id" value="{{ holding.account_id }}">
+        <input type="hidden" name="asset_type" value="{{ holding.asset_type }}">
+        <div class="form-row">
+            <div class="form-group">
+                <label for="new_value">New Total Value</label>
+                <input type="number" id="new_value" name="new_value" step="0.01" 
+                       value="{{ '%.2f'|format(holding.total_cost) }}" required>
+            </div>
+            <div class="form-group">
+                <label for="notes">Notes (optional)</label>
+                <input type="text" id="notes" name="notes" placeholder="Reason for adjustment">
+            </div>
+            <div class="form-group">
+                <button type="submit" class="btn">Adjust</button>
+            </div>
+        </div>
+    </form>
+</div>
+{% else %}
+<div class="empty-state">
+    <p>No holding found for {{ symbol }} in {{ currency }}.</p>
+</div>
+{% endif %}
+
+<div class="transactions-section">
+    <div class="section-header">
+        <h2>Transaction History</h2>
+        <div class="year-filter">
+            {% for y in years %}
+            <a href="/symbol/{{ symbol }}?currency={{ currency }}&year={{ y }}" 
+               class="year-btn {% if y == selected_year %}active{% endif %}">{{ y }}</a>
+            {% endfor %}
+        </div>
+    </div>
+    
+    <table>
+        <thead>
+            <tr>
+                <th>Date</th>
+                <th>Type</th>
+                <th>Quantity</th>
+                <th>Price</th>
+                <th>Total</th>
+                <th>Notes</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for t in transactions %}
+            <tr>
+                <td>{{ t.transaction_date }}</td>
+                <td><span class="badge badge-{{ t.transaction_type|lower }}">{{ t.transaction_type }}</span></td>
+                <td>{{ "%.4f"|format(t.quantity) }}</td>
+                <td>{{ "%.2f"|format(t.price) }}</td>
+                <td>{{ "%.2f"|format(t.total_amount) }}</td>
+                <td>{{ t.notes or '-' }}</td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="6" class="empty">No transactions in {{ selected_year }}.</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

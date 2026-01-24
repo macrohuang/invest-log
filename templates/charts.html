@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+
+{% block title %}Charts - Invest Log{% endblock %}
+
+{% block content %}
+<h1>Portfolio Charts</h1>
+
+{% if holdings_by_symbol %}
+<div class="charts-grid">
+    {% for currency, data in holdings_by_symbol.items() %}
+    <div class="chart-card">
+        <div class="chart-header">
+            <h3>{{ currency }} Holdings</h3>
+            <span class="chart-total">
+                {% if currency == 'CNY' %}¥{% elif currency == 'USD' %}${% else %}HK${% endif %}{{ "%.2f"|format(data.total_market_value) }}
+            </span>
+        </div>
+        <div class="chart-container">
+            <canvas id="chart-{{ currency }}"></canvas>
+        </div>
+        <div class="chart-legend">
+            {% for sym in data.symbols %}
+            <div class="legend-item">
+                <span class="legend-color" style="background: var(--color-{{ loop.index0 % 10 }})"></span>
+                <a href="/symbol/{{ sym.symbol }}?currency={{ currency }}" class="legend-label">{{ sym.symbol }}</a>
+                <span class="legend-value">{{ sym.percent }}%</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<style>
+:root {
+    --color-0: #3b82f6;
+    --color-1: #10b981;
+    --color-2: #f59e0b;
+    --color-3: #8b5cf6;
+    --color-4: #ef4444;
+    --color-5: #06b6d4;
+    --color-6: #ec4899;
+    --color-7: #84cc16;
+    --color-8: #f97316;
+    --color-9: #6366f1;
+}
+.chart-legend .legend-label {
+    color: var(--text-primary);
+    text-decoration: none;
+}
+.chart-legend .legend-label:hover {
+    text-decoration: underline;
+}
+</style>
+
+<script>
+const holdingsData = {{ holdings_by_symbol | tojson }};
+const chartColors = [
+    '#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444',
+    '#06b6d4', '#ec4899', '#84cc16', '#f97316', '#6366f1'
+];
+
+Object.keys(holdingsData).forEach(currency => {
+    const data = holdingsData[currency];
+    const symbols = data.symbols.filter(s => s.market_value > 0);
+    
+    if (symbols.length > 0) {
+        new Chart(document.getElementById('chart-' + currency), {
+            type: 'doughnut',
+            data: {
+                labels: symbols.map(s => s.symbol),
+                datasets: [{
+                    data: symbols.map(s => s.market_value),
+                    backgroundColor: symbols.map((_, i) => chartColors[i % chartColors.length])
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: true,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                const value = context.parsed;
+                                const total = context.dataset.data.reduce((a, b) => a + b, 0);
+                                const percent = ((value / total) * 100).toFixed(1);
+                                return context.label + ': ' + percent + '%';
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
+});
+</script>
+{% else %}
+<div class="empty-state">
+    <p>No holdings data to display. <a href="/add">Add a transaction</a> to get started.</p>
+</div>
+{% endif %}
+{% endblock %}

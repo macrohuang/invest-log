@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Invest Log{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <nav>
+        <div class="nav-brand">Invest Log</div>
+        <div class="nav-links">
+            <a href="/" {% if request.url.path == "/" %}class="active"{% endif %}>Overview</a>
+            <a href="/holdings" {% if request.url.path == "/holdings" or request.url.path.startswith("/symbol") %}class="active"{% endif %}>Holdings</a>
+            <a href="/transactions" {% if request.url.path == "/transactions" %}class="active"{% endif %}>Transactions</a>
+            <a href="/add" {% if request.url.path == "/add" %}class="active"{% endif %}>Add</a>
+            <a href="/charts" {% if request.url.path == "/charts" %}class="active"{% endif %}>Charts</a>
+            <a href="/settings" {% if request.url.path == "/settings" %}class="active"{% endif %}>Settings</a>
+        </div>
+    </nav>
+    <main>
+        {% block content %}{% endblock %}
+    </main>
+</body>
+</html>
