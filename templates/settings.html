@@ -16,6 +16,7 @@
     <button class="tab-link {% if active_tab == 'allocation' %}active{% endif %}" onclick="openTab(event, 'allocation')">Allocation</button>
     <button class="tab-link {% if active_tab == 'accounts' %}active{% endif %}" onclick="openTab(event, 'accounts')">Accounts</button>
     <button class="tab-link {% if active_tab == 'asset_types' %}active{% endif %}" onclick="openTab(event, 'asset_types')">Asset Types</button>
+    <button class="tab-link {% if active_tab == 'database' %}active{% endif %}" onclick="openTab(event, 'database')">Database</button>
 </div>
 
 <!-- Allocation Settings Section -->
@@ -177,6 +178,69 @@
         </div>
     </div>
 </div>
+
+<!-- Database Settings Section -->
+<div id="database" class="tab-content {% if active_tab == 'database' %}active{% endif %}">
+    <div class="settings-panel">
+        <h2>Database & Sync Settings</h2>
+        <p class="subtitle">Configure where your transaction database is stored and manage iCloud synchronization.</p>
+        
+        <div class="current-info card">
+            <p><strong>Current Database Path:</strong></p>
+            <p><code class="break-word">{{ current_db_path }}</code></p>
+        </div>
+
+        <div class="add-form-container">
+            <form method="POST" action="/settings/database" class="settings-form">
+                <div class="form-group">
+                    <label>Database Filename</label>
+                    <input type="text" name="db_name" value="{{ user_config.db_name }}" placeholder="e.g. transactions.db" required>
+                    <small class="help-text">The name of the SQLite database file. Default is <code>transactions.db</code>.</small>
+                </div>
+                
+                <div class="form-group" style="margin-top: 1rem;">
+                    <label class="checkbox-label" style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
+                        <input type="checkbox" name="use_icloud" value="true" {% if user_config.use_icloud %}checked{% endif %} style="width: auto; margin: 0;">
+                        Sync via iCloud Drive
+                    </label>
+                    <small class="help-text">When enabled, the database will be stored in your iCloud Drive folder for automatic backup and multi-device sync.</small>
+                </div>
+                
+                <div class="form-actions" style="margin-top: 2rem;">
+                    <button type="submit" class="btn btn-primary">Save Database Settings</button>
+                </div>
+            </form>
+            
+            <div class="alert alert-info" style="margin-top: 1.5rem;">
+                <p><strong>Note:</strong> Changing these settings will update <code>config.json</code>. The application may need a restart for the new path to take full effect. If the file doesn't exist at the new location, a new empty database will be initialized.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+.break-word {
+    word-break: break-all;
+    display: block;
+    padding: 0.75rem;
+    background: var(--bg-secondary);
+    border-radius: 4px;
+    margin-top: 0.5rem;
+}
+.help-text {
+    display: block;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    margin-top: 0.25rem;
+}
+.card {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 1.25rem;
+    margin-bottom: 2rem;
+}
+</style>
 
 <script>
 function openTab(evt, tabName) {

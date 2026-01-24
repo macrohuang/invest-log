@@ -3,6 +3,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from typing import Optional
 from urllib.parse import quote
 import database as db
+import config
 from logger_config import logger
 from .utils import templates
 
@@ -55,6 +56,8 @@ async def settings_page(
         "asset_types": asset_types_with_status,
         "accounts": accounts_with_status,
         "settings_map": settings_map,
+        "user_config": config.USER_CONFIG,
+        "current_db_path": config.DB_PATH,
         "message": msg,
         "message_type": msg_type or "info",
         "active_tab": tab
@@ -84,6 +87,35 @@ async def settings_submit(request: Request):
             updated_count += 1
     
     return RedirectResponse(url=f"/settings?msg={quote('配置已保存')}&msg_type=success", status_code=303)
+
+@router.post("/settings/database")
+async def database_settings_submit(
+    db_name: str = Form(...),
+    use_icloud: bool = Form(False)
+):
+    """Handle database settings form submission."""
+    logger.info(f"Updating database settings: db_name={db_name}, use_icloud={use_icloud}")
+    
+    new_config = {
+        "db_name": db_name,
+        "use_icloud": use_icloud
+    }
+    
+    try:
+        config.save_user_config(new_config)
+        # We don't update config.DB_PATH or config.USER_CONFIG in memory here 
+        # because it's better to let the app restart (which happens automatically 
+        # in dev due to config.json change) or let the user restart.
+        return RedirectResponse(
+            url=f"/settings?tab=database&msg={quote('数据库配置已保存，重启应用后生效')}&msg_type=success", 
+            status_code=303
+        )
+    except Exception as e:
+        logger.error(f"Failed to save database config: {e}")
+        return RedirectResponse(
+            url=f"/settings?tab=database&msg={quote(f'保存失败: {str(e)}')}&msg_type=error", 
+            status_code=303
+        )
 
 @router.post("/settings/add-asset-type")
 async def add_asset_type(

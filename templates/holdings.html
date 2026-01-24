@@ -13,18 +13,28 @@
 {% endif %}
 
 {% if holdings_by_symbol %}
+<div class="holdings-tabs">
+    {% for currency in holdings_by_symbol.keys() %}
+    <button class="tab-link {% if loop.first %}active{% endif %}" onclick="showTab('{{ currency }}', this)">{{ currency }}</button>
+    {% endfor %}
+</div>
+
 {% for currency, data in holdings_by_symbol.items() %}
-<div class="holdings-section">
+<div id="tab-{{ currency }}" class="holdings-section tab-content {% if loop.first %}active{% endif %}">
     <div class="section-header">
         <h2>{{ currency }}</h2>
         <div class="section-totals">
+            <form method="POST" action="/holdings/update-all" style="margin-right: 1rem;" onsubmit="return confirm('Update all supported prices for {{ currency }}?')">
+                <input type="hidden" name="currency" value="{{ currency }}">
+                <button type="submit" class="btn-update-all">Update All Prices</button>
+            </form>
             <span class="total-label">Cost:</span>
-            <span class="total-value">{% if currency == 'CNY' %}¥{% elif currency == 'USD' %}${% else %}HK${% endif %}{{ "%.2f"|format(data.total_cost) }}</span>
+            <span class="total-value">{% if currency == 'CNY' %}¥{% elif currency == 'USD' %}${% else %}HK${% endif %}{{ data.total_cost|format_currency }}</span>
             <span class="total-label">Market:</span>
-            <span class="total-value">{% if currency == 'CNY' %}¥{% elif currency == 'USD' %}${% else %}HK${% endif %}{{ "%.2f"|format(data.total_market_value) }}</span>
+            <span class="total-value">{% if currency == 'CNY' %}¥{% elif currency == 'USD' %}${% else %}HK${% endif %}{{ data.total_market_value|format_currency }}</span>
             <span class="total-label">P&L:</span>
             <span class="total-value {% if data.total_pnl >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">
-                {% if data.total_pnl >= 0 %}+{% endif %}{{ "%.2f"|format(data.total_pnl) }}
+                {% if data.total_pnl >= 0 %}+{% endif %}{{ data.total_pnl|format_currency }}
             </span>
         </div>
     </div>
@@ -34,13 +44,14 @@
             <tr>
                 <th>Symbol</th>
                 <th>Type</th>
-                <th>Shares</th>
-                <th>Avg Cost</th>
-                <th>Latest Price</th>
-                <th>Cost Basis</th>
-                <th>Market Value</th>
-                <th>P&L</th>
-                <th>%</th>
+                <th class="text-right">Shares</th>
+                <th class="text-right">Avg Cost</th>
+                <th class="text-right">Latest Price</th>
+                <th class="text-right">Cost Basis</th>
+                <th class="text-right">Market Value</th>
+                <th class="text-right">P&L</th>
+                <th class="text-right">%</th>
+                <th class="text-center">Auto Update</th>
                 <th>Actions</th>
             </tr>
         </thead>
@@ -49,32 +60,40 @@
             <tr>
                 <td><strong><a href="/symbol/{{ s.symbol }}?currency={{ currency }}">{{ s.symbol }}</a></strong></td>
                 <td><span class="badge badge-asset-{{ s.asset_type }}">{{ s.asset_type_label }}</span></td>
-                <td>{{ "%.4f"|format(s.total_shares) }}</td>
-                <td>{{ "%.2f"|format(s.avg_cost) }}</td>
-                <td>
+                <td class="text-right">{{ s.total_shares|format_currency }}</td>
+                <td class="text-right">{{ s.avg_cost|format_currency }}</td>
+                <td class="text-right">
                     {% if s.latest_price is not none %}
-                    {{ "%.2f"|format(s.latest_price) }}
+                    {{ s.latest_price|format_currency }}
                     {% else %}
                     <span class="text-muted">-</span>
                     {% endif %}
                 </td>
-                <td>{{ "%.2f"|format(s.cost_basis) }}</td>
-                <td>{{ "%.2f"|format(s.market_value) }}</td>
-                <td>
+                <td class="text-right">{{ s.cost_basis|format_currency }}</td>
+                <td class="text-right">{{ s.market_value|format_currency }}</td>
+                <td class="text-right">
                     {% if s.unrealized_pnl is not none %}
                     <span class="{% if s.unrealized_pnl >= 0 %}pnl-positive{% else %}pnl-negative{% endif %}">
-                        {% if s.unrealized_pnl >= 0 %}+{% endif %}{{ "%.2f"|format(s.unrealized_pnl) }}
+                        {% if s.unrealized_pnl >= 0 %}+{% endif %}{{ s.unrealized_pnl|format_currency }}
                         <small>({% if s.pnl_percent >= 0 %}+{% endif %}{{ s.pnl_percent }}%)</small>
                     </span>
                     {% else %}
                     <span class="text-muted">-</span>
                     {% endif %}
                 </td>
-                <td>{{ s.percent }}%</td>
+                <td class="text-right">{{ s.percent }}%</td>
+                <td class="text-center">
+                    <label class="switch">
+                        <input type="checkbox" {% if s.auto_update %}checked{% endif %} 
+                               onchange="toggleAutoUpdate('{{ s.symbol }}', this)">
+                        <span class="slider"></span>
+                    </label>
+                </td>
                 <td class="actions-cell">
                     <button class="btn-small btn-update" 
                             data-symbol="{{ s.symbol }}" 
                             data-currency="{{ currency }}" 
+                            {% if not s.auto_update %}disabled style="opacity: 0.5; cursor: not-allowed;"{% endif %}
                             onclick="autoUpdatePrice(this)">Auto</button>
                     <button class="btn-small btn-manual" 
                             data-symbol="{{ s.symbol }}" 
@@ -186,6 +205,7 @@
 
 <script>
 function autoUpdatePrice(btn) {
+    if (btn.disabled) return;
     const symbol = btn.getAttribute('data-symbol');
     const currency = btn.getAttribute('data-currency');
     updatePrice(symbol, currency);
@@ -255,6 +275,59 @@ function showTradeModal(symbol, currency, accountId, assetType) {
 function closeTradeModal() {
     document.getElementById('tradeModal').style.display = 'none';
 }
+
+function showTab(currency, btn) {
+    document.querySelectorAll('.tab-content').forEach(tab => tab.classList.remove('active'));
+    document.querySelectorAll('.tab-link').forEach(link => link.classList.remove('active'));
+    
+    document.getElementById('tab-' + currency).classList.add('active');
+    btn.classList.add('active');
+    
+    localStorage.setItem('activeHoldingsTab', currency);
+}
+
+async function toggleAutoUpdate(symbol, checkbox) {
+    const autoUpdate = checkbox.checked ? 1 : 0;
+    const formData = new FormData();
+    formData.append('symbol', symbol);
+    formData.append('auto_update', autoUpdate);
+    
+    try {
+        const response = await fetch('/holdings/toggle-auto-update', {
+            method: 'POST',
+            body: formData
+        });
+        
+        if (response.ok) {
+            const row = checkbox.closest('tr');
+            const autoBtn = row.querySelector('.btn-update');
+            if (autoUpdate) {
+                autoBtn.disabled = false;
+                autoBtn.style.opacity = '1';
+                autoBtn.style.cursor = 'pointer';
+            } else {
+                autoBtn.disabled = true;
+                autoBtn.style.opacity = '0.5';
+                autoBtn.style.cursor = 'not-allowed';
+            }
+        } else {
+            throw new Error('Failed to update');
+        }
+    } catch (error) {
+        console.error('Error toggling auto update:', error);
+        alert('Failed to update auto-update setting');
+        checkbox.checked = !checkbox.checked;
+    }
+}
+
+// Restore active tab on load
+document.addEventListener('DOMContentLoaded', () => {
+    const savedTab = localStorage.getItem('activeHoldingsTab');
+    if (savedTab) {
+        const tabBtn = document.querySelector(`.tab-link[onclick*="'${savedTab}'"]`);
+        if (tabBtn) tabBtn.click();
+    }
+});
 
 // Close modals on outside click
 window.addEventListener('click', function(e) {

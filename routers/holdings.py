@@ -175,6 +175,54 @@ async def manual_update_asset_price(
     success_msg = quote(f"{symbol} {currency} 价格已手动更新: {price}")
     return RedirectResponse(url=f"/holdings?msg={success_msg}&msg_type=success", status_code=303)
 
+@router.post("/holdings/toggle-auto-update")
+async def toggle_auto_update(
+    symbol: str = Form(...),
+    auto_update: int = Form(...)
+):
+    """Toggle auto update status for a symbol."""
+    db.update_symbol_auto_update(symbol, auto_update)
+    return {"status": "success", "symbol": symbol, "auto_update": auto_update}
+
+@router.post("/holdings/update-all")
+async def update_all_prices(
+    currency: str = Form(...)
+):
+    """Update all symbols for a currency that have auto_update enabled."""
+    holdings_by_symbol = db.get_holdings_by_symbol()
+    if currency not in holdings_by_symbol:
+        error_msg = quote(f"未找到币种: {currency}")
+        return RedirectResponse(url=f"/holdings?msg={error_msg}&msg_type=error", status_code=303)
+    
+    symbols_data = holdings_by_symbol[currency]['symbols']
+    updated_count = 0
+    errors = []
+    
+    for s in symbols_data:
+        # Check if auto_update is enabled for this symbol
+        if s.get('auto_update', 1):
+            price, message = price_fetcher.fetch_price(s['symbol'], currency)
+            if price is not None:
+                db.update_latest_price(s['symbol'], currency, price)
+                db.add_operation_log(
+                    operation_type="PRICE_UPDATE",
+                    symbol=s['symbol'],
+                    currency=currency,
+                    details=message,
+                    price_fetched=price
+                )
+                updated_count += 1
+            else:
+                errors.append(f"{s['symbol']}: {message}")
+    
+    msg = f"成功更新 {updated_count} 个标的价格。"
+    msg_type = "success"
+    if errors:
+        msg += " 部分失败: " + "; ".join(errors[:2]) + ("..." if len(errors) > 2 else "")
+        msg_type = "info"
+        
+    return RedirectResponse(url=f"/holdings?msg={quote(msg)}&msg_type={msg_type}", status_code=303)
+
 @router.post("/holdings/quick-trade")
 async def quick_trade(
     symbol: str = Form(...),

@@ -3,7 +3,35 @@
 {% block title %}Holdings - Invest Log{% endblock %}
 
 {% block content %}
-<h1>Portfolio Holdings</h1>
+<style>
+    /* Privacy Mode Styles */
+    .masked { display: none !important; }
+    body.privacy-mode .unmasked { display: none !important; }
+    body.privacy-mode .masked { display: inline !important; }
+    
+    .privacy-toggle {
+        background: none;
+        border: none;
+        cursor: pointer;
+        padding: 5px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #1a1a2e;
+        transition: opacity 0.2s;
+    }
+    .privacy-toggle:hover { opacity: 0.7; }
+    .privacy-toggle svg { width: 24px; height: 24px; }
+</style>
+
+<div class="page-header">
+    <h1>Portfolio Holdings</h1>
+    <button id="privacyToggle" class="privacy-toggle" title="Toggle Privacy Mode">
+        <svg id="eyeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <!-- Icon will be set by JS -->
+        </svg>
+    </button>
+</div>
 
 {% if holdings_by_currency %}
 <div class="currency-charts">
@@ -12,7 +40,8 @@
         <div class="currency-header">
             <h2>{{ currency }}</h2>
             <span class="currency-total">
-                {% if currency == 'CNY' %}¥{% elif currency == 'USD' %}${% else %}HK${% endif %}{{ "%.2f"|format(data.total) }}
+                <span class="unmasked">{% if currency == 'CNY' %}¥{% elif currency == 'USD' %}${% else %}HK${% endif %}{{ data.total|format_currency }}</span>
+                <span class="masked">****</span>
             </span>
         </div>
         
@@ -46,6 +75,35 @@
 </div>
 
 <script>
+// Privacy Mode Logic
+(function() {
+    const privacyToggle = document.getElementById('privacyToggle');
+    const body = document.body;
+    const eyeIcon = document.getElementById('eyeIcon');
+
+    function updateEyeIcon(isPrivacy) {
+        if (isPrivacy) {
+            eyeIcon.innerHTML = '<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path><line x1="1" y1="1" x2="23" y2="23"></line>';
+        } else {
+            eyeIcon.innerHTML = '<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle>';
+        }
+    }
+
+    const isPrivacyStored = localStorage.getItem('privacyMode');
+    const isPrivacyInitial = isPrivacyStored === null ? true : isPrivacyStored === 'true';
+
+    if (isPrivacyInitial) {
+        body.classList.add('privacy-mode');
+    }
+    updateEyeIcon(isPrivacyInitial);
+
+    privacyToggle.addEventListener('click', () => {
+        const isPrivacy = body.classList.toggle('privacy-mode');
+        localStorage.setItem('privacyMode', isPrivacy);
+        updateEyeIcon(isPrivacy);
+    });
+})();
+
 const holdingsData = {{ holdings_by_currency | tojson }};
 const colors = {
     'stock': '#3b82f6',

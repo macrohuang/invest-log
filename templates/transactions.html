@@ -18,9 +18,9 @@
             <th>Symbol</th>
             <th>Type</th>
             <th>Asset</th>
-            <th>Quantity</th>
-            <th>Price</th>
-            <th>Total</th>
+            <th class="text-right">Quantity</th>
+            <th class="text-right">Price</th>
+            <th class="text-right">Total</th>
             <th>Currency</th>
             <th>Account</th>
             <th></th>
@@ -33,9 +33,9 @@
             <td><strong>{{ t.symbol }}</strong></td>
             <td><span class="badge badge-{{ t.transaction_type|lower }}">{{ t.transaction_type }}</span></td>
             <td><span class="badge badge-asset-{{ t.asset_type or 'stock' }}">{{ t.asset_type or 'stock' }}</span></td>
-            <td>{{ "%.4f"|format(t.quantity) }}</td>
-            <td>{{ "%.2f"|format(t.price) }}</td>
-            <td>{{ "%.2f"|format(t.total_amount) }}</td>
+            <td class="text-right">{{ t.quantity|format_currency }}</td>
+            <td class="text-right">{{ t.price|format_currency }}</td>
+            <td class="text-right">{{ t.total_amount|format_currency }}</td>
             <td>{{ t.currency or 'CNY' }}</td>
             <td>{{ t.account_id }}</td>
             <td>

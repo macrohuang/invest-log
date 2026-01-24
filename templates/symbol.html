@@ -15,16 +15,16 @@
 <div class="holding-summary">
     <div class="summary-item">
         <div class="summary-label">Total Shares</div>
-        <div class="summary-value">{{ "%.4f"|format(holding.total_shares) }}</div>
+        <div class="summary-value text-right">{{ holding.total_shares|format_currency }}</div>
     </div>
     <div class="summary-item">
         <div class="summary-label">Avg Cost</div>
-        <div class="summary-value">{{ "%.2f"|format(holding.avg_cost) }}</div>
+        <div class="summary-value text-right">{{ holding.avg_cost|format_currency }}</div>
     </div>
     <div class="summary-item">
         <div class="summary-label">Total Value</div>
-        <div class="summary-value highlight">
-            {% if currency == 'CNY' %}¥{% elif currency == 'USD' %}${% else %}HK${% endif %}{{ "%.2f"|format(holding.total_cost) }}
+        <div class="summary-value highlight text-right">
+            {% if currency == 'CNY' %}¥{% elif currency == 'USD' %}${% else %}HK${% endif %}{{ holding.total_cost|format_currency }}
         </div>
     </div>
     <div class="summary-item">
@@ -43,7 +43,7 @@
             <div class="form-group">
                 <label for="new_value">New Total Value</label>
                 <input type="number" id="new_value" name="new_value" step="0.01" 
-                       value="{{ '%.2f'|format(holding.total_cost) }}" required>
+                       value="{{ holding.total_cost }}" required>
             </div>
             <div class="form-group">
                 <label for="notes">Notes (optional)</label>
@@ -77,9 +77,9 @@
             <tr>
                 <th>Date</th>
                 <th>Type</th>
-                <th>Quantity</th>
-                <th>Price</th>
-                <th>Total</th>
+                <th class="text-right">Quantity</th>
+                <th class="text-right">Price</th>
+                <th class="text-right">Total</th>
                 <th>Notes</th>
             </tr>
         </thead>
@@ -88,9 +88,9 @@
             <tr>
                 <td>{{ t.transaction_date }}</td>
                 <td><span class="badge badge-{{ t.transaction_type|lower }}">{{ t.transaction_type }}</span></td>
-                <td>{{ "%.4f"|format(t.quantity) }}</td>
-                <td>{{ "%.2f"|format(t.price) }}</td>
-                <td>{{ "%.2f"|format(t.total_amount) }}</td>
+                <td class="text-right">{{ t.quantity|format_currency }}</td>
+                <td class="text-right">{{ t.price|format_currency }}</td>
+                <td class="text-right">{{ t.total_amount|format_currency }}</td>
                 <td>{{ t.notes or '-' }}</td>
             </tr>
             {% else %}

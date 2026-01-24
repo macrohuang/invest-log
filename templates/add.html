@@ -96,7 +96,7 @@
 
     <div class="form-group">
         <label>Total Amount</label>
-        <div id="total-preview" class="total-preview">0.00</div>
+        <div id="total-preview" class="total-preview text-right">0.00</div>
     </div>
 
     <button type="submit" class="btn btn-primary">Add Transaction</button>
@@ -142,7 +142,7 @@ const symbols = { 'CNY': '¥', 'USD': '$', 'HKD': 'HK$' };
 function updateTotal() {
     const total = (parseFloat(qty.value) || 0) * (parseFloat(price.value) || 0);
     const sym = symbols[currency.value] || '';
-    preview.textContent = sym + total.toFixed(2);
+    preview.textContent = sym + new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(total);
 }
 
 function updateSymbolOptions() {

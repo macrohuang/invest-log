@@ -53,6 +53,43 @@ def init_database(db_path: str = DB_PATH) -> None:
     except sqlite3.OperationalError:
         pass  # Column already exists
 
+    # Migration: Update transactions table to include 'INCOME' in transaction_type check constraint
+    cursor.execute("SELECT sql FROM sqlite_master WHERE name='transactions'")
+    sql_row = cursor.fetchone()
+    if sql_row and "'INCOME'" not in sql_row[0]:
+        # Rename existing table
+        cursor.execute("ALTER TABLE transactions RENAME TO transactions_old")
+        
+        # Create new table with updated check constraint
+        cursor.execute("""
+            CREATE TABLE transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                transaction_date DATE NOT NULL,
+                transaction_time TIME,
+                symbol TEXT NOT NULL,
+                transaction_type TEXT NOT NULL CHECK(transaction_type IN ('BUY', 'SELL', 'DIVIDEND', 'SPLIT', 'TRANSFER_IN', 'TRANSFER_OUT', 'ADJUST', 'INCOME')),
+                asset_type TEXT DEFAULT 'stock' CHECK(asset_type IN ('stock', 'bond', 'metal', 'cash')),
+                quantity REAL NOT NULL,
+                price REAL NOT NULL,
+                total_amount REAL NOT NULL,
+                commission REAL DEFAULT 0,
+                currency TEXT DEFAULT 'CNY' CHECK(currency IN ('CNY', 'USD', 'HKD')),
+                account_id TEXT NOT NULL,
+                account_name TEXT,
+                notes TEXT,
+                tags TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME
+            )
+        """)
+        
+        # Copy data
+        columns = "id, transaction_date, transaction_time, symbol, transaction_type, asset_type, quantity, price, total_amount, commission, currency, account_id, account_name, notes, tags, created_at, updated_at"
+        cursor.execute(f"INSERT INTO transactions ({columns}) SELECT {columns} FROM transactions_old")
+        
+        # Drop old table
+        cursor.execute("DROP TABLE transactions_old")
+
     # Create accounts table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS accounts (
@@ -71,9 +108,16 @@ def init_database(db_path: str = DB_PATH) -> None:
             name TEXT,
             asset_type TEXT,
             sector TEXT,
-            exchange TEXT
+            exchange TEXT,
+            auto_update INTEGER DEFAULT 1
         )
     """)
+    
+    # Add auto_update column if not exists (for existing databases)
+    try:
+        cursor.execute("ALTER TABLE symbols ADD COLUMN auto_update INTEGER DEFAULT 1")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
 
     # Create allocation settings table
     cursor.execute("""
@@ -395,6 +439,17 @@ def get_holdings_by_symbol(db_path: str = DB_PATH) -> dict:
     holdings = get_holdings(db_path=db_path)
     latest_prices = get_all_latest_prices(db_path=db_path)
     asset_type_labels = get_asset_type_labels(db_path=db_path)
+    accounts_list = get_accounts(db_path=db_path)
+    
+    # Get auto_update status for symbols
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT symbol, auto_update FROM symbols")
+    auto_update_map = {row['symbol']: row['auto_update'] for row in cursor.fetchall()}
+    conn.close()
+    
+    # Build account name lookup
+    account_names = {acc['account_id']: acc['account_name'] for acc in accounts_list}
     
     # Group by currency
     by_currency = {}
@@ -438,7 +493,9 @@ def get_holdings_by_symbol(db_path: str = DB_PATH) -> dict:
                 'symbol': symbol,
                 'asset_type': h.get('asset_type', 'stock'),
                 'asset_type_label': asset_type_labels.get(h.get('asset_type', 'stock'), '股票'),
+                'auto_update': auto_update_map.get(symbol, 1),
                 'account_id': h['account_id'],
+                'account_name': account_names.get(h['account_id'], h['account_id']),
                 'total_shares': shares,
                 'avg_cost': avg_cost,
                 'cost_basis': cost_basis,
@@ -453,11 +510,107 @@ def get_holdings_by_symbol(db_path: str = DB_PATH) -> dict:
         for s in symbols_data:
             s['percent'] = round((s['market_value'] / total_market_value * 100) if total_market_value > 0 else 0, 2)
         
+        # Group symbols by account for legend display
+        by_account = {}
+        for s in symbols_data:
+            account_id = s['account_id']
+            if account_id not in by_account:
+                by_account[account_id] = {
+                    'account_name': s['account_name'],
+                    'symbols': []
+                }
+            by_account[account_id]['symbols'].append(s)
+        
         result[curr] = {
             'total_cost': data['total_cost'],
             'total_market_value': total_market_value,
             'total_pnl': total_market_value - data['total_cost'],
-            'symbols': symbols_data
+            'symbols': symbols_data,
+            'by_account': by_account
+        }
+    
+    return result
+
+
+def get_holdings_by_currency_and_account(db_path: str = DB_PATH) -> dict:
+    """Get holdings grouped by currency, then by account, then by symbol with percentages."""
+    holdings = get_holdings(db_path=db_path)
+    latest_prices = get_all_latest_prices(db_path=db_path)
+    asset_type_labels = get_asset_type_labels(db_path=db_path)
+    accounts_list = get_accounts(db_path=db_path)
+    
+    # Build account name lookup
+    account_names = {acc['account_id']: acc['account_name'] for acc in accounts_list}
+    
+    # Group by currency, then by account
+    by_currency = {}
+    for h in holdings:
+        curr = h.get('currency', 'CNY')
+        account_id = h.get('account_id', 'unknown')
+        
+        if curr not in by_currency:
+            by_currency[curr] = {'total_market_value': 0, 'accounts': {}}
+        
+        if account_id not in by_currency[curr]['accounts']:
+            by_currency[curr]['accounts'][account_id] = {
+                'account_name': account_names.get(account_id, account_id),
+                'total_market_value': 0,
+                'symbols': []
+            }
+        
+        by_currency[curr]['accounts'][account_id]['symbols'].append(h)
+    
+    # Calculate market values and percentages
+    result = {}
+    for curr, curr_data in by_currency.items():
+        currency_total_market_value = 0
+        accounts_result = {}
+        
+        for account_id, account_data in curr_data['accounts'].items():
+            symbols_data = []
+            account_total_market_value = 0
+            
+            for h in sorted(account_data['symbols'], key=lambda x: x['total_cost'], reverse=True):
+                symbol = h['symbol']
+                shares = h['total_shares']
+                avg_cost = h['avg_cost']
+                cost_basis = h['total_cost']
+                
+                # Get latest price
+                price_info = latest_prices.get((symbol, curr))
+                latest_price = price_info['price'] if price_info else None
+                
+                # Calculate market value
+                if latest_price is not None and shares > 0:
+                    market_value = latest_price * shares
+                else:
+                    market_value = cost_basis
+                
+                account_total_market_value += market_value
+                
+                symbols_data.append({
+                    'symbol': symbol,
+                    'asset_type': h.get('asset_type', 'stock'),
+                    'asset_type_label': asset_type_labels.get(h.get('asset_type', 'stock'), '股票'),
+                    'market_value': market_value,
+                    'total_shares': shares
+                })
+            
+            # Calculate percentages within account
+            for s in symbols_data:
+                s['percent'] = round((s['market_value'] / account_total_market_value * 100) if account_total_market_value > 0 else 0, 2)
+            
+            currency_total_market_value += account_total_market_value
+            
+            accounts_result[account_id] = {
+                'account_name': account_data['account_name'],
+                'total_market_value': account_total_market_value,
+                'symbols': symbols_data
+            }
+        
+        result[curr] = {
+            'total_market_value': currency_total_market_value,
+            'accounts': accounts_result
         }
     
     return result
@@ -869,6 +1022,50 @@ def get_latest_price(symbol: str, currency: str, db_path: str = DB_PATH) -> Opti
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+def update_symbol_auto_update(symbol: str, auto_update: int, db_path: str = DB_PATH) -> bool:
+    """Update auto_update status for a symbol."""
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    
+    # Ensure symbol exists in symbols table
+    cursor.execute("SELECT 1 FROM symbols WHERE symbol = ?", (symbol.upper(),))
+    if not cursor.fetchone():
+        cursor.execute("INSERT INTO symbols (symbol, auto_update) VALUES (?, ?)", (symbol.upper(), auto_update))
+    else:
+        cursor.execute("UPDATE symbols SET auto_update = ? WHERE symbol = ?", (auto_update, symbol.upper()))
+    
+    conn.commit()
+    conn.close()
+    return True
+
+
+def get_symbol_metadata(symbol: str, db_path: str = DB_PATH) -> Optional[dict]:
+    """Get metadata for a symbol."""
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM symbols WHERE symbol = ?", (symbol.upper(),))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_symbol_auto_update(symbol: str, auto_update: int, db_path: str = DB_PATH) -> bool:
+    """Update auto_update status for a symbol."""
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    
+    # Ensure symbol exists in symbols table
+    cursor.execute("SELECT 1 FROM symbols WHERE symbol = ?", (symbol.upper(),))
+    if not cursor.fetchone():
+        cursor.execute("INSERT INTO symbols (symbol, auto_update) VALUES (?, ?)", (symbol.upper(), auto_update))
+    else:
+        cursor.execute("UPDATE symbols SET auto_update = ? WHERE symbol = ?", (auto_update, symbol.upper()))
+    
+    conn.commit()
+    conn.close()
+    return True
 
 
 def get_all_latest_prices(db_path: str = DB_PATH) -> dict:
