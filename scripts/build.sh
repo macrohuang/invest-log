@@ -55,13 +55,13 @@ build_sidecar() {
     echo "==> Building Python sidecar..."
     
     # Install dependencies if needed
-    if ! command -v pyinstaller &> /dev/null; then
+    if ! python3 -m PyInstaller --version &> /dev/null; then
         echo "Installing PyInstaller..."
-        pip install pyinstaller
+        pip3 install pyinstaller
     fi
-    
+
     # Build the sidecar
-    pyinstaller invest-log-backend.spec --noconfirm
+    python3 -m PyInstaller invest-log-backend.spec --noconfirm
     
     # Copy to Tauri binaries directory
     mkdir -p src-tauri/binaries
