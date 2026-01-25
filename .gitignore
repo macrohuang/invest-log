@@ -1,1 +1,6 @@
 logs/app.log
+output/**
+.DS_Store
+logs/**
+build/**
+dist/**

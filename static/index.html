@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Invest Log</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: white;
+        }
+        .loading {
+            text-align: center;
+        }
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid rgba(255,255,255,0.3);
+            border-top-color: white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="loading">
+        <div class="spinner"></div>
+        <p>Starting Invest Log...</p>
+    </div>
+    <script>
+        // Wait for backend to be ready, then redirect
+        function checkBackend() {
+            fetch('http://localhost:8000/')
+                .then(response => {
+                    if (response.ok) {
+                        window.location.href = 'http://localhost:8000/';
+                    } else {
+                        setTimeout(checkBackend, 500);
+                    }
+                })
+                .catch(() => {
+                    setTimeout(checkBackend, 500);
+                });
+        }
+        // Start checking after a short delay
+        setTimeout(checkBackend, 1000);
+    </script>
+</body>
+</html>

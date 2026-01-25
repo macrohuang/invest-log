@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Setup - Invest Log</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <style>
+        .setup-container {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            padding: 2rem;
+        }
+        
+        .setup-card {
+            background: #fff;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 500px;
+            width: 100%;
+            padding: 3rem;
+        }
+        
+        .setup-logo {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        
+        .setup-logo h1 {
+            color: #1a1a2e;
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .setup-logo p {
+            color: #666;
+            font-size: 0.95rem;
+        }
+        
+        .setup-title {
+            font-size: 1.25rem;
+            color: #1a1a2e;
+            margin-bottom: 1.5rem;
+            text-align: center;
+        }
+        
+        .storage-options {
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }
+        
+        .storage-option {
+            border: 2px solid #e0e0e0;
+            border-radius: 12px;
+            padding: 1.25rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            position: relative;
+        }
+        
+        .storage-option:hover {
+            border-color: #3b82f6;
+            background: #f8faff;
+        }
+        
+        .storage-option.selected {
+            border-color: #3b82f6;
+            background: #eff6ff;
+        }
+        
+        .storage-option input[type="radio"] {
+            position: absolute;
+            opacity: 0;
+        }
+        
+        .storage-option-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .storage-option-icon {
+            width: 40px;
+            height: 40px;
+            background: #f0f0f0;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+        }
+        
+        .storage-option.selected .storage-option-icon {
+            background: #dbeafe;
+        }
+        
+        .storage-option-title {
+            font-weight: 600;
+            color: #1a1a2e;
+        }
+        
+        .storage-option-desc {
+            font-size: 0.875rem;
+            color: #666;
+            margin-left: 52px;
+        }
+        
+        .storage-option-path {
+            font-size: 0.75rem;
+            color: #888;
+            margin-left: 52px;
+            margin-top: 0.5rem;
+            font-family: monospace;
+            background: #f5f5f5;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            display: inline-block;
+        }
+        
+        .custom-path-input {
+            margin-top: 1rem;
+            margin-left: 52px;
+            display: none;
+        }
+        
+        .storage-option.selected .custom-path-input {
+            display: block;
+        }
+        
+        .custom-path-input input {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 0.875rem;
+        }
+        
+        .custom-path-input input:focus {
+            outline: none;
+            border-color: #3b82f6;
+        }
+        
+        .btn-setup {
+            width: 100%;
+            padding: 1rem;
+            background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+            color: #fff;
+            border: none;
+            border-radius: 10px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        
+        .btn-setup:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(59, 130, 246, 0.4);
+        }
+        
+        .btn-setup:active {
+            transform: translateY(0);
+        }
+        
+        .setup-footer {
+            text-align: center;
+            margin-top: 1.5rem;
+            font-size: 0.8rem;
+            color: #999;
+        }
+    </style>
+</head>
+<body>
+    <div class="setup-container">
+        <div class="setup-card">
+            <div class="setup-logo">
+                <h1>Invest Log</h1>
+                <p>Investment Portfolio Tracker</p>
+            </div>
+            
+            <h2 class="setup-title">Choose where to store your data</h2>
+            
+            <form method="POST" action="/setup" id="setupForm">
+                <div class="storage-options">
+                    {% if is_macos and icloud_available %}
+                    <label class="storage-option" id="icloudOption">
+                        <input type="radio" name="storage_option" value="icloud" checked>
+                        <div class="storage-option-header">
+                            <div class="storage-option-icon">☁️</div>
+                            <span class="storage-option-title">iCloud Drive (Recommended)</span>
+                        </div>
+                        <div class="storage-option-desc">
+                            Sync your data across all your Apple devices automatically.
+                        </div>
+                        <div class="storage-option-path">{{ icloud_path }}</div>
+                    </label>
+                    {% endif %}
+                    
+                    <label class="storage-option" id="defaultOption">
+                        <input type="radio" name="storage_option" value="default" {% if not (is_macos and icloud_available) %}checked{% endif %}>
+                        <div class="storage-option-header">
+                            <div class="storage-option-icon">💾</div>
+                            <span class="storage-option-title">Local Storage</span>
+                        </div>
+                        <div class="storage-option-desc">
+                            Store data locally in the application folder.
+                        </div>
+                        <div class="storage-option-path">{{ default_path }}</div>
+                    </label>
+                    
+                    <label class="storage-option" id="customOption">
+                        <input type="radio" name="storage_option" value="custom">
+                        <div class="storage-option-header">
+                            <div class="storage-option-icon">📁</div>
+                            <span class="storage-option-title">Custom Location</span>
+                        </div>
+                        <div class="storage-option-desc">
+                            Choose your own folder (e.g., Dropbox, OneDrive, or any location).
+                        </div>
+                        <div class="custom-path-input">
+                            <input type="text" name="custom_path" placeholder="Enter folder path or paste it here">
+                        </div>
+                    </label>
+                </div>
+                
+                <button type="submit" class="btn-setup">Continue</button>
+            </form>
+            
+            <div class="setup-footer">
+                You can change this setting later in Settings.
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Handle option selection styling
+        document.querySelectorAll('.storage-option').forEach(option => {
+            const radio = option.querySelector('input[type="radio"]');
+            
+            radio.addEventListener('change', function() {
+                document.querySelectorAll('.storage-option').forEach(opt => {
+                    opt.classList.remove('selected');
+                });
+                if (this.checked) {
+                    option.classList.add('selected');
+                }
+            });
+            
+            // Initialize selected state
+            if (radio.checked) {
+                option.classList.add('selected');
+            }
+        });
+        
+        // Focus custom path input when custom option is selected
+        const customRadio = document.querySelector('input[value="custom"]');
+        const customInput = document.querySelector('input[name="custom_path"]');
+        
+        if (customRadio && customInput) {
+            customRadio.addEventListener('change', function() {
+                if (this.checked) {
+                    setTimeout(() => customInput.focus(), 100);
+                }
+            });
+        }
+    </script>
+</body>
+</html>
