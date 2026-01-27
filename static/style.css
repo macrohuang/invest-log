@@ -1101,3 +1101,56 @@ body.privacy-mode .masked {
 .btn-update-all:hover {
     background: #4338ca;
 }
+
+/* Sortable Table Headers */
+th.sortable {
+    cursor: pointer;
+    user-select: none;
+    position: relative;
+    transition: background 0.2s;
+}
+
+th.sortable:hover {
+    background: #e5e7eb;
+}
+
+.sort-icon {
+    display: inline-block;
+    margin-left: 0.5rem;
+    vertical-align: middle;
+    position: relative;
+    width: 8px;
+    height: 14px;
+}
+
+.sort-icon::before,
+.sort-icon::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    width: 0;
+    height: 0;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+}
+
+.sort-icon::before {
+    bottom: 6px;
+    border-bottom: 5px solid #cbd5e1;
+    transition: border-bottom-color 0.2s;
+}
+
+.sort-icon::after {
+    top: 6px;
+    border-top: 5px solid #cbd5e1;
+    transition: border-top-color 0.2s;
+}
+
+/* Active sort states */
+.sort-icon.asc::before {
+    border-bottom-color: #3b82f6;
+}
+
+.sort-icon.desc::after {
+    border-top-color: #3b82f6;
+}

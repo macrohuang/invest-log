@@ -134,7 +134,7 @@ def akshare_fetch_gold() -> Optional[float]:
 
 
 # ============================================================================
-# Yahoo Finance Service (Backup 1)
+# Yahoo Finance Service (Backup)
 # ============================================================================
 
 def yahoo_fetch_stock(symbol: str, currency: str) -> Optional[float]:

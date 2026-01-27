@@ -2,6 +2,7 @@ from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 from typing import Optional
 from urllib.parse import quote
+from datetime import date
 import database as db
 import config
 from logger_config import logger
@@ -152,7 +153,10 @@ async def add_account_submit(
     account_id: str = Form(...),
     account_name: str = Form(...),
     broker: Optional[str] = Form(None),
-    account_type: Optional[str] = Form(None)
+    account_type: Optional[str] = Form(None),
+    initial_balance_cny: float = Form(0),
+    initial_balance_usd: float = Form(0),
+    initial_balance_hkd: float = Form(0)
 ):
     """Add a new account."""
     logger.info(f"Adding new account: {account_id} - {account_name}")
@@ -163,6 +167,29 @@ async def add_account_submit(
         account_type=account_type
     )
     if success:
+        # Create initial balance transactions
+        today = date.today()
+        balance_map = {
+            'CNY': initial_balance_cny,
+            'USD': initial_balance_usd,
+            'HKD': initial_balance_hkd
+        }
+        
+        for currency, amount in balance_map.items():
+            if amount > 0:
+                db.add_transaction(
+                    transaction_date=today,
+                    symbol='CASH',
+                    transaction_type='TRANSFER_IN',
+                    asset_type='cash',
+                    quantity=amount,
+                    price=1.0,
+                    account_id=account_id,
+                    currency=currency,
+                    notes='Initial balance'
+                )
+                logger.info(f"Created initial balance: {amount} {currency} for account {account_id}")
+        
         return RedirectResponse(url=f"/settings?tab=accounts&msg={quote('账户已添加')}&msg_type=success", status_code=303)
     else:
         return RedirectResponse(url=f"/settings?tab=accounts&msg={quote('添加失败，账户ID可能已存在')}&msg_type=error", status_code=303)

@@ -5,6 +5,8 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::{Command, Child, Stdio};
 use std::sync::Mutex;
+use std::thread;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tauri::{Manager, State};
@@ -197,35 +199,49 @@ fn main() {
         .setup(|app| {
             let config = load_config();
             let data_dir = get_data_dir(&config);
-            
+
             // Ensure data directory exists
             let _ = fs::create_dir_all(&data_dir);
-            
+
             // Get sidecar path
             let sidecar_path = get_sidecar_path();
             println!("[Tauri] Sidecar path: {:?}", sidecar_path);
-            
+
             if !sidecar_path.exists() {
                 eprintln!("[Tauri] ERROR: Sidecar not found at: {:?}", sidecar_path);
                 return Err(format!("Backend not found at: {:?}", sidecar_path).into());
             }
-            
+
             // Start the Python sidecar
             let child = Command::new(&sidecar_path)
                 .args(["--data-dir", &data_dir.to_string_lossy(), "--port", "8000"])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit())
                 .spawn()
                 .map_err(|e| format!("Failed to start backend: {}", e))?;
-            
+
             println!("[Tauri] Started backend with PID: {}", child.id());
-            
+
             // Store the child process handle
             {
                 let state: State<SidecarState> = app.state();
                 *state.child.lock().unwrap() = Some(child);
             }
-            
+
+            // Wait for backend to be ready by polling the health endpoint
+            println!("[Tauri] Waiting for backend to be ready...");
+            thread::spawn(|| {
+                for i in 1..=30 {
+                    thread::sleep(Duration::from_secs(1));
+                    // Try to connect to the backend
+                    if let Ok(_) = std::net::TcpStream::connect("127.0.0.1:8000") {
+                        println!("[Tauri] Backend is ready after {} seconds", i);
+                        return;
+                    }
+                }
+                eprintln!("[Tauri] WARNING: Backend did not respond after 30 seconds");
+            });
+
             Ok(())
         })
         .on_window_event(|window, event| {

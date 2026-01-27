@@ -885,6 +885,7 @@ def delete_allocation_setting(currency: str, asset_type: str, db_path: str = DB_
 def get_holdings_by_currency(db_path: str = DB_PATH) -> dict:
     """Get holdings grouped by currency, then by asset_type with percentages."""
     holdings = get_holdings(db_path=db_path)
+    latest_prices = get_all_latest_prices(db_path=db_path)
     settings = get_allocation_settings(db_path=db_path)
     
     # Build settings lookup
@@ -899,12 +900,26 @@ def get_holdings_by_currency(db_path: str = DB_PATH) -> dict:
         curr = h.get('currency', 'CNY')
         if curr not in by_currency:
             by_currency[curr] = {'total': 0, 'by_asset_type': {}}
-        by_currency[curr]['total'] += h['total_cost']
+        
+        # Get latest price
+        symbol = h['symbol']
+        shares = h['total_shares']
+        cost_basis = h['total_cost']
+        price_info = latest_prices.get((symbol, curr))
+        latest_price = price_info['price'] if price_info else None
+        
+        # Calculate market value
+        if latest_price is not None and shares > 0:
+            market_value = latest_price * shares
+        else:
+            market_value = cost_basis  # Use cost if no latest price
+        
+        by_currency[curr]['total'] += market_value
         
         asset = h.get('asset_type', 'stock')
         if asset not in by_currency[curr]['by_asset_type']:
             by_currency[curr]['by_asset_type'][asset] = 0
-        by_currency[curr]['by_asset_type'][asset] += h['total_cost']
+        by_currency[curr]['by_asset_type'][asset] += market_value
     
     # Calculate percentages and check warnings
     result = {}

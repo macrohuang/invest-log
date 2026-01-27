@@ -43,21 +43,26 @@
         <thead>
             <tr>
                 <th>Symbol</th>
-                <th>Type</th>
-                <th class="text-right">Shares</th>
+                <th class="sortable" data-sort="type">Type<span class="sort-icon"></span></th>
+                <th class="text-right sortable" data-sort="shares">Shares<span class="sort-icon"></span></th>
                 <th class="text-right">Avg Cost</th>
                 <th class="text-right">Latest Price</th>
-                <th class="text-right">Cost Basis</th>
-                <th class="text-right">Market Value</th>
-                <th class="text-right">P&L</th>
-                <th class="text-right">%</th>
+                <th class="text-right sortable" data-sort="cost">Cost Basis<span class="sort-icon"></span></th>
+                <th class="text-right sortable" data-sort="market">Market Value<span class="sort-icon"></span></th>
+                <th class="text-right sortable" data-sort="pnl">P&L<span class="sort-icon"></span></th>
+                <th class="text-right sortable" data-sort="percent">%<span class="sort-icon"></span></th>
                 <th class="text-center">Auto Update</th>
                 <th>Actions</th>
             </tr>
         </thead>
-        <tbody>
+        <tbody class="holdings-tbody">
             {% for s in data.symbols %}
-            <tr>
+            <tr data-type="{{ s.asset_type }}" 
+                data-shares="{{ s.total_shares }}" 
+                data-cost="{{ s.cost_basis }}" 
+                data-market="{{ s.market_value }}" 
+                data-pnl="{{ s.unrealized_pnl or 0 }}" 
+                data-percent="{{ s.percent }}">
                 <td><strong><a href="/symbol/{{ s.symbol }}?currency={{ currency }}">{{ s.symbol }}</a></strong></td>
                 <td><span class="badge badge-asset-{{ s.asset_type }}">{{ s.asset_type_label }}</span></td>
                 <td class="text-right">{{ s.total_shares|format_currency }}</td>
@@ -336,6 +341,93 @@ window.addEventListener('click', function(e) {
     if (e.target === tradeModal) closeTradeModal();
     if (e.target === manualPriceModal) closeManualPriceModal();
 });
+
+// Sorting functionality
+let sortStates = {}; // Track sort state per currency-column combination
+
+document.addEventListener('DOMContentLoaded', () => {
+    // Add click listeners to all sortable headers
+    document.querySelectorAll('.sortable').forEach(header => {
+        header.style.cursor = 'pointer';
+        header.addEventListener('click', function() {
+            const sortType = this.getAttribute('data-sort');
+            const tabContent = this.closest('.tab-content');
+            const currency = tabContent.id.replace('tab-', '');
+            const tbody = tabContent.querySelector('.holdings-tbody');
+            const sortKey = currency + '-' + sortType;
+            
+            // Toggle sort direction
+            if (!sortStates[sortKey]) {
+                sortStates[sortKey] = 'asc';
+            } else if (sortStates[sortKey] === 'asc') {
+                sortStates[sortKey] = 'desc';
+            } else {
+                sortStates[sortKey] = 'asc';
+            }
+            
+            sortTable(tbody, sortType, sortStates[sortKey]);
+            
+            // Update sort icons for this table
+            tabContent.querySelectorAll('.sortable').forEach(h => {
+                const icon = h.querySelector('.sort-icon');
+                icon.classList.remove('asc', 'desc');
+            });
+            
+            const currentIcon = this.querySelector('.sort-icon');
+            currentIcon.classList.add(sortStates[sortKey]);
+        });
+    });
+});
+
+function sortTable(tbody, sortType, direction) {
+    const rows = Array.from(tbody.querySelectorAll('tr'));
+    
+    rows.sort((a, b) => {
+        let aVal, bVal;
+        
+        switch(sortType) {
+            case 'type':
+                aVal = a.getAttribute('data-type');
+                bVal = b.getAttribute('data-type');
+                return direction === 'asc' ? 
+                    aVal.localeCompare(bVal) : 
+                    bVal.localeCompare(aVal);
+            
+            case 'shares':
+                aVal = parseFloat(a.getAttribute('data-shares')) || 0;
+                bVal = parseFloat(b.getAttribute('data-shares')) || 0;
+                break;
+            
+            case 'cost':
+                aVal = parseFloat(a.getAttribute('data-cost')) || 0;
+                bVal = parseFloat(b.getAttribute('data-cost')) || 0;
+                break;
+            
+            case 'market':
+                aVal = parseFloat(a.getAttribute('data-market')) || 0;
+                bVal = parseFloat(b.getAttribute('data-market')) || 0;
+                break;
+            
+            case 'pnl':
+                aVal = parseFloat(a.getAttribute('data-pnl')) || 0;
+                bVal = parseFloat(b.getAttribute('data-pnl')) || 0;
+                break;
+            
+            case 'percent':
+                aVal = parseFloat(a.getAttribute('data-percent')) || 0;
+                bVal = parseFloat(b.getAttribute('data-percent')) || 0;
+                break;
+            
+            default:
+                return 0;
+        }
+        
+        return direction === 'asc' ? aVal - bVal : bVal - aVal;
+    });
+    
+    // Re-append rows in sorted order
+    rows.forEach(row => tbody.appendChild(row));
+}
 </script>
 
 {% else %}
