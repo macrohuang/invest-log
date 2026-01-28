@@ -119,6 +119,21 @@ def init_database(db_path: str = DB_PATH) -> None:
     except sqlite3.OperationalError:
         pass  # Column already exists
 
+    # Ensure symbols table includes any symbols referenced by transactions
+    cursor.execute("""
+        INSERT OR IGNORE INTO symbols (symbol)
+        SELECT DISTINCT symbol FROM transactions
+    """)
+
+    # Keep transactions.symbol aligned with symbols.symbol on rename
+    cursor.execute("""
+        CREATE TRIGGER IF NOT EXISTS trg_symbols_symbol_update
+        AFTER UPDATE OF symbol ON symbols
+        BEGIN
+            UPDATE transactions SET symbol = NEW.symbol WHERE symbol = OLD.symbol;
+        END;
+    """)
+
     # Create allocation settings table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS allocation_settings (
@@ -199,6 +214,15 @@ def init_database(db_path: str = DB_PATH) -> None:
 # Transaction CRUD Operations
 # ============================================================================
 
+def _ensure_symbol_exists(cursor: sqlite3.Cursor, symbol: str) -> str:
+    """Ensure symbol exists in symbols table and return normalized symbol."""
+    normalized = symbol.upper()
+    cursor.execute("SELECT 1 FROM symbols WHERE symbol = ?", (normalized,))
+    if not cursor.fetchone():
+        cursor.execute("INSERT INTO symbols (symbol) VALUES (?)", (normalized,))
+    return normalized
+
+
 def add_transaction(
     transaction_date: date,
     symbol: str,
@@ -226,15 +250,16 @@ def add_transaction(
     total_amount = total_amount_override if total_amount_override is not None else quantity * price
     conn = get_connection(db_path)
     cursor = conn.cursor()
+    symbol = _ensure_symbol_exists(cursor, symbol)
 
     cursor.execute("""
         INSERT INTO transactions (
             transaction_date, transaction_time, symbol, transaction_type,
             asset_type, quantity, price, total_amount, commission, currency,
-            account_id, account_name, notes, tags
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        account_id, account_name, notes, tags
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        transaction_date, transaction_time, symbol.upper(), transaction_type,
+        transaction_date, transaction_time, symbol, transaction_type,
         asset_type, quantity, price, total_amount, commission, currency,
         account_id, account_name, notes, tags
     ))
@@ -308,11 +333,14 @@ def update_transaction(
 
     updates['updated_at'] = datetime.now().isoformat()
 
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    if 'symbol' in updates:
+        updates['symbol'] = _ensure_symbol_exists(cursor, updates['symbol'])
+
     set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
     values = list(updates.values()) + [transaction_id]
 
-    conn = get_connection(db_path)
-    cursor = conn.cursor()
     cursor.execute(f"UPDATE transactions SET {set_clause} WHERE id = ?", values)
     affected = cursor.rowcount
     conn.commit()
