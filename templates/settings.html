@@ -15,6 +15,7 @@
 <div class="settings-tabs">
     <button class="tab-link {% if active_tab == 'allocation' %}active{% endif %}" onclick="openTab(event, 'allocation')">Allocation</button>
     <button class="tab-link {% if active_tab == 'accounts' %}active{% endif %}" onclick="openTab(event, 'accounts')">Accounts</button>
+    <button class="tab-link {% if active_tab == 'symbols' %}active{% endif %}" onclick="openTab(event, 'symbols')">Symbols</button>
     <button class="tab-link {% if active_tab == 'asset_types' %}active{% endif %}" onclick="openTab(event, 'asset_types')">Asset Types</button>
     <button class="tab-link {% if active_tab == 'database' %}active{% endif %}" onclick="openTab(event, 'database')">Database</button>
 </div>
@@ -141,6 +142,58 @@
                 <button type="submit" class="btn btn-primary">Add Account</button>
             </form>
         </div>
+    </div>
+</div>
+
+<!-- Symbols Management Section -->
+<div id="symbols" class="tab-content {% if active_tab == 'symbols' %}active{% endif %}">
+    <div class="settings-panel">
+        <h2>Symbol Management</h2>
+        <p class="subtitle">Update symbol name, asset type, and auto update status. Changes apply globally.</p>
+
+        {% if symbols %}
+        <table class="settings-table">
+            <thead>
+                <tr>
+                    <th>Symbol</th>
+                    <th>Name</th>
+                    <th>Asset Type</th>
+                    <th class="text-center">Auto Update</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for sym in symbols %}
+                <tr>
+                    <td><code>{{ sym.symbol }}</code></td>
+                    <td>
+                        <input type="text" name="name" value="{{ sym.name or '' }}" form="symbol-form-{{ sym.id }}">
+                    </td>
+                    <td>
+                        <select name="asset_type" form="symbol-form-{{ sym.id }}">
+                            {% for at in asset_types %}
+                            <option value="{{ at.code }}" {% if at.code == sym.asset_type %}selected{% endif %}>{{ at.label }}</option>
+                            {% endfor %}
+                        </select>
+                    </td>
+                    <td class="text-center">
+                        <input type="checkbox" name="auto_update" value="1" {% if sym.auto_update %}checked{% endif %} form="symbol-form-{{ sym.id }}">
+                    </td>
+                    <td>
+                        <form id="symbol-form-{{ sym.id }}" method="POST" action="/settings/update-symbol" style="display:inline;">
+                            <input type="hidden" name="symbol" value="{{ sym.symbol }}">
+                            <button type="submit" class="btn btn-primary">Save</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <div class="empty-state">
+            <p>No symbols found. Add a transaction to create one.</p>
+        </div>
+        {% endif %}
     </div>
 </div>
 

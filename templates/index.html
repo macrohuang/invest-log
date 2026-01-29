@@ -111,6 +111,9 @@ const colors = {
     'metal': '#f59e0b',
     'cash': '#8b5cf6'
 };
+const fallbackColors = [
+    '#ef4444', '#06b6d4', '#ec4899', '#84cc16', '#f97316', '#6366f1'
+];
 const labels = {{ asset_type_labels | tojson }};
 
 Object.keys(holdingsData).forEach(currency => {
@@ -124,7 +127,9 @@ Object.keys(holdingsData).forEach(currency => {
                 labels: allocations.map(a => a.label),
                 datasets: [{
                     data: allocations.map(a => a.amount),
-                    backgroundColor: allocations.map(a => colors[a.asset_type])
+                    backgroundColor: allocations.map((a, i) => (
+                        colors[a.asset_type] || fallbackColors[i % fallbackColors.length]
+                    ))
                 }]
             },
             options: {

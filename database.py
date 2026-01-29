@@ -19,20 +19,119 @@ def get_connection(db_path: str = DB_PATH) -> sqlite3.Connection:
     return conn
 
 
+def _table_has_column(cursor: sqlite3.Cursor, table: str, column: str) -> bool:
+    cursor.execute(f"PRAGMA table_info({table})")
+    return any(row["name"] == column for row in cursor.fetchall())
+
+
+def _allocation_settings_has_asset_type_check(cursor: sqlite3.Cursor) -> bool:
+    row = cursor.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='allocation_settings'"
+    ).fetchone()
+    if not row or not row["sql"]:
+        return False
+    normalized = "".join(row["sql"].split()).lower()
+    return "check(asset_type" in normalized
+
+
+def _rebuild_allocation_settings(cursor: sqlite3.Cursor) -> None:
+    cursor.execute("ALTER TABLE allocation_settings RENAME TO allocation_settings_old")
+    cursor.execute("""
+        CREATE TABLE allocation_settings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            currency TEXT NOT NULL CHECK(currency IN ('CNY', 'USD', 'HKD')),
+            asset_type TEXT NOT NULL,
+            min_percent REAL DEFAULT 0,
+            max_percent REAL DEFAULT 100,
+            UNIQUE(currency, asset_type)
+        )
+    """)
+    cursor.execute("""
+        INSERT INTO allocation_settings (id, currency, asset_type, min_percent, max_percent)
+        SELECT id, currency, asset_type, min_percent, max_percent
+        FROM allocation_settings_old
+    """)
+    cursor.execute("DROP TABLE allocation_settings_old")
+
+
 def init_database(db_path: str = DB_PATH) -> None:
     """Initialize database with required tables and indexes."""
     conn = get_connection(db_path)
     cursor = conn.cursor()
 
-    # Create transactions table
+    # Create accounts table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS accounts (
+            account_id TEXT PRIMARY KEY,
+            account_name TEXT NOT NULL,
+            broker TEXT,
+            account_type TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
+    # Create symbols table (canonical symbol/asset_type source)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS symbols (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol TEXT NOT NULL UNIQUE,
+            name TEXT,
+            asset_type TEXT NOT NULL DEFAULT 'stock',
+            sector TEXT,
+            exchange TEXT,
+            auto_update INTEGER DEFAULT 1
+        )
+    """)
+
+    # Migrate symbols table if it lacks id
+    if not _table_has_column(cursor, "symbols", "id"):
+        cursor.execute("ALTER TABLE symbols RENAME TO symbols_old")
+        old_has_name = _table_has_column(cursor, "symbols_old", "name")
+        old_has_asset_type = _table_has_column(cursor, "symbols_old", "asset_type")
+        old_has_sector = _table_has_column(cursor, "symbols_old", "sector")
+        old_has_exchange = _table_has_column(cursor, "symbols_old", "exchange")
+        old_has_auto_update = _table_has_column(cursor, "symbols_old", "auto_update")
+
+        cursor.execute("""
+            CREATE TABLE symbols (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT NOT NULL UNIQUE,
+                name TEXT,
+                asset_type TEXT NOT NULL DEFAULT 'stock',
+                sector TEXT,
+                exchange TEXT,
+                auto_update INTEGER DEFAULT 1
+            )
+        """)
+
+        select_name = "name" if old_has_name else "NULL"
+        select_asset_type = "COALESCE(asset_type, 'stock')" if old_has_asset_type else "'stock'"
+        select_sector = "sector" if old_has_sector else "NULL"
+        select_exchange = "exchange" if old_has_exchange else "NULL"
+        select_auto_update = "auto_update" if old_has_auto_update else "1"
+
+        cursor.execute(f"""
+            INSERT INTO symbols (symbol, name, asset_type, sector, exchange, auto_update)
+            SELECT UPPER(symbol), {select_name}, {select_asset_type}, {select_sector}, {select_exchange}, {select_auto_update}
+            FROM symbols_old
+        """)
+        cursor.execute("DROP TABLE symbols_old")
+
+    # Ensure auto_update column exists (legacy safety)
+    if not _table_has_column(cursor, "symbols", "auto_update"):
+        cursor.execute("ALTER TABLE symbols ADD COLUMN auto_update INTEGER DEFAULT 1")
+
+    # Drop legacy trigger that referenced transactions.symbol
+    cursor.execute("DROP TRIGGER IF EXISTS trg_symbols_symbol_update")
+
+    # Create transactions table (use symbols.id)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS transactions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             transaction_date DATE NOT NULL,
             transaction_time TIME,
-            symbol TEXT NOT NULL,
+            symbol_id INTEGER NOT NULL,
             transaction_type TEXT NOT NULL CHECK(transaction_type IN ('BUY', 'SELL', 'DIVIDEND', 'SPLIT', 'TRANSFER_IN', 'TRANSFER_OUT', 'ADJUST', 'INCOME')),
-            asset_type TEXT DEFAULT 'stock' CHECK(asset_type IN ('stock', 'bond', 'metal', 'cash')),
             quantity REAL NOT NULL,
             price REAL NOT NULL,
             total_amount REAL NOT NULL,
@@ -46,29 +145,38 @@ def init_database(db_path: str = DB_PATH) -> None:
             updated_at DATETIME
         )
     """)
-    
-    # Add asset_type column if not exists (for existing databases)
-    try:
-        cursor.execute("ALTER TABLE transactions ADD COLUMN asset_type TEXT DEFAULT 'stock'")
-    except sqlite3.OperationalError:
-        pass  # Column already exists
 
-    # Migration: Update transactions table to include 'INCOME' in transaction_type check constraint
-    cursor.execute("SELECT sql FROM sqlite_master WHERE name='transactions'")
-    sql_row = cursor.fetchone()
-    if sql_row and "'INCOME'" not in sql_row[0]:
-        # Rename existing table
+    # Migrate transactions table if schema is legacy
+    has_symbol_id = _table_has_column(cursor, "transactions", "symbol_id")
+    has_symbol = _table_has_column(cursor, "transactions", "symbol")
+    has_asset_type = _table_has_column(cursor, "transactions", "asset_type")
+    if (not has_symbol_id) or has_symbol or has_asset_type:
         cursor.execute("ALTER TABLE transactions RENAME TO transactions_old")
-        
-        # Create new table with updated check constraint
+
+        old_has_symbol = _table_has_column(cursor, "transactions_old", "symbol")
+        old_has_asset_type = _table_has_column(cursor, "transactions_old", "asset_type")
+
+        if old_has_symbol:
+            if old_has_asset_type:
+                cursor.execute("""
+                    INSERT OR IGNORE INTO symbols (symbol, asset_type)
+                    SELECT DISTINCT UPPER(symbol), COALESCE(asset_type, 'stock')
+                    FROM transactions_old
+                """)
+            else:
+                cursor.execute("""
+                    INSERT OR IGNORE INTO symbols (symbol, asset_type)
+                    SELECT DISTINCT UPPER(symbol), 'stock'
+                    FROM transactions_old
+                """)
+
         cursor.execute("""
             CREATE TABLE transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 transaction_date DATE NOT NULL,
                 transaction_time TIME,
-                symbol TEXT NOT NULL,
+                symbol_id INTEGER NOT NULL,
                 transaction_type TEXT NOT NULL CHECK(transaction_type IN ('BUY', 'SELL', 'DIVIDEND', 'SPLIT', 'TRANSFER_IN', 'TRANSFER_OUT', 'ADJUST', 'INCOME')),
-                asset_type TEXT DEFAULT 'stock' CHECK(asset_type IN ('stock', 'bond', 'metal', 'cash')),
                 quantity REAL NOT NULL,
                 price REAL NOT NULL,
                 total_amount REAL NOT NULL,
@@ -82,57 +190,36 @@ def init_database(db_path: str = DB_PATH) -> None:
                 updated_at DATETIME
             )
         """)
-        
-        # Copy data
-        columns = "id, transaction_date, transaction_time, symbol, transaction_type, asset_type, quantity, price, total_amount, commission, currency, account_id, account_name, notes, tags, created_at, updated_at"
-        cursor.execute(f"INSERT INTO transactions ({columns}) SELECT {columns} FROM transactions_old")
-        
-        # Drop old table
+
+        if old_has_symbol:
+            cursor.execute("""
+                INSERT INTO transactions (
+                    transaction_date, transaction_time, symbol_id, transaction_type,
+                    quantity, price, total_amount, commission, currency, account_id,
+                    account_name, notes, tags, created_at, updated_at
+                )
+                SELECT
+                    t.transaction_date, t.transaction_time, s.id, t.transaction_type,
+                    t.quantity, t.price, t.total_amount, t.commission, t.currency, t.account_id,
+                    t.account_name, t.notes, t.tags, t.created_at, t.updated_at
+                FROM transactions_old t
+                JOIN symbols s ON s.symbol = UPPER(t.symbol)
+            """)
+        else:
+            cursor.execute("""
+                INSERT INTO transactions (
+                    transaction_date, transaction_time, symbol_id, transaction_type,
+                    quantity, price, total_amount, commission, currency, account_id,
+                    account_name, notes, tags, created_at, updated_at
+                )
+                SELECT
+                    transaction_date, transaction_time, symbol_id, transaction_type,
+                    quantity, price, total_amount, commission, currency, account_id,
+                    account_name, notes, tags, created_at, updated_at
+                FROM transactions_old
+            """)
+
         cursor.execute("DROP TABLE transactions_old")
-
-    # Create accounts table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS accounts (
-            account_id TEXT PRIMARY KEY,
-            account_name TEXT NOT NULL,
-            broker TEXT,
-            account_type TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-
-    # Create symbols table
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS symbols (
-            symbol TEXT PRIMARY KEY,
-            name TEXT,
-            asset_type TEXT,
-            sector TEXT,
-            exchange TEXT,
-            auto_update INTEGER DEFAULT 1
-        )
-    """)
-    
-    # Add auto_update column if not exists (for existing databases)
-    try:
-        cursor.execute("ALTER TABLE symbols ADD COLUMN auto_update INTEGER DEFAULT 1")
-    except sqlite3.OperationalError:
-        pass  # Column already exists
-
-    # Ensure symbols table includes any symbols referenced by transactions
-    cursor.execute("""
-        INSERT OR IGNORE INTO symbols (symbol)
-        SELECT DISTINCT symbol FROM transactions
-    """)
-
-    # Keep transactions.symbol aligned with symbols.symbol on rename
-    cursor.execute("""
-        CREATE TRIGGER IF NOT EXISTS trg_symbols_symbol_update
-        AFTER UPDATE OF symbol ON symbols
-        BEGIN
-            UPDATE transactions SET symbol = NEW.symbol WHERE symbol = OLD.symbol;
-        END;
-    """)
 
     # Create allocation settings table
     cursor.execute("""
@@ -145,6 +232,9 @@ def init_database(db_path: str = DB_PATH) -> None:
             UNIQUE(currency, asset_type)
         )
     """)
+    # Remove legacy asset_type CHECK constraint if present
+    if _allocation_settings_has_asset_type_check(cursor):
+        _rebuild_allocation_settings(cursor)
 
     # Create asset types table (for dynamic asset type management)
     # Asset types are independent of currency - one type can be used with any currency
@@ -199,12 +289,12 @@ def init_database(db_path: str = DB_PATH) -> None:
     """)
 
     # Create indexes
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_symbol ON transactions(symbol)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_symbol_id ON transactions(symbol_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_date ON transactions(transaction_date)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_account ON transactions(account_id)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_type ON transactions(transaction_type)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_currency ON transactions(currency)")
-    cursor.execute("CREATE INDEX IF NOT EXISTS idx_asset_type ON transactions(asset_type)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_symbols_asset_type ON symbols(asset_type)")
 
     conn.commit()
     conn.close()
@@ -214,13 +304,37 @@ def init_database(db_path: str = DB_PATH) -> None:
 # Transaction CRUD Operations
 # ============================================================================
 
-def _ensure_symbol_exists(cursor: sqlite3.Cursor, symbol: str) -> str:
-    """Ensure symbol exists in symbols table and return normalized symbol."""
-    normalized = symbol.upper()
-    cursor.execute("SELECT 1 FROM symbols WHERE symbol = ?", (normalized,))
-    if not cursor.fetchone():
-        cursor.execute("INSERT INTO symbols (symbol) VALUES (?)", (normalized,))
-    return normalized
+def _asset_type_exists(cursor: sqlite3.Cursor, asset_type: str) -> bool:
+    cursor.execute("SELECT 1 FROM asset_types WHERE code = ?", (asset_type.lower(),))
+    return cursor.fetchone() is not None
+
+
+def _ensure_symbol(cursor: sqlite3.Cursor, symbol: str, asset_type: Optional[str] = None) -> tuple[int, str, str]:
+    """Ensure symbol exists in symbols table and return (symbol_id, symbol, asset_type)."""
+    normalized_symbol = symbol.upper()
+    normalized_asset_type = asset_type.lower() if asset_type else None
+
+    if normalized_asset_type and not _asset_type_exists(cursor, normalized_asset_type):
+        raise ValueError(f"Invalid asset_type: {normalized_asset_type}")
+
+    cursor.execute("SELECT id, asset_type FROM symbols WHERE symbol = ?", (normalized_symbol,))
+    row = cursor.fetchone()
+    if row:
+        current_asset_type = row["asset_type"]
+        if normalized_asset_type and current_asset_type != normalized_asset_type:
+            cursor.execute(
+                "UPDATE symbols SET asset_type = ? WHERE id = ?",
+                (normalized_asset_type, row["id"])
+            )
+            current_asset_type = normalized_asset_type
+        return row["id"], normalized_symbol, current_asset_type
+
+    insert_asset_type = normalized_asset_type or "stock"
+    cursor.execute(
+        "INSERT INTO symbols (symbol, asset_type) VALUES (?, ?)",
+        (normalized_symbol, insert_asset_type)
+    )
+    return cursor.lastrowid, normalized_symbol, insert_asset_type
 
 
 def add_transaction(
@@ -250,17 +364,17 @@ def add_transaction(
     total_amount = total_amount_override if total_amount_override is not None else quantity * price
     conn = get_connection(db_path)
     cursor = conn.cursor()
-    symbol = _ensure_symbol_exists(cursor, symbol)
+    symbol_id, symbol, asset_type = _ensure_symbol(cursor, symbol, asset_type)
 
     cursor.execute("""
         INSERT INTO transactions (
-            transaction_date, transaction_time, symbol, transaction_type,
-            asset_type, quantity, price, total_amount, commission, currency,
-        account_id, account_name, notes, tags
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            transaction_date, transaction_time, symbol_id, transaction_type,
+            quantity, price, total_amount, commission, currency,
+            account_id, account_name, notes, tags
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        transaction_date, transaction_time, symbol, transaction_type,
-        asset_type, quantity, price, total_amount, commission, currency,
+        transaction_date, transaction_time, symbol_id, transaction_type,
+        quantity, price, total_amount, commission, currency,
         account_id, account_name, notes, tags
     ))
 
@@ -269,7 +383,7 @@ def add_transaction(
     conn.close()
 
     # Cash linking logic
-    if link_cash and transaction_type in ('BUY', 'SELL') and symbol.upper() != 'CASH':
+    if link_cash and transaction_type in ('BUY', 'SELL') and symbol != 'CASH':
         cash_transaction_type = 'SELL' if transaction_type == 'BUY' else 'BUY'
         # For BUY, we spend cash (SELL CASH). Amount spent = total_amount + commission.
         # For SELL, we receive cash (BUY CASH). Amount received = total_amount - commission.
@@ -298,7 +412,12 @@ def get_transaction(transaction_id: int, db_path: str = DB_PATH) -> Optional[dic
     """Get a transaction by ID."""
     conn = get_connection(db_path)
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM transactions WHERE id = ?", (transaction_id,))
+    cursor.execute("""
+        SELECT t.*, s.symbol AS symbol, s.name AS name, s.asset_type AS asset_type
+        FROM transactions t
+        JOIN symbols s ON s.id = t.symbol_id
+        WHERE t.id = ?
+    """, (transaction_id,))
     row = cursor.fetchone()
     conn.close()
     return dict(row) if row else None
@@ -315,7 +434,7 @@ def update_transaction(
 
     allowed_fields = {
         'transaction_date', 'transaction_time', 'symbol', 'transaction_type',
-        'asset_type', 'quantity', 'price', 'commission', 'currency', 'account_id',
+        'quantity', 'price', 'commission', 'currency', 'account_id',
         'account_name', 'notes', 'tags'
     }
 
@@ -336,7 +455,9 @@ def update_transaction(
     conn = get_connection(db_path)
     cursor = conn.cursor()
     if 'symbol' in updates:
-        updates['symbol'] = _ensure_symbol_exists(cursor, updates['symbol'])
+        symbol_id, _, _ = _ensure_symbol(cursor, updates['symbol'])
+        updates['symbol_id'] = symbol_id
+        updates.pop('symbol')
 
     set_clause = ", ".join(f"{k} = ?" for k in updates.keys())
     values = list(updates.values()) + [transaction_id]
@@ -379,32 +500,37 @@ def get_transactions(
     conn = get_connection(db_path)
     cursor = conn.cursor()
 
-    query = "SELECT * FROM transactions WHERE 1=1"
+    query = """
+        SELECT t.*, s.symbol AS symbol, s.name AS name, s.asset_type AS asset_type
+        FROM transactions t
+        JOIN symbols s ON s.id = t.symbol_id
+        WHERE 1=1
+    """
     params = []
 
     if symbol:
-        query += " AND symbol = ?"
+        query += " AND s.symbol = ?"
         params.append(symbol.upper())
     if account_id:
-        query += " AND account_id = ?"
+        query += " AND t.account_id = ?"
         params.append(account_id)
     if transaction_type:
-        query += " AND transaction_type = ?"
+        query += " AND t.transaction_type = ?"
         params.append(transaction_type)
     if currency:
-        query += " AND currency = ?"
+        query += " AND t.currency = ?"
         params.append(currency)
     if year:
-        query += " AND strftime('%Y', transaction_date) = ?"
+        query += " AND strftime('%Y', t.transaction_date) = ?"
         params.append(str(year))
     if start_date:
-        query += " AND transaction_date >= ?"
+        query += " AND t.transaction_date >= ?"
         params.append(start_date)
     if end_date:
-        query += " AND transaction_date <= ?"
+        query += " AND t.transaction_date <= ?"
         params.append(end_date)
 
-    query += " ORDER BY transaction_date DESC, id DESC LIMIT ? OFFSET ?"
+    query += " ORDER BY t.transaction_date DESC, t.id DESC LIMIT ? OFFSET ?"
     params.extend([limit, offset])
 
     cursor.execute(query, params)
@@ -420,31 +546,33 @@ def get_holdings(account_id: Optional[str] = None, db_path: str = DB_PATH) -> li
 
     query = """
         SELECT 
-            symbol,
-            account_id,
-            currency,
-            asset_type,
+            s.symbol AS symbol,
+            s.name AS name,
+            t.account_id,
+            t.currency,
+            s.asset_type AS asset_type,
             SUM(CASE 
-                WHEN transaction_type IN ('BUY', 'TRANSFER_IN', 'INCOME') THEN quantity
-                WHEN transaction_type IN ('SELL', 'TRANSFER_OUT') THEN -quantity
-                WHEN transaction_type IN ('SPLIT', 'ADJUST') THEN quantity
+                WHEN t.transaction_type IN ('BUY', 'TRANSFER_IN', 'INCOME') THEN t.quantity
+                WHEN t.transaction_type IN ('SELL', 'TRANSFER_OUT') THEN -t.quantity
+                WHEN t.transaction_type IN ('SPLIT', 'ADJUST') THEN t.quantity
                 ELSE 0
             END) as total_shares,
             SUM(CASE 
-                WHEN transaction_type IN ('BUY', 'INCOME') THEN total_amount + commission
-                WHEN transaction_type = 'SELL' THEN -(total_amount - commission)
-                WHEN transaction_type = 'ADJUST' THEN total_amount
+                WHEN t.transaction_type IN ('BUY', 'INCOME') THEN t.total_amount + t.commission
+                WHEN t.transaction_type = 'SELL' THEN -(t.total_amount - t.commission)
+                WHEN t.transaction_type = 'ADJUST' THEN t.total_amount
                 ELSE 0
             END) as total_cost
-        FROM transactions
+        FROM transactions t
+        JOIN symbols s ON s.id = t.symbol_id
     """
     params = []
 
     if account_id:
-        query += " WHERE account_id = ?"
+        query += " WHERE t.account_id = ?"
         params.append(account_id)
 
-    query += " GROUP BY symbol, account_id, currency, asset_type HAVING total_shares > 0 OR total_cost != 0"
+    query += " GROUP BY t.symbol_id, s.symbol, s.name, s.asset_type, t.account_id, t.currency HAVING total_shares > 0 OR total_cost != 0"
 
     cursor.execute(query, params)
     rows = cursor.fetchall()
@@ -496,6 +624,8 @@ def get_holdings_by_symbol(db_path: str = DB_PATH) -> dict:
         
         for h in sorted(data['symbols'], key=lambda x: x['total_cost'], reverse=True):
             symbol = h['symbol']
+            name = h.get('name')
+            clean_name = name.strip() if isinstance(name, str) else ""
             shares = h['total_shares']
             avg_cost = h['avg_cost']
             cost_basis = h['total_cost']
@@ -519,6 +649,8 @@ def get_holdings_by_symbol(db_path: str = DB_PATH) -> dict:
             
             symbols_data.append({
                 'symbol': symbol,
+                'name': name,
+                'display_name': clean_name if clean_name else symbol,
                 'asset_type': h.get('asset_type', 'stock'),
                 'asset_type_label': asset_type_labels.get(h.get('asset_type', 'stock'), '股票'),
                 'auto_update': auto_update_map.get(symbol, 1),
@@ -600,6 +732,8 @@ def get_holdings_by_currency_and_account(db_path: str = DB_PATH) -> dict:
             
             for h in sorted(account_data['symbols'], key=lambda x: x['total_cost'], reverse=True):
                 symbol = h['symbol']
+                name = h.get('name')
+                clean_name = name.strip() if isinstance(name, str) else ""
                 shares = h['total_shares']
                 avg_cost = h['avg_cost']
                 cost_basis = h['total_cost']
@@ -618,6 +752,8 @@ def get_holdings_by_currency_and_account(db_path: str = DB_PATH) -> dict:
                 
                 symbols_data.append({
                     'symbol': symbol,
+                    'name': name,
+                    'display_name': clean_name if clean_name else symbol,
                     'asset_type': h.get('asset_type', 'stock'),
                     'asset_type_label': asset_type_labels.get(h.get('asset_type', 'stock'), '股票'),
                     'market_value': market_value,
@@ -706,32 +842,34 @@ def get_realized_gains(
 
     query = """
         SELECT 
-            transaction_date,
-            symbol,
-            account_id,
-            quantity,
-            price,
-            total_amount,
-            commission
-        FROM transactions
-        WHERE transaction_type = 'SELL'
+            t.transaction_date,
+            s.symbol AS symbol,
+            s.name AS name,
+            t.account_id,
+            t.quantity,
+            t.price,
+            t.total_amount,
+            t.commission
+        FROM transactions t
+        JOIN symbols s ON s.id = t.symbol_id
+        WHERE t.transaction_type = 'SELL'
     """
     params = []
 
     if symbol:
-        query += " AND symbol = ?"
+        query += " AND s.symbol = ?"
         params.append(symbol.upper())
     if account_id:
-        query += " AND account_id = ?"
+        query += " AND t.account_id = ?"
         params.append(account_id)
     if start_date:
-        query += " AND transaction_date >= ?"
+        query += " AND t.transaction_date >= ?"
         params.append(start_date)
     if end_date:
-        query += " AND transaction_date <= ?"
+        query += " AND t.transaction_date <= ?"
         params.append(end_date)
 
-    query += " ORDER BY transaction_date"
+    query += " ORDER BY t.transaction_date"
 
     cursor.execute(query, params)
     rows = cursor.fetchall()
@@ -750,23 +888,28 @@ def get_dividends(
     conn = get_connection(db_path)
     cursor = conn.cursor()
 
-    query = "SELECT * FROM transactions WHERE transaction_type = 'DIVIDEND'"
+    query = """
+        SELECT t.*, s.symbol AS symbol, s.name AS name, s.asset_type AS asset_type
+        FROM transactions t
+        JOIN symbols s ON s.id = t.symbol_id
+        WHERE t.transaction_type = 'DIVIDEND'
+    """
     params = []
 
     if symbol:
-        query += " AND symbol = ?"
+        query += " AND s.symbol = ?"
         params.append(symbol.upper())
     if account_id:
-        query += " AND account_id = ?"
+        query += " AND t.account_id = ?"
         params.append(account_id)
     if start_date:
-        query += " AND transaction_date >= ?"
+        query += " AND t.transaction_date >= ?"
         params.append(start_date)
     if end_date:
-        query += " AND transaction_date <= ?"
+        query += " AND t.transaction_date <= ?"
         params.append(end_date)
 
-    query += " ORDER BY transaction_date"
+    query += " ORDER BY t.transaction_date"
 
     cursor.execute(query, params)
     rows = cursor.fetchall()
@@ -843,6 +986,7 @@ def delete_account(account_id: str, db_path: str = DB_PATH) -> tuple[bool, str]:
 # ============================================================================
 
 CURRENCIES = ['CNY', 'USD', 'HKD']
+# Default order for core asset types; dynamic asset types are appended after these.
 ASSET_TYPES = ['stock', 'bond', 'metal', 'cash']
 ASSET_TYPE_LABELS = {
     'stock': '股票',
@@ -875,23 +1019,30 @@ def set_allocation_setting(
     db_path: str = DB_PATH
 ) -> bool:
     """Set allocation range for a currency/asset_type combination."""
-    if currency not in CURRENCIES or asset_type not in ASSET_TYPES:
+    if currency not in CURRENCIES:
         return False
     if min_percent < 0 or max_percent > 100 or min_percent > max_percent:
         return False
     
     conn = get_connection(db_path)
     cursor = conn.cursor()
+    normalized_asset_type = asset_type.lower()
+    if not _asset_type_exists(cursor, normalized_asset_type):
+        conn.close()
+        return False
     
-    cursor.execute("""
-        INSERT INTO allocation_settings (currency, asset_type, min_percent, max_percent)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT(currency, asset_type) DO UPDATE SET
-            min_percent = excluded.min_percent,
-            max_percent = excluded.max_percent
-    """, (currency, asset_type, min_percent, max_percent))
-    
-    conn.commit()
+    try:
+        cursor.execute("""
+            INSERT INTO allocation_settings (currency, asset_type, min_percent, max_percent)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(currency, asset_type) DO UPDATE SET
+                min_percent = excluded.min_percent,
+                max_percent = excluded.max_percent
+        """, (currency, normalized_asset_type, min_percent, max_percent))
+        conn.commit()
+    except sqlite3.IntegrityError:
+        conn.close()
+        return False
     conn.close()
     return True
 
@@ -915,11 +1066,14 @@ def get_holdings_by_currency(db_path: str = DB_PATH) -> dict:
     holdings = get_holdings(db_path=db_path)
     latest_prices = get_all_latest_prices(db_path=db_path)
     settings = get_allocation_settings(db_path=db_path)
+    asset_types = get_asset_types(db_path=db_path)
+    asset_type_labels = get_asset_type_labels(db_path=db_path)
     
     # Build settings lookup
     settings_map = {}
     for s in settings:
-        key = (s['currency'], s['asset_type'])
+        asset_key = s['asset_type'].lower() if isinstance(s['asset_type'], str) else s['asset_type']
+        key = (s['currency'], asset_key)
         settings_map[key] = {'min': s['min_percent'], 'max': s['max_percent']}
     
     # Group by currency
@@ -944,11 +1098,26 @@ def get_holdings_by_currency(db_path: str = DB_PATH) -> dict:
         
         by_currency[curr]['total'] += market_value
         
-        asset = h.get('asset_type', 'stock')
+        asset = h.get('asset_type') or 'stock'
+        if isinstance(asset, str):
+            asset = asset.lower()
         if asset not in by_currency[curr]['by_asset_type']:
             by_currency[curr]['by_asset_type'][asset] = 0
         by_currency[curr]['by_asset_type'][asset] += market_value
     
+    asset_type_codes = [t['code'] for t in asset_types]
+    holdings_types = {
+        (h.get('asset_type', 'stock') or 'stock').lower()
+        for h in holdings
+        if h.get('asset_type') is None or isinstance(h.get('asset_type'), str)
+    }
+    missing_types = [t for t in holdings_types if t not in asset_type_codes]
+    ordered_asset_types = (
+        [t for t in ASSET_TYPES if t in asset_type_codes]
+        + [t for t in asset_type_codes if t not in ASSET_TYPES]
+        + sorted(missing_types)
+    )
+
     # Calculate percentages and check warnings
     result = {}
     for curr, data in by_currency.items():
@@ -956,7 +1125,7 @@ def get_holdings_by_currency(db_path: str = DB_PATH) -> dict:
             'total': data['total'],
             'allocations': []
         }
-        for asset_type in ASSET_TYPES:
+        for asset_type in ordered_asset_types:
             amount = data['by_asset_type'].get(asset_type, 0)
             percent = (amount / data['total'] * 100) if data['total'] > 0 else 0
             
@@ -970,7 +1139,7 @@ def get_holdings_by_currency(db_path: str = DB_PATH) -> dict:
             
             result[curr]['allocations'].append({
                 'asset_type': asset_type,
-                'label': ASSET_TYPE_LABELS[asset_type],
+                'label': asset_type_labels.get(asset_type, asset_type),
                 'amount': amount,
                 'percent': round(percent, 2),
                 'min_percent': setting['min'],
@@ -1071,14 +1240,9 @@ def update_symbol_auto_update(symbol: str, auto_update: int, db_path: str = DB_P
     """Update auto_update status for a symbol."""
     conn = get_connection(db_path)
     cursor = conn.cursor()
-    
-    # Ensure symbol exists in symbols table
-    cursor.execute("SELECT 1 FROM symbols WHERE symbol = ?", (symbol.upper(),))
-    if not cursor.fetchone():
-        cursor.execute("INSERT INTO symbols (symbol, auto_update) VALUES (?, ?)", (symbol.upper(), auto_update))
-    else:
-        cursor.execute("UPDATE symbols SET auto_update = ? WHERE symbol = ?", (auto_update, symbol.upper()))
-    
+    symbol_id, _, _ = _ensure_symbol(cursor, symbol)
+    cursor.execute("UPDATE symbols SET auto_update = ? WHERE id = ?", (auto_update, symbol_id))
+
     conn.commit()
     conn.close()
     return True
@@ -1094,18 +1258,114 @@ def get_symbol_metadata(symbol: str, db_path: str = DB_PATH) -> Optional[dict]:
     return dict(row) if row else None
 
 
+def get_symbols(db_path: str = DB_PATH) -> list[dict]:
+    """Get all symbols for management."""
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, symbol, name, asset_type, sector, exchange, auto_update
+        FROM symbols
+        ORDER BY symbol
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def update_symbol_metadata(
+    symbol: str,
+    name: Optional[str] = None,
+    asset_type: Optional[str] = None,
+    auto_update: Optional[int] = None,
+    sector: Optional[str] = None,
+    exchange: Optional[str] = None,
+    db_path: str = DB_PATH
+) -> bool:
+    """Update symbol metadata fields."""
+    updates = []
+    values = []
+
+    if name is not None:
+        clean_name = name.strip()
+        updates.append("name = ?")
+        values.append(clean_name if clean_name else None)
+
+    if asset_type is not None:
+        normalized_asset_type = asset_type.lower()
+        conn = get_connection(db_path)
+        cursor = conn.cursor()
+        if not _asset_type_exists(cursor, normalized_asset_type):
+            conn.close()
+            raise ValueError(f"Invalid asset_type: {normalized_asset_type}")
+        updates.append("asset_type = ?")
+        values.append(normalized_asset_type)
+        conn.close()
+
+    if auto_update is not None:
+        updates.append("auto_update = ?")
+        values.append(1 if int(auto_update) else 0)
+
+    if sector is not None:
+        updates.append("sector = ?")
+        values.append(sector.strip() if sector.strip() else None)
+
+    if exchange is not None:
+        updates.append("exchange = ?")
+        values.append(exchange.strip() if exchange.strip() else None)
+
+    if not updates:
+        return False
+
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    values.append(symbol.upper())
+    cursor.execute(f"UPDATE symbols SET {', '.join(updates)} WHERE symbol = ?", values)
+    affected = cursor.rowcount
+    conn.commit()
+    conn.close()
+    return affected > 0
+
+
+def update_symbol_asset_type(symbol: str, asset_type: str, db_path: str = DB_PATH) -> tuple[bool, str, str]:
+    """Update asset_type for a symbol. Returns (success, old_type, new_type)."""
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
+    normalized_symbol = symbol.upper()
+    normalized_asset_type = asset_type.lower()
+
+    if not _asset_type_exists(cursor, normalized_asset_type):
+        conn.close()
+        raise ValueError(f"Invalid asset_type: {normalized_asset_type}")
+
+    row = cursor.execute(
+        "SELECT id, asset_type FROM symbols WHERE symbol = ?",
+        (normalized_symbol,)
+    ).fetchone()
+    if not row:
+        conn.close()
+        return False, "", ""
+
+    current = (row["asset_type"] or "").lower()
+    if current == normalized_asset_type:
+        conn.close()
+        return True, current, current
+
+    cursor.execute(
+        "UPDATE symbols SET asset_type = ? WHERE id = ?",
+        (normalized_asset_type, row["id"])
+    )
+    conn.commit()
+    conn.close()
+    return True, current, normalized_asset_type
+
+
 def update_symbol_auto_update(symbol: str, auto_update: int, db_path: str = DB_PATH) -> bool:
     """Update auto_update status for a symbol."""
     conn = get_connection(db_path)
     cursor = conn.cursor()
-    
-    # Ensure symbol exists in symbols table
-    cursor.execute("SELECT 1 FROM symbols WHERE symbol = ?", (symbol.upper(),))
-    if not cursor.fetchone():
-        cursor.execute("INSERT INTO symbols (symbol, auto_update) VALUES (?, ?)", (symbol.upper(), auto_update))
-    else:
-        cursor.execute("UPDATE symbols SET auto_update = ? WHERE symbol = ?", (auto_update, symbol.upper()))
-    
+    symbol_id, _, _ = _ensure_symbol(cursor, symbol)
+    cursor.execute("UPDATE symbols SET auto_update = ? WHERE id = ?", (auto_update, symbol_id))
+
     conn.commit()
     conn.close()
     return True
@@ -1169,15 +1429,15 @@ def can_delete_asset_type(code: str, db_path: str = DB_PATH) -> tuple[bool, str]
     conn = get_connection(db_path)
     cursor = conn.cursor()
     
-    # Check if any holdings exist with this asset type
+    # Check if any symbols use this asset type
     cursor.execute("""
-        SELECT COUNT(*) FROM transactions WHERE asset_type = ?
+        SELECT COUNT(*) FROM symbols WHERE asset_type = ?
     """, (code.lower(),))
     count = cursor.fetchone()[0]
     conn.close()
     
     if count > 0:
-        return False, f"Cannot delete: {count} transactions exist with this asset type"
+        return False, f"Cannot delete: {count} symbols use this asset type"
     return True, "Can be deleted"
 
 
@@ -1211,23 +1471,28 @@ def get_transaction_count(
     conn = get_connection(db_path)
     cursor = conn.cursor()
     
-    query = "SELECT COUNT(*) FROM transactions WHERE 1=1"
+    query = """
+        SELECT COUNT(*)
+        FROM transactions t
+        JOIN symbols s ON s.id = t.symbol_id
+        WHERE 1=1
+    """
     params = []
     
     if symbol:
-        query += " AND symbol = ?"
+        query += " AND s.symbol = ?"
         params.append(symbol.upper())
     if account_id:
-        query += " AND account_id = ?"
+        query += " AND t.account_id = ?"
         params.append(account_id)
     if transaction_type:
-        query += " AND transaction_type = ?"
+        query += " AND t.transaction_type = ?"
         params.append(transaction_type)
     if currency:
-        query += " AND currency = ?"
+        query += " AND t.currency = ?"
         params.append(currency)
     if year:
-        query += " AND strftime('%Y', transaction_date) = ?"
+        query += " AND strftime('%Y', t.transaction_date) = ?"
         params.append(str(year))
     
     cursor.execute(query, params)
@@ -1238,7 +1503,7 @@ def check_asset_type_in_use(code: str, db_path: str = DB_PATH) -> bool:
     """Check if an asset type is in use (has holdings)."""
     conn = get_connection(db_path)
     cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM transactions WHERE asset_type = ?", (code.lower(),))
+    cursor.execute("SELECT COUNT(*) FROM symbols WHERE asset_type = ?", (code.lower(),))
     count = cursor.fetchone()[0]
     conn.close()
     return count > 0

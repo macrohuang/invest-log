@@ -13,7 +13,7 @@ async def index(request: Request):
         "request": request,
         "holdings_by_currency": holdings_by_currency,
         "currencies": db.CURRENCIES,
-        "asset_type_labels": db.ASSET_TYPE_LABELS
+        "asset_type_labels": db.get_asset_type_labels()
     })
 
 @router.get("/charts", response_class=HTMLResponse)
@@ -23,5 +23,5 @@ async def charts_page(request: Request):
     return templates.TemplateResponse("charts.html", {
         "request": request,
         "holdings_by_symbol": holdings_by_symbol,
-        "asset_type_labels": db.ASSET_TYPE_LABELS
+        "asset_type_labels": db.get_asset_type_labels()
     })

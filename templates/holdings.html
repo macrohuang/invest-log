@@ -51,7 +51,7 @@
                 <th class="text-right sortable" data-sort="market">Market Value<span class="sort-icon"></span></th>
                 <th class="text-right sortable" data-sort="pnl">P&L<span class="sort-icon"></span></th>
                 <th class="text-right sortable" data-sort="percent">%<span class="sort-icon"></span></th>
-                <th class="text-center">Auto Update</th>
+                <th class="text-center">Auto</th>
                 <th>Actions</th>
             </tr>
         </thead>
@@ -63,7 +63,7 @@
                 data-market="{{ s.market_value }}" 
                 data-pnl="{{ s.unrealized_pnl or 0 }}" 
                 data-percent="{{ s.percent }}">
-                <td><strong><a href="/symbol/{{ s.symbol }}?currency={{ currency }}">{{ s.symbol }}</a></strong></td>
+                <td><strong><a href="/symbol/{{ s.symbol }}?currency={{ currency }}" title="{{ s.symbol }}">{{ s.display_name }}</a></strong></td>
                 <td><span class="badge badge-asset-{{ s.asset_type }}">{{ s.asset_type_label }}</span></td>
                 <td class="text-right">{{ s.total_shares|format_currency }}</td>
                 <td class="text-right">{{ s.avg_cost|format_currency }}</td>
@@ -88,11 +88,11 @@
                 </td>
                 <td class="text-right">{{ s.percent }}%</td>
                 <td class="text-center">
-                    <label class="switch">
-                        <input type="checkbox" {% if s.auto_update %}checked{% endif %} 
-                               onchange="toggleAutoUpdate('{{ s.symbol }}', this)">
-                        <span class="slider"></span>
-                    </label>
+                    {% if s.auto_update %}
+                    <span class="text-muted">On</span>
+                    {% else %}
+                    <span class="text-muted">Off</span>
+                    {% endif %}
                 </td>
                 <td class="actions-cell">
                     <button class="btn-small btn-update" 
@@ -107,9 +107,11 @@
                             onclick="manualUpdatePrice(this)">Manual</button>
                     <button class="btn-small btn-trade" 
                             data-symbol="{{ s.symbol }}" 
+                            data-name="{{ s.name or '' }}"
                             data-currency="{{ currency }}" 
                             data-account="{{ s.account_id }}" 
                             data-asset="{{ s.asset_type }}"
+                            data-max-shares="{{ s.total_shares }}"
                             onclick="openTradeModal(this)">Trade</button>
                 </td>
             </tr>
@@ -158,7 +160,8 @@
             <div class="form-row">
                 <div class="form-group">
                     <label>Quantity</label>
-                    <input type="number" name="quantity" step="0.0001" required>
+                    <input type="number" name="quantity" id="quick_trade_quantity" step="0.0001" required>
+                    <small id="quick_trade_max_hint" class="text-muted"></small>
                 </div>
                 <div class="form-group">
                     <label>Price</label>
@@ -225,10 +228,13 @@ function manualUpdatePrice(btn) {
 
 function openTradeModal(btn) {
     const symbol = btn.getAttribute('data-symbol');
+    const name = btn.getAttribute('data-name');
     const currency = btn.getAttribute('data-currency');
     const accountId = btn.getAttribute('data-account');
     const assetType = btn.getAttribute('data-asset');
-    showTradeModal(symbol, currency, accountId, assetType);
+    const maxShares = btn.getAttribute('data-max-shares');
+    const displayName = name && name.trim() ? name.trim() : symbol;
+    showTradeModal(symbol, currency, accountId, assetType, maxShares, displayName);
 }
 
 function updatePrice(symbol, currency) {
@@ -252,15 +258,19 @@ function closeManualPriceModal() {
     document.getElementById('manualPriceModal').style.display = 'none';
 }
 
-function showTradeModal(symbol, currency, accountId, assetType) {
+function showTradeModal(symbol, currency, accountId, assetType, maxShares, displayName) {
     document.getElementById('trade_symbol').value = symbol;
     document.getElementById('trade_currency').value = currency;
     document.getElementById('trade_account_id').value = accountId;
     document.getElementById('trade_asset_type').value = assetType;
-    document.getElementById('trade_symbol_display').textContent = symbol + ' (' + currency + ')';
+    document.getElementById('trade_symbol_display').textContent = (displayName || symbol) + ' (' + currency + ')';
     
     const typeSelect = document.getElementById('quick_trade_type');
     const linkCashGroup = document.getElementById('quick_link_cash_group');
+    const quantityInput = document.getElementById('quick_trade_quantity');
+    const maxHint = document.getElementById('quick_trade_max_hint');
+    const parsedMax = parseFloat(maxShares);
+    const hasMax = Number.isFinite(parsedMax) && parsedMax > 0;
     
     function updateLinkCashVisibility() {
         const type = typeSelect.value;
@@ -270,9 +280,24 @@ function showTradeModal(symbol, currency, accountId, assetType) {
             linkCashGroup.style.display = 'none';
         }
     }
+
+    function updateQuantityLimit() {
+        const type = typeSelect.value;
+        if (type === 'SELL' && hasMax) {
+            quantityInput.max = parsedMax;
+            maxHint.textContent = 'Max: ' + parsedMax;
+        } else {
+            quantityInput.removeAttribute('max');
+            maxHint.textContent = '';
+        }
+    }
     
-    typeSelect.onchange = updateLinkCashVisibility;
+    typeSelect.onchange = function() {
+        updateLinkCashVisibility();
+        updateQuantityLimit();
+    };
     updateLinkCashVisibility();
+    updateQuantityLimit();
     
     document.getElementById('tradeModal').style.display = 'flex';
 }
@@ -289,40 +314,6 @@ function showTab(currency, btn) {
     btn.classList.add('active');
     
     localStorage.setItem('activeHoldingsTab', currency);
-}
-
-async function toggleAutoUpdate(symbol, checkbox) {
-    const autoUpdate = checkbox.checked ? 1 : 0;
-    const formData = new FormData();
-    formData.append('symbol', symbol);
-    formData.append('auto_update', autoUpdate);
-    
-    try {
-        const response = await fetch('/holdings/toggle-auto-update', {
-            method: 'POST',
-            body: formData
-        });
-        
-        if (response.ok) {
-            const row = checkbox.closest('tr');
-            const autoBtn = row.querySelector('.btn-update');
-            if (autoUpdate) {
-                autoBtn.disabled = false;
-                autoBtn.style.opacity = '1';
-                autoBtn.style.cursor = 'pointer';
-            } else {
-                autoBtn.disabled = true;
-                autoBtn.style.opacity = '0.5';
-                autoBtn.style.cursor = 'not-allowed';
-            }
-        } else {
-            throw new Error('Failed to update');
-        }
-    } catch (error) {
-        console.error('Error toggling auto update:', error);
-        alert('Failed to update auto-update setting');
-        checkbox.checked = !checkbox.checked;
-    }
 }
 
 // Restore active tab on load

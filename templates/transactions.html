@@ -30,7 +30,7 @@
         {% for t in transactions %}
         <tr>
             <td>{{ t.transaction_date }}</td>
-            <td><strong>{{ t.symbol }}</strong></td>
+            <td><strong><span title="{{ t.symbol }}">{{ t.name or t.symbol }}</span></strong></td>
             <td><span class="badge badge-{{ t.transaction_type|lower }}">{{ t.transaction_type }}</span></td>
             <td><span class="badge badge-asset-{{ t.asset_type or 'stock' }}">{{ t.asset_type or 'stock' }}</span></td>
             <td class="text-right">{{ t.quantity|format_currency }}</td>

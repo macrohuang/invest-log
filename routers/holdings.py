@@ -18,12 +18,9 @@ async def holdings_detail_page(
 ):
     """Detailed holdings page showing each symbol."""
     holdings_by_symbol = db.get_holdings_by_symbol()
-    asset_types = db.get_asset_types()
-    asset_type_labels = {t['code']: t['label'] for t in asset_types}
     return templates.TemplateResponse("holdings.html", {
         "request": request,
         "holdings_by_symbol": holdings_by_symbol,
-        "asset_type_labels": asset_type_labels,
         "currencies": db.CURRENCIES,
         "message": msg,
         "message_type": msg_type or "info"
@@ -72,7 +69,7 @@ async def symbol_detail_page(
         "transactions": transactions,
         "selected_year": selected_year,
         "years": years or [current_year],
-        "asset_type_labels": db.ASSET_TYPE_LABELS
+        "asset_type_labels": db.get_asset_type_labels()
     })
 
 @router.post("/symbol/{symbol}/adjust")
@@ -183,6 +180,34 @@ async def toggle_auto_update(
     """Toggle auto update status for a symbol."""
     db.update_symbol_auto_update(symbol, auto_update)
     return {"status": "success", "symbol": symbol, "auto_update": auto_update}
+
+@router.post("/holdings/update-asset-type")
+async def update_asset_type(
+    symbol: str = Form(...),
+    asset_type: str = Form(...)
+):
+    """Update asset type for a symbol."""
+    try:
+        success, old_type, new_type = db.update_symbol_asset_type(symbol, asset_type)
+    except ValueError:
+        error_msg = quote(f"Invalid asset type: {asset_type}")
+        return RedirectResponse(url=f"/holdings?msg={error_msg}&msg_type=error", status_code=303)
+
+    if not success:
+        error_msg = quote(f"Symbol not found: {symbol}")
+        return RedirectResponse(url=f"/holdings?msg={error_msg}&msg_type=error", status_code=303)
+
+    if old_type == new_type:
+        info_msg = quote(f"Asset type unchanged for {symbol}")
+        return RedirectResponse(url=f"/holdings?msg={info_msg}&msg_type=info", status_code=303)
+
+    db.add_operation_log(
+        operation_type="ASSET_TYPE_UPDATE",
+        symbol=symbol.upper(),
+        details=f"{old_type} -> {new_type}"
+    )
+    success_msg = quote(f"{symbol} asset type updated to {new_type}")
+    return RedirectResponse(url=f"/holdings?msg={success_msg}&msg_type=success", status_code=303)
 
 @router.post("/holdings/update-all")
 async def update_all_prices(

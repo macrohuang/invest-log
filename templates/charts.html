@@ -54,7 +54,7 @@
                 {% for sym in account_data.symbols %}
                 <div class="legend-item">
                     <span class="legend-color" style="background: var(--color-{{ loop.index0 % 10 }})"></span>
-                    <a href="/symbol/{{ sym.symbol }}?currency={{ currency }}" class="legend-label">{{ sym.symbol }}</a>
+                    <a href="/symbol/{{ sym.symbol }}?currency={{ currency }}" class="legend-label" title="{{ sym.symbol }}">{{ sym.display_name }}</a>
                     <span class="legend-value">{{ sym.percent }}%</span>
                 </div>
                 {% endfor %}
@@ -146,7 +146,7 @@ Object.keys(holdingsData).forEach(currency => {
         new Chart(document.getElementById('chart-' + currency), {
             type: 'doughnut',
             data: {
-                labels: symbols.map(s => s.symbol),
+                labels: symbols.map(s => s.display_name || s.symbol),
                 datasets: [{
                     data: symbols.map(s => s.market_value),
                     backgroundColor: symbols.map((_, i) => chartColors[i % chartColors.length])

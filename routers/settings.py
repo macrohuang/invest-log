@@ -21,6 +21,7 @@ async def settings_page(
     settings = db.get_allocation_settings()
     asset_types = db.get_asset_types()
     accounts = db.get_accounts()
+    symbols = db.get_symbols()
 
     # Build a map for easy template access
     settings_map = {}
@@ -56,6 +57,7 @@ async def settings_page(
         "currencies": db.CURRENCIES,
         "asset_types": asset_types_with_status,
         "accounts": accounts_with_status,
+        "symbols": symbols,
         "settings_map": settings_map,
         "user_config": config.USER_CONFIG,
         "current_db_path": config.DB_PATH,
@@ -79,12 +81,15 @@ async def settings_submit(request: Request):
             
             min_val = form_data.get(min_key, "") or "0"
             max_val = form_data.get(max_key, "") or "100"
-            db.set_allocation_setting(
+            success = db.set_allocation_setting(
                 currency=currency,
                 asset_type=asset_type,
                 min_percent=float(min_val),
                 max_percent=float(max_val)
             )
+            if not success:
+                msg = quote(f"保存失败: {currency} / {asset_type}")
+                return RedirectResponse(url=f"/settings?msg={msg}&msg_type=error", status_code=303)
             updated_count += 1
     
     return RedirectResponse(url=f"/settings?msg={quote('配置已保存')}&msg_type=success", status_code=303)
@@ -146,6 +151,32 @@ async def delete_asset_type(code: str):
         # 如果删除失败，通常是因为该类别下已有交易记录（即注释中所说的“有持仓”）
         error_msg = "该资产类别下有开仓资产，不允许删除" if "transactions exist" in message else message
         return RedirectResponse(url=f"/settings?tab=asset_types&msg={quote(error_msg)}&msg_type=error", status_code=303)
+
+@router.post("/settings/update-symbol")
+async def update_symbol(
+    symbol: str = Form(...),
+    name: str = Form(""),
+    asset_type: str = Form(...),
+    auto_update: Optional[str] = Form(None)
+):
+    logger.info(f"Updating symbol metadata: {symbol}")
+    try:
+        success = db.update_symbol_metadata(
+            symbol=symbol,
+            name=name,
+            asset_type=asset_type,
+            auto_update=1 if auto_update else 0
+        )
+    except ValueError as e:
+        msg = quote(f"更新失败: {str(e)}")
+        return RedirectResponse(url=f"/settings?tab=symbols&msg={msg}&msg_type=error", status_code=303)
+
+    if not success:
+        msg = quote("更新失败: 未找到标的")
+        return RedirectResponse(url=f"/settings?tab=symbols&msg={msg}&msg_type=error", status_code=303)
+
+    msg = quote("标的已更新")
+    return RedirectResponse(url=f"/settings?tab=symbols&msg={msg}&msg_type=success", status_code=303)
 
 
 @router.post("/settings/add-account")
