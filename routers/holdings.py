@@ -31,7 +31,8 @@ async def symbol_detail_page(
     request: Request,
     symbol: str,
     currency: str = "CNY",
-    year: Optional[int] = None
+    year: Optional[int] = None,
+    account_id: Optional[str] = None
 ):
     """Symbol detail page with transaction history."""
     current_year = date.today().year
@@ -41,12 +42,13 @@ async def symbol_detail_page(
     transactions = db.get_transactions(
         symbol=symbol,
         currency=currency,
+        account_id=account_id,
         year=selected_year,
         limit=500
     )
     
     # Get current holding info
-    holdings = db.get_holdings()
+    holdings = db.get_holdings(account_id=account_id) if account_id else db.get_holdings()
     holding_info = None
     for h in holdings:
         if h['symbol'] == symbol.upper() and h['currency'] == currency:
@@ -54,12 +56,24 @@ async def symbol_detail_page(
             break
     
     # Get available years for this symbol
-    all_transactions = db.get_transactions(symbol=symbol, currency=currency, limit=1000)
+    all_transactions = db.get_transactions(
+        symbol=symbol,
+        currency=currency,
+        account_id=account_id,
+        limit=1000
+    )
     years = sorted(set(
         int(t['transaction_date'][:4]) if isinstance(t['transaction_date'], str) 
         else t['transaction_date'].year 
         for t in all_transactions
     ), reverse=True)
+
+    account_name = None
+    if account_id:
+        for acc in db.get_accounts():
+            if acc.get('account_id') == account_id:
+                account_name = acc.get('account_name') or account_id
+                break
     
     return templates.TemplateResponse("symbol.html", {
         "request": request,
@@ -69,7 +83,9 @@ async def symbol_detail_page(
         "transactions": transactions,
         "selected_year": selected_year,
         "years": years or [current_year],
-        "asset_type_labels": db.get_asset_type_labels()
+        "asset_type_labels": db.get_asset_type_labels(),
+        "account_id": account_id,
+        "account_name": account_name
     })
 
 @router.post("/symbol/{symbol}/adjust")
@@ -92,7 +108,7 @@ async def adjust_symbol_value(
         notes=notes if notes else None
     )
     return RedirectResponse(
-        url=f"/symbol/{symbol}?currency={currency}",
+        url=f"/symbol/{symbol}?currency={currency}&account_id={account_id}",
         status_code=303
     )
 

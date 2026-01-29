@@ -54,7 +54,7 @@
                 {% for sym in account_data.symbols %}
                 <div class="legend-item">
                     <span class="legend-color" style="background: var(--color-{{ loop.index0 % 10 }})"></span>
-                    <a href="/symbol/{{ sym.symbol }}?currency={{ currency }}" class="legend-label" title="{{ sym.symbol }}">{{ sym.display_name }}</a>
+                    <a href="/symbol/{{ sym.symbol }}?currency={{ currency }}&account_id={{ account_id }}" class="legend-label" title="{{ sym.symbol }}">{{ sym.display_name }}</a>
                     <span class="legend-value">{{ sym.percent }}%</span>
                 </div>
                 {% endfor %}

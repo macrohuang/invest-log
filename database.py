@@ -581,10 +581,15 @@ def get_holdings(account_id: Optional[str] = None, db_path: str = DB_PATH) -> li
     holdings = []
     for row in rows:
         row_dict = dict(row)
-        if row_dict['total_shares'] > 0:
-            row_dict['avg_cost'] = row_dict['total_cost'] / row_dict['total_shares']
+        if row_dict.get('asset_type') == 'cash':
+            # For cash, total value tracks the balance (no avg cost concept)
+            row_dict['total_cost'] = row_dict['total_shares']
+            row_dict['avg_cost'] = 1 if row_dict['total_shares'] != 0 else 0
         else:
-            row_dict['avg_cost'] = 0
+            if row_dict['total_shares'] > 0:
+                row_dict['avg_cost'] = row_dict['total_cost'] / row_dict['total_shares']
+            else:
+                row_dict['avg_cost'] = 0
         holdings.append(row_dict)
 
     return holdings

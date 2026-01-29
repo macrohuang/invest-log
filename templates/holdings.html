@@ -65,11 +65,17 @@
                 data-market="{{ s.market_value }}" 
                 data-pnl="{{ s.unrealized_pnl or 0 }}" 
                 data-percent="{{ s.percent }}">
-                <td><strong><a href="/symbol/{{ s.symbol }}?currency={{ currency }}" title="{{ s.symbol }}">{{ s.display_name }}</a></strong></td>
+                <td><strong><a href="/symbol/{{ s.symbol }}?currency={{ currency }}&account_id={{ s.account_id }}" title="{{ s.symbol }}">{{ s.display_name }}</a></strong></td>
                 <td><span title="{{ s.account_id }}">{{ s.account_name }}</span></td>
                 <td><span class="badge badge-asset-{{ s.asset_type }}">{{ s.asset_type_label }}</span></td>
                 <td class="text-right">{{ s.total_shares|format_currency }}</td>
-                <td class="text-right">{{ s.avg_cost|format_currency }}</td>
+                <td class="text-right">
+                    {% if s.asset_type == 'cash' %}
+                    <span class="text-muted">-</span>
+                    {% else %}
+                    {{ s.avg_cost|format_currency }}
+                    {% endif %}
+                </td>
                 <td class="text-right">
                     {% if s.latest_price is not none %}
                     {{ s.latest_price|format_currency }}

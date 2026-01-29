@@ -142,6 +142,7 @@ tbody tr:hover {
 .badge-asset-bond { background: #d1fae5; color: #059669; }
 .badge-asset-metal { background: #fef3c7; color: #d97706; }
 .badge-asset-cash { background: #f3e8ff; color: #7c3aed; }
+.badge-asset-etf { background: #ecfeff; color: #0e7490; }
 
 /* Buttons */
 .btn {

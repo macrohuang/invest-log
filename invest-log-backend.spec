@@ -9,16 +9,8 @@ Output will be in dist/invest-log-backend
 """
 
 import sys
-from pathlib import Path
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules, copy_metadata
 
 block_cipher = None
-
-# Collect all akshare data files and metadata
-akshare_datas = collect_data_files('akshare')
-akshare_metadata = copy_metadata('akshare')
-pandas_metadata = copy_metadata('pandas')
-numpy_metadata = copy_metadata('numpy')
 
 # Determine platform-specific naming for Tauri sidecar
 if sys.platform == 'darwin':
@@ -40,7 +32,7 @@ a = Analysis(
     datas=[
         ('templates', 'templates'),
         ('static', 'static'),
-    ] + akshare_datas + akshare_metadata + pandas_metadata + numpy_metadata,
+    ],
     hiddenimports=[
         'uvicorn.logging',
         'uvicorn.loops',
@@ -56,19 +48,12 @@ a = Analysis(
         'fastapi',
         'starlette',
         'jinja2',
-        'akshare',
-        'pandas',
-        'numpy',
-        'scipy',
-        'lxml',
-        'html5lib',
-        'beautifulsoup4',
-        'bs4',
         'requests',
         'urllib3',
         'certifi',
         'charset_normalizer',
         'idna',
+        'pqquotation',
     ],
     hookspath=[],
     hooksconfig={},

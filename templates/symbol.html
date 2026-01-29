@@ -8,6 +8,9 @@
         <a href="/holdings" class="back-link">← Back to Holdings</a>
         <h1>{{ symbol }}</h1>
         <span class="currency-tag">{{ currency }}</span>
+        {% if account_id %}
+        <span class="currency-tag">Account: {{ account_name or account_id }}</span>
+        {% endif %}
     </div>
 </div>
 
@@ -19,7 +22,13 @@
     </div>
     <div class="summary-item">
         <div class="summary-label">Avg Cost</div>
-        <div class="summary-value text-right">{{ holding.avg_cost|format_currency }}</div>
+        <div class="summary-value text-right">
+            {% if holding.asset_type == 'cash' %}
+            <span class="text-muted">-</span>
+            {% else %}
+            {{ holding.avg_cost|format_currency }}
+            {% endif %}
+        </div>
     </div>
     <div class="summary-item">
         <div class="summary-label">Total Value</div>
@@ -66,7 +75,7 @@
         <h2>Transaction History</h2>
         <div class="year-filter">
             {% for y in years %}
-            <a href="/symbol/{{ symbol }}?currency={{ currency }}&year={{ y }}" 
+            <a href="/symbol/{{ symbol }}?currency={{ currency }}&year={{ y }}{% if account_id %}&account_id={{ account_id }}{% endif %}" 
                class="year-btn {% if y == selected_year %}active{% endif %}">{{ y }}</a>
             {% endfor %}
         </div>
