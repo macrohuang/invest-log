@@ -152,7 +152,7 @@
             
             <div class="form-group" id="quick_link_cash_group">
                 <label class="checkbox-label">
-                    <input type="checkbox" name="link_cash" id="quick_link_cash" value="true">
+                    <input type="checkbox" name="link_cash" id="quick_link_cash" value="true" checked>
                     Link to Cash Account
                 </label>
             </div>
@@ -267,10 +267,13 @@ function showTradeModal(symbol, currency, accountId, assetType, maxShares, displ
     
     const typeSelect = document.getElementById('quick_trade_type');
     const linkCashGroup = document.getElementById('quick_link_cash_group');
+    const linkCashCheckbox = document.getElementById('quick_link_cash');
     const quantityInput = document.getElementById('quick_trade_quantity');
     const maxHint = document.getElementById('quick_trade_max_hint');
     const parsedMax = parseFloat(maxShares);
     const hasMax = Number.isFinite(parsedMax) && parsedMax > 0;
+
+    linkCashCheckbox.checked = true;
     
     function updateLinkCashVisibility() {
         const type = typeSelect.value;

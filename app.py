@@ -58,7 +58,11 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Invest Log", lifespan=lifespan)
 
 # Setup static files
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount(
+    "/static",
+    StaticFiles(directory=str(config.get_resource_path("static"))),
+    name="static",
+)
 
 # Import routers after app creation to avoid circular imports
 from routers import overview, transactions, holdings, settings, api, setup

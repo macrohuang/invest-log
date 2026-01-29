@@ -10,8 +10,11 @@ from pathlib import Path
 import os
 import sys
 
-# Project root directory
-BASE_DIR = Path(__file__).parent.absolute()
+# Project root directory (PyInstaller uses a temp bundle path)
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    BASE_DIR = Path(sys._MEIPASS)
+else:
+    BASE_DIR = Path(__file__).parent.absolute()
 
 # Platform detection
 IS_MACOS = sys.platform == "darwin"
@@ -41,6 +44,11 @@ _runtime_port: int = 8000
 def get_app_config_path() -> Path:
     """Get the path to the app configuration file."""
     return APP_CONFIG_FILE
+
+
+def get_resource_path(relative_path: str | Path) -> Path:
+    """Resolve resource paths for both dev and PyInstaller builds."""
+    return BASE_DIR / relative_path
 
 
 def is_first_run() -> bool:

@@ -1,6 +1,8 @@
 from fastapi.templating import Jinja2Templates
 
-templates = Jinja2Templates(directory="templates")
+import config
+
+templates = Jinja2Templates(directory=str(config.get_resource_path("templates")))
 
 def format_currency(value):
     if value is None:
