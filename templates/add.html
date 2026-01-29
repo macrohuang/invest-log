@@ -104,7 +104,7 @@
 
 <div id="holdings-data" style="display:none;">
     {% for h in holdings %}
-    <span data-symbol="{{ h.symbol }}" data-asset-type="{{ h.asset_type }}" data-currency="{{ h.currency }}"></span>
+    <span data-symbol="{{ h.symbol }}" data-name="{{ h.name or '' }}" data-asset-type="{{ h.asset_type }}" data-currency="{{ h.currency }}"></span>
     {% endfor %}
 </div>
 
@@ -122,6 +122,7 @@ const linkCashGroup = document.getElementById('link-cash-group');
 
 const holdings = Array.from(document.querySelectorAll('#holdings-data span')).map(el => ({
     symbol: el.dataset.symbol,
+    name: el.dataset.name,
     asset_type: el.dataset.assetType,
     currency: el.dataset.currency
 }));
@@ -138,6 +139,17 @@ holdings.forEach(h => {
 });
 
 const symbols = { 'CNY': '¥', 'USD': '$', 'HKD': 'HK$' };
+const symbolNameMap = {};
+
+uniqueHoldings.forEach(h => {
+    if (!symbolNameMap[h.symbol] && h.name && h.name.trim()) {
+        symbolNameMap[h.symbol] = h.name.trim();
+    }
+});
+
+function formatSymbolLabel(symbol, name) {
+    return name && name.trim() ? `${symbol} - ${name.trim()}` : symbol;
+}
 
 function updateTotal() {
     const total = (parseFloat(qty.value) || 0) * (parseFloat(price.value) || 0);
@@ -162,16 +174,17 @@ function updateSymbolOptions() {
     )).sort();
 
     filteredSymbols.forEach(sym => {
+        const displayLabel = formatSymbolLabel(sym, symbolNameMap[sym] || '');
         // Populate Select
         const optSelect = document.createElement('option');
         optSelect.value = sym;
-        optSelect.textContent = sym;
+        optSelect.textContent = displayLabel;
         if (sym === currentSelectValue) optSelect.selected = true;
         symbolSelect.appendChild(optSelect);
         
-        // Populate Datalist
+        // Populate Datalist (display "SYM - Name")
         const optData = document.createElement('option');
-        optData.value = sym;
+        optData.value = displayLabel;
         symbolDatalist.appendChild(optData);
     });
 }
@@ -250,6 +263,14 @@ currency.addEventListener('change', () => {
 typeSelect.addEventListener('change', handleTypeChange);
 assetTypeSelect.addEventListener('change', () => {
     updateSymbolOptions();
+});
+
+document.querySelector('form').addEventListener('submit', () => {
+    if (symbolInput.name === 'symbol') {
+        const raw = symbolInput.value.trim();
+        const normalized = raw.split(' - ')[0].trim();
+        if (normalized) symbolInput.value = normalized;
+    }
 });
 
 // Initialize on load

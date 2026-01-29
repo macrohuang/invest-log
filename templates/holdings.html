@@ -43,6 +43,7 @@
         <thead>
             <tr>
                 <th>Symbol</th>
+                <th class="sortable" data-sort="account">Account<span class="sort-icon"></span></th>
                 <th class="sortable" data-sort="type">Type<span class="sort-icon"></span></th>
                 <th class="text-right sortable" data-sort="shares">Shares<span class="sort-icon"></span></th>
                 <th class="text-right">Avg Cost</th>
@@ -58,12 +59,14 @@
         <tbody class="holdings-tbody">
             {% for s in data.symbols %}
             <tr data-type="{{ s.asset_type }}" 
+                data-account="{{ s.account_name }}"
                 data-shares="{{ s.total_shares }}" 
                 data-cost="{{ s.cost_basis }}" 
                 data-market="{{ s.market_value }}" 
                 data-pnl="{{ s.unrealized_pnl or 0 }}" 
                 data-percent="{{ s.percent }}">
                 <td><strong><a href="/symbol/{{ s.symbol }}?currency={{ currency }}" title="{{ s.symbol }}">{{ s.display_name }}</a></strong></td>
+                <td><span title="{{ s.account_id }}">{{ s.account_name }}</span></td>
                 <td><span class="badge badge-asset-{{ s.asset_type }}">{{ s.asset_type_label }}</span></td>
                 <td class="text-right">{{ s.total_shares|format_currency }}</td>
                 <td class="text-right">{{ s.avg_cost|format_currency }}</td>
@@ -383,6 +386,13 @@ function sortTable(tbody, sortType, direction) {
             case 'type':
                 aVal = a.getAttribute('data-type');
                 bVal = b.getAttribute('data-type');
+                return direction === 'asc' ? 
+                    aVal.localeCompare(bVal) : 
+                    bVal.localeCompare(aVal);
+
+            case 'account':
+                aVal = a.getAttribute('data-account') || '';
+                bVal = b.getAttribute('data-account') || '';
                 return direction === 'asc' ? 
                     aVal.localeCompare(bVal) : 
                     bVal.localeCompare(aVal);
