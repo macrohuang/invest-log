@@ -1,0 +1,31 @@
+{
+  "name": "invest-log-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "electron .",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^40.1.0",
+    "electron-builder": "^26.6.0"
+  },
+  "build": {
+    "appId": "com.investlog.desktop",
+    "productName": "Invest Log",
+    "files": [
+      "electron/**",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "dist",
+        "to": "dist"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.finance"
+    }
+  }
+}
