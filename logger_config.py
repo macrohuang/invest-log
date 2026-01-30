@@ -5,11 +5,22 @@ Sets up application logging with daily rotation, keeping 7 days of logs.
 """
 
 import logging
+import os
 from logging.handlers import TimedRotatingFileHandler
 from pathlib import Path
 
-LOG_DIR = Path("logs")
-LOG_DIR.mkdir(exist_ok=True)
+def _resolve_log_dir() -> Path:
+    env_data_dir = os.environ.get("INVEST_LOG_DATA_DIR")
+    if env_data_dir:
+        return Path(env_data_dir) / "logs"
+    try:
+        import config
+        return config.get_data_dir() / "logs"
+    except Exception:
+        return Path.home() / ".investlog" / "logs"
+
+LOG_DIR = _resolve_log_dir()
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 def setup_logging():
     """Configure logging with daily rotation, keeping 7 days of logs."""

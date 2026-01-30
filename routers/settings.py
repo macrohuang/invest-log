@@ -1,6 +1,8 @@
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 from typing import Optional
+from pathlib import Path
+import shutil
 from urllib.parse import quote
 from datetime import date
 import database as db
@@ -108,6 +110,17 @@ async def database_settings_submit(
     }
     
     try:
+        if use_icloud:
+            if not config.is_icloud_available():
+                raise RuntimeError("iCloud Drive is not available on this system")
+            target_dir = config.get_icloud_app_folder()
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target_path = target_dir / db_name
+            current_db_path = Path(config.get_db_path())
+            if current_db_path.exists():
+                if current_db_path.resolve() != target_path.resolve():
+                    shutil.copy2(current_db_path, target_path)
+
         config.save_user_config(new_config)
         # We don't update config.DB_PATH or config.USER_CONFIG in memory here 
         # because it's better to let the app restart (which happens automatically 

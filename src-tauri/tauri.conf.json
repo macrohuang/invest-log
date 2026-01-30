@@ -6,7 +6,8 @@
   "build": {
     "beforeBuildCommand": "",
     "beforeDevCommand": "",
-    "devUrl": "http://localhost:8000"
+    "devUrl": "http://localhost:8000",
+    "frontendDist": "loader"
   },
   "app": {
     "windows": [
@@ -20,7 +21,7 @@
         "resizable": true,
         "fullscreen": false,
         "center": true,
-        "url": "http://127.0.0.1:8000"
+        "url": "app://index.html"
       }
     ],
     "security": {

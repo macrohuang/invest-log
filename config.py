@@ -6,6 +6,7 @@ Supports desktop app mode with dynamic data directory configuration.
 """
 
 import json
+import shutil
 from pathlib import Path
 import os
 import sys
@@ -126,7 +127,21 @@ def save_user_config(config_dict: dict, use_app_config: bool = True) -> None:
         json.dump(config_dict, f, indent=4)
 
 
-def complete_setup(use_icloud: bool = False, custom_data_dir: str | None = None) -> str:
+def _copy_db_to_target(src_path: Path, target_dir: Path) -> Path:
+    """Copy an existing DB file into the target directory if needed."""
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / src_path.name
+    if src_path.resolve() != target_path.resolve():
+        shutil.copy2(src_path, target_path)
+    return target_path
+
+
+def complete_setup(
+    use_icloud: bool = False,
+    custom_data_dir: str | None = None,
+    existing_db_path: str | None = None,
+    db_name: str | None = None
+) -> str:
     """Complete the first-run setup and return the configured data directory.
     
     Args:
@@ -138,23 +153,54 @@ def complete_setup(use_icloud: bool = False, custom_data_dir: str | None = None)
     """
     config = load_user_config()
     
-    if use_icloud and IS_MACOS:
-        ICLOUD_APP_FOLDER.mkdir(parents=True, exist_ok=True)
-        data_dir = str(ICLOUD_APP_FOLDER)
-        config["use_icloud"] = True
-        config["data_dir"] = None
-    elif custom_data_dir:
-        Path(custom_data_dir).mkdir(parents=True, exist_ok=True)
-        data_dir = custom_data_dir
-        config["use_icloud"] = False
-        config["data_dir"] = custom_data_dir
+    selected_db_name = (db_name or config.get("db_name", "transactions.db")).strip() or "transactions.db"
+
+    if existing_db_path:
+        db_path = Path(existing_db_path).expanduser()
+        if not db_path.exists():
+            raise FileNotFoundError(f"Database file not found: {db_path}")
+        if not db_path.is_file():
+            raise ValueError(f"Selected path is not a file: {db_path}")
+
+        selected_db_name = db_path.name
+        if use_icloud and IS_MACOS:
+            if not is_icloud_available():
+                raise RuntimeError("iCloud Drive is not available on this system")
+            target_path = _copy_db_to_target(db_path, ICLOUD_APP_FOLDER)
+            data_dir = str(target_path.parent)
+            config["use_icloud"] = True
+            config["data_dir"] = None
+        elif custom_data_dir:
+            target_dir = Path(custom_data_dir)
+            target_path = _copy_db_to_target(db_path, target_dir)
+            data_dir = str(target_path.parent)
+            config["use_icloud"] = False
+            config["data_dir"] = data_dir
+        else:
+            data_dir = str(db_path.parent)
+            config["use_icloud"] = False
+            config["data_dir"] = data_dir
     else:
-        # Default to app config directory
-        APP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        data_dir = str(APP_CONFIG_DIR)
-        config["use_icloud"] = False
-        config["data_dir"] = data_dir
+        if use_icloud and IS_MACOS:
+            if not is_icloud_available():
+                raise RuntimeError("iCloud Drive is not available on this system")
+            ICLOUD_APP_FOLDER.mkdir(parents=True, exist_ok=True)
+            data_dir = str(ICLOUD_APP_FOLDER)
+            config["use_icloud"] = True
+            config["data_dir"] = None
+        elif custom_data_dir:
+            Path(custom_data_dir).mkdir(parents=True, exist_ok=True)
+            data_dir = custom_data_dir
+            config["use_icloud"] = False
+            config["data_dir"] = custom_data_dir
+        else:
+            # Default to app config directory
+            APP_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+            data_dir = str(APP_CONFIG_DIR)
+            config["use_icloud"] = False
+            config["data_dir"] = data_dir
     
+    config["db_name"] = selected_db_name
     config["setup_complete"] = True
     save_user_config(config)
     

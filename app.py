@@ -6,8 +6,11 @@ Supports desktop app mode with CLI arguments.
 """
 
 import argparse
+import os
 import signal
 import sys
+import threading
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -82,6 +85,22 @@ def signal_handler(signum, frame):
     sys.exit(0)
 
 
+def start_parent_watch():
+    """Exit backend when parent process is gone (desktop sidecar mode)."""
+    if os.environ.get("INVEST_LOG_PARENT_WATCH") != "1":
+        return
+
+    def _watch():
+        time.sleep(2)
+        while True:
+            if os.getppid() == 1:
+                logger.info("Parent process exited; shutting down backend.")
+                os._exit(0)
+            time.sleep(1)
+
+    threading.Thread(target=_watch, daemon=True).start()
+
+
 if __name__ == "__main__":
     import uvicorn
     
@@ -94,10 +113,14 @@ if __name__ == "__main__":
         logger.info(f"Using data directory: {args.data_dir}")
     
     config.set_runtime_port(args.port)
+    logger.info(f"Starting server on {args.host}:{args.port}")
     
     # Register signal handlers for graceful shutdown
     signal.signal(signal.SIGTERM, signal_handler)
     signal.signal(signal.SIGINT, signal_handler)
+
+    # Watch parent process in desktop sidecar mode
+    start_parent_watch()
     
     # Run the server
     uvicorn.run(

@@ -5,6 +5,11 @@ from logger_config import logger
 
 router = APIRouter(prefix="/api")
 
+@router.get("/health")
+async def api_health():
+    """Health check endpoint for desktop loader."""
+    return {"status": "ok"}
+
 @router.get("/holdings")
 async def api_holdings(account_id: Optional[str] = None):
     """Get current holdings."""

@@ -145,6 +145,46 @@
             outline: none;
             border-color: #3b82f6;
         }
+
+        .path-input-row {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+
+        .path-input-row input {
+            flex: 1;
+        }
+
+        .btn-browse {
+            padding: 0.6rem 0.9rem;
+            border: 1px solid #d0d7de;
+            background: #f8fafc;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .btn-browse:hover {
+            background: #eef2f7;
+        }
+
+        .existing-db-section {
+            margin-bottom: 1.5rem;
+        }
+
+        .existing-db-title {
+            font-weight: 600;
+            color: #1a1a2e;
+            margin-bottom: 0.5rem;
+        }
+
+        .existing-db-help {
+            font-size: 0.8rem;
+            color: #666;
+            margin-top: 0.5rem;
+        }
         
         .btn-setup {
             width: 100%;
@@ -187,6 +227,17 @@
             <h2 class="setup-title">Choose where to store your data</h2>
             
             <form method="POST" action="/setup" id="setupForm">
+                <div class="existing-db-section">
+                    <div class="existing-db-title">已有数据库文件（可选）</div>
+                    <div class="path-input-row">
+                        <input type="text" name="existing_db_path" placeholder="选择或粘贴已有的 .db 文件路径">
+                        <button type="button" class="btn-browse" id="browseDbBtn">选择文件</button>
+                    </div>
+                    <div class="existing-db-help">
+                        如果选择了数据库文件，将优先使用该文件；若勾选 iCloud，会自动复制到 iCloud 目录以确保同步。
+                    </div>
+                </div>
+
                 <div class="storage-options">
                     {% if is_macos and icloud_available %}
                     <label class="storage-option" id="icloudOption">
@@ -224,7 +275,10 @@
                             Choose your own folder (e.g., Dropbox, OneDrive, or any location).
                         </div>
                         <div class="custom-path-input">
-                            <input type="text" name="custom_path" placeholder="Enter folder path or paste it here">
+                            <div class="path-input-row">
+                                <input type="text" name="custom_path" placeholder="Enter folder path or paste it here">
+                                <button type="button" class="btn-browse" id="browseFolderBtn">选择文件夹</button>
+                            </div>
                         </div>
                     </label>
                 </div>
@@ -266,6 +320,49 @@
             customRadio.addEventListener('change', function() {
                 if (this.checked) {
                     setTimeout(() => customInput.focus(), 100);
+                }
+            });
+        }
+
+        const tauriInvoke = window.__TAURI__?.core?.invoke;
+        const browseDbBtn = document.getElementById('browseDbBtn');
+        const browseFolderBtn = document.getElementById('browseFolderBtn');
+        const existingDbInput = document.querySelector('input[name="existing_db_path"]');
+
+        if (browseDbBtn && existingDbInput) {
+            browseDbBtn.addEventListener('click', async () => {
+                if (!tauriInvoke) {
+                    existingDbInput.focus();
+                    return;
+                }
+                try {
+                    const path = await tauriInvoke('pick_db_file');
+                    if (path) {
+                        existingDbInput.value = path;
+                    }
+                } catch (err) {
+                    console.error('Failed to pick DB file', err);
+                }
+            });
+        }
+
+        if (browseFolderBtn && customInput) {
+            browseFolderBtn.addEventListener('click', async () => {
+                if (!tauriInvoke) {
+                    customInput.focus();
+                    return;
+                }
+                try {
+                    const path = await tauriInvoke('pick_folder');
+                    if (path) {
+                        customInput.value = path;
+                        if (customRadio) {
+                            customRadio.checked = true;
+                            customRadio.dispatchEvent(new Event('change'));
+                        }
+                    }
+                } catch (err) {
+                    console.error('Failed to pick folder', err);
                 }
             });
         }
