@@ -324,45 +324,22 @@
             });
         }
 
-        const tauriInvoke = window.__TAURI__?.core?.invoke;
         const browseDbBtn = document.getElementById('browseDbBtn');
         const browseFolderBtn = document.getElementById('browseFolderBtn');
         const existingDbInput = document.querySelector('input[name="existing_db_path"]');
 
         if (browseDbBtn && existingDbInput) {
-            browseDbBtn.addEventListener('click', async () => {
-                if (!tauriInvoke) {
-                    existingDbInput.focus();
-                    return;
-                }
-                try {
-                    const path = await tauriInvoke('pick_db_file');
-                    if (path) {
-                        existingDbInput.value = path;
-                    }
-                } catch (err) {
-                    console.error('Failed to pick DB file', err);
-                }
+            browseDbBtn.addEventListener('click', () => {
+                existingDbInput.focus();
             });
         }
 
         if (browseFolderBtn && customInput) {
-            browseFolderBtn.addEventListener('click', async () => {
-                if (!tauriInvoke) {
-                    customInput.focus();
-                    return;
-                }
-                try {
-                    const path = await tauriInvoke('pick_folder');
-                    if (path) {
-                        customInput.value = path;
-                        if (customRadio) {
-                            customRadio.checked = true;
-                            customRadio.dispatchEvent(new Event('change'));
-                        }
-                    }
-                } catch (err) {
-                    console.error('Failed to pick folder', err);
+            browseFolderBtn.addEventListener('click', () => {
+                customInput.focus();
+                if (customRadio) {
+                    customRadio.checked = true;
+                    customRadio.dispatchEvent(new Event('change'));
                 }
             });
         }

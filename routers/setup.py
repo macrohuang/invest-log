@@ -47,7 +47,7 @@ async def complete_setup_api(
     custom_path: Optional[str] = Form(None),
     existing_db_path: Optional[str] = Form(None)
 ):
-    """Complete the setup process via API (for Tauri integration)."""
+    """Complete the setup process via API (for desktop app integration)."""
     try:
         cleaned_db_path = existing_db_path.strip() if existing_db_path else None
         data_dir = config.complete_setup(

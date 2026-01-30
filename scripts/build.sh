@@ -1,12 +1,12 @@
 #!/bin/bash
 #
-# Build script for Invest Log desktop application
+# Build script for Invest Log desktop application (Electron)
 #
 # Prerequisites:
 #   - Python 3.10+
-#   - Rust and Cargo (https://rustup.rs)
+#   - Node.js + npm
 #   - PyInstaller: pip install pyinstaller
-#   - Tauri CLI: cargo install tauri-cli
+#   - Electron Builder: npm install
 #
 # Usage:
 #   ./scripts/build.sh [dev|release|sidecar]
@@ -20,6 +20,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
 # Detect platform and architecture
+
 detect_platform() {
     case "$(uname -s)" in
         Darwin*)
@@ -43,7 +44,7 @@ detect_platform() {
             exit 1
             ;;
     esac
-    
+
     SIDECAR_NAME="invest-log-backend-$ARCH"
     if [ "$PLATFORM" = "windows" ]; then
         SIDECAR_NAME="$SIDECAR_NAME.exe"
@@ -51,54 +52,63 @@ detect_platform() {
 }
 
 # Build Python sidecar with PyInstaller
+
 build_sidecar() {
     echo "==> Building Python sidecar..."
-    
-    # Install dependencies if needed
+
     if ! python3 -m PyInstaller --version &> /dev/null; then
         echo "Installing PyInstaller..."
-        pip3 install pyinstaller
+        python3 -m pip install pyinstaller
     fi
 
-    # Build the sidecar
     python3 -m PyInstaller invest-log-backend.spec --noconfirm
-    
-    # Copy to Tauri binaries directory
-    mkdir -p src-tauri/binaries
-    cp "dist/$SIDECAR_NAME" "src-tauri/binaries/"
-    
-    echo "==> Sidecar built: src-tauri/binaries/$SIDECAR_NAME"
+
+    if [ ! -f "dist/$SIDECAR_NAME" ]; then
+        echo "Sidecar not found at dist/$SIDECAR_NAME"
+        exit 1
+    fi
+
+    echo "==> Sidecar built: dist/$SIDECAR_NAME"
 }
 
-# Build Tauri app in development mode
+# Ensure Node dependencies
+
+ensure_node_modules() {
+    if [ ! -d "node_modules" ]; then
+        echo "node_modules not found. Installing npm dependencies..."
+        npm install
+    fi
+}
+
+# Run Electron app in development mode
+
 build_dev() {
-    echo "==> Starting development build..."
-    
-    # Ensure sidecar exists
-    if [ ! -f "src-tauri/binaries/$SIDECAR_NAME" ]; then
+    echo "==> Starting Electron development mode..."
+
+    if [ ! -f "dist/$SIDECAR_NAME" ]; then
         echo "Sidecar not found, building..."
         build_sidecar
     fi
-    
-    cd src-tauri
-    cargo tauri dev
+
+    ensure_node_modules
+    npm run dev
 }
 
-# Build Tauri app for release
+# Build Electron app for release
+
 build_release() {
-    echo "==> Building release..."
-    
-    # Always rebuild sidecar for release
+    echo "==> Building Electron release..."
+
     build_sidecar
-    
-    cd src-tauri
-    cargo tauri build
-    
+    ensure_node_modules
+    npm run dist
+
     echo "==> Release build complete!"
-    echo "    Output: src-tauri/target/release/bundle/"
+    echo "    Output: dist/ (electron-builder default)"
 }
 
 # Main
+
 detect_platform
 
 case "${1:-release}" in

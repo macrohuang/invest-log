@@ -4,4 +4,3 @@ output/**
 logs/**
 build/**
 dist/**
-src-tauri/**

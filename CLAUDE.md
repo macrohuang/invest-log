@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Invest Log is a personal investment portfolio management system built with FastAPI (Python backend), SQLite database, and Jinja2 templates. It supports multi-currency (CNY, USD, HKD) and multi-asset (stocks, bonds, metals, cash) tracking with real-time price fetching from multiple data sources. The application can run as a web server or be packaged as a desktop app using Tauri.
+Invest Log is a personal investment portfolio management system built with FastAPI (Python backend), SQLite database, and Jinja2 templates. It supports multi-currency (CNY, USD, HKD) and multi-asset (stocks, bonds, metals, cash) tracking with real-time price fetching from multiple data sources. The application can run as a web server or be packaged as a desktop app using Electron.
 
 **Key Features:**
 - Multi-currency portfolio management with automatic currency grouping
@@ -44,15 +44,16 @@ uvicorn app:app --reload --host 127.0.0.1 --port 8000
 # Or: pyinstaller invest-log-backend.spec
 ```
 
-**Run in development mode:**
+**Run in development mode (Electron):**
 ```bash
 ./scripts/build.sh dev
+# Or: npm run dev (after building sidecar)
 ```
 
-**Build release bundle:**
+**Build release bundle (Electron):**
 ```bash
 ./scripts/build.sh release
-# Output: src-tauri/target/release/bundle/
+# Output: electron-builder output (default: dist/)
 ```
 
 ### Dependency Management
@@ -173,14 +174,16 @@ To add a new price data source:
 
 ## Desktop App Integration
 
-### Tauri Configuration
+### Electron Configuration
 
-The app uses Tauri 2.x for desktop packaging:
+The app uses Electron for desktop packaging:
 
-- Configuration: `src-tauri/tauri.conf.json`
+- Main process: `electron/main.js`
+- Loading screen: `electron/loading.html`
+- Build config: `package.json` (electron-builder)
 - Sidecar binary: Python backend packaged with PyInstaller
+- Sidecar path: `dist/invest-log-backend-{platform}-{arch}`
 - Default window: 1200x800, minimum 800x600
-- External binary path: `src-tauri/binaries/invest-log-backend-{platform}-{arch}`
 
 ### Platform-Specific Binary Naming
 
@@ -407,6 +410,11 @@ invest-log/
 ├── requirements.txt           # Runtime dependencies
 ├── requirements-dev.txt       # Development dependencies
 ├── invest-log-backend.spec    # PyInstaller build specification
+├── package.json               # Electron app configuration
+├── package-lock.json          # NPM lockfile
+├── electron/                  # Electron main process
+│   ├── main.js               # Electron entrypoint
+│   └── loading.html          # Loading screen
 ├── routers/                   # Feature-based routing modules
 │   ├── overview.py           # Dashboard & charts
 │   ├── holdings.py           # Holdings detail & price updates
@@ -427,11 +435,6 @@ invest-log/
 │   └── setup.html            # Setup wizard
 ├── static/                    # Static assets
 │   └── style.css             # Application styles
-├── src-tauri/                 # Tauri desktop app
-│   ├── src/                  # Rust source
-│   ├── tauri.conf.json       # Tauri configuration
-│   ├── Cargo.toml            # Rust dependencies
-│   └── binaries/             # Sidecar binaries
 └── scripts/
     └── build.sh              # Build automation script
 ```

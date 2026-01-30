@@ -12,7 +12,7 @@ import sys
 
 block_cipher = None
 
-# Determine platform-specific naming for Tauri sidecar
+# Determine platform-specific naming for desktop sidecar
 if sys.platform == 'darwin':
     import platform
     arch = platform.machine()
