@@ -24,7 +24,7 @@
 ```
 
 说明：
-- 后端二进制由 PyInstaller 生成，输出在 `dist/` 下
+- 后端二进制由 PyInstaller 生成，输出在 `backend-dist/` 下
 - Electron 打包会将 `dist/` 作为额外资源打入应用（见 `package.json` 的 build.extraResources）
 
 ## 常见问题
@@ -36,7 +36,7 @@
 
 ### 需要清理重建
 ```bash
-rm -rf build dist
+rm -rf build dist backend-dist
 ```
 
 ## 技术栈

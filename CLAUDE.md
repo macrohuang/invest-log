@@ -182,7 +182,7 @@ The app uses Electron for desktop packaging:
 - Loading screen: `electron/loading.html`
 - Build config: `package.json` (electron-builder)
 - Sidecar binary: Python backend packaged with PyInstaller
-- Sidecar path: `dist/invest-log-backend-{platform}-{arch}`
+- Sidecar path: `backend-dist/invest-log-backend-{platform}-{arch}`
 - Default window: 1200x800, minimum 800x600
 
 ### Platform-Specific Binary Naming

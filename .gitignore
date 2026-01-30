@@ -4,3 +4,4 @@ output/**
 logs/**
 build/**
 dist/**
+backend-dist/**

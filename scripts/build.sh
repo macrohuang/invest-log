@@ -61,14 +61,14 @@ build_sidecar() {
         python3 -m pip install pyinstaller
     fi
 
-    python3 -m PyInstaller invest-log-backend.spec --noconfirm
-
-    if [ ! -f "dist/$SIDECAR_NAME" ]; then
-        echo "Sidecar not found at dist/$SIDECAR_NAME"
+    python3 -m PyInstaller invest-log-backend.spec --noconfirm --distpath backend-dist --workpath build/pyinstaller
+    
+    if [ ! -f "backend-dist/$SIDECAR_NAME" ]; then
+        echo "Sidecar not found at backend-dist/$SIDECAR_NAME"
         exit 1
     fi
-
-    echo "==> Sidecar built: dist/$SIDECAR_NAME"
+    
+    echo "==> Sidecar built: backend-dist/$SIDECAR_NAME"
 }
 
 # Ensure Node dependencies
@@ -85,7 +85,7 @@ ensure_node_modules() {
 build_dev() {
     echo "==> Starting Electron development mode..."
 
-    if [ ! -f "dist/$SIDECAR_NAME" ]; then
+    if [ ! -f "backend-dist/$SIDECAR_NAME" ]; then
         echo "Sidecar not found, building..."
         build_sidecar
     fi

@@ -34,20 +34,28 @@ function resolveBackendPath() {
   if (app.isPackaged) {
     const base = process.resourcesPath;
     for (const name of archNames) {
-      const candidate = path.join(base, 'dist', name);
+      const candidate = path.join(base, 'backend', name);
       if (fs.existsSync(candidate)) {
         return candidate;
       }
     }
     if (process.platform === 'win32') {
+      const winCandidate = path.join(base, 'backend', 'invest-log-backend.exe');
+      if (fs.existsSync(winCandidate)) {
+        return winCandidate;
+      }
       return path.join(base, 'invest-log-backend.exe');
+    }
+    const fallback = path.join(base, 'backend', 'invest-log-backend');
+    if (fs.existsSync(fallback)) {
+      return fallback;
     }
     return path.join(base, 'invest-log-backend');
   }
   const devCandidates = [
-    path.join(__dirname, '..', 'dist', 'invest-log-backend'),
-    path.join(__dirname, '..', 'dist', 'invest-log-backend.exe'),
-    ...archNames.map((name) => path.join(__dirname, '..', 'dist', name)),
+    path.join(__dirname, '..', 'backend-dist', 'invest-log-backend'),
+    path.join(__dirname, '..', 'backend-dist', 'invest-log-backend.exe'),
+    ...archNames.map((name) => path.join(__dirname, '..', 'backend-dist', name)),
   ];
   for (const candidate of devCandidates) {
     if (fs.existsSync(candidate)) {

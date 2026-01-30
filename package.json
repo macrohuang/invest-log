@@ -14,14 +14,15 @@
   "build": {
     "appId": "com.investlog.desktop",
     "productName": "Invest Log",
+    "afterPack": "scripts/afterPack.js",
     "files": [
       "electron/**",
       "package.json"
     ],
     "extraResources": [
       {
-        "from": "dist",
-        "to": "dist"
+        "from": "backend-dist",
+        "to": "backend"
       }
     ],
     "mac": {
