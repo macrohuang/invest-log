@@ -1,0 +1,115 @@
+import AppKit
+import WebKit
+
+class AppDelegate: NSObject, NSApplicationDelegate {
+  private var window: NSWindow!
+  private var webView: WKWebView!
+  private var backendProcess: Process?
+
+  private let host = "127.0.0.1"
+  private let port = 8000
+  private let maxAttempts = 80
+
+  func applicationDidFinishLaunching(_ notification: Notification) {
+    setupWindow()
+    startBackend()
+    waitForServer(attempt: 0)
+  }
+
+  func applicationWillTerminate(_ notification: Notification) {
+    backendProcess?.terminate()
+  }
+
+  func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+    return true
+  }
+
+  private func setupWindow() {
+    let config = WKWebViewConfiguration()
+    webView = WKWebView(frame: .zero, configuration: config)
+
+    window = NSWindow(
+      contentRect: NSRect(x: 0, y: 0, width: 1200, height: 800),
+      styleMask: [.titled, .closable, .miniaturizable, .resizable],
+      backing: .buffered,
+      defer: false
+    )
+    window.center()
+    window.title = "Invest Log"
+    window.contentView = webView
+    window.makeKeyAndOrderFront(nil)
+  }
+
+  private func startBackend() {
+    guard let resourcePath = Bundle.main.resourcePath else {
+      showFatalError("Missing app resources.")
+      return
+    }
+
+    let backendURL = URL(fileURLWithPath: resourcePath).appendingPathComponent("invest-log-backend")
+    let webDirURL = URL(fileURLWithPath: resourcePath).appendingPathComponent("static")
+
+    let process = Process()
+    process.executableURL = backendURL
+    process.arguments = [
+      "--host", host,
+      "--port", "\(port)",
+      "--web-dir", webDirURL.path
+    ]
+    process.currentDirectoryURL = URL(fileURLWithPath: resourcePath)
+    var env = ProcessInfo.processInfo.environment
+    env["INVEST_LOG_PARENT_WATCH"] = "1"
+    process.environment = env
+
+    do {
+      try process.run()
+      backendProcess = process
+    } catch {
+      showFatalError("Unable to start backend. \(error.localizedDescription)")
+    }
+  }
+
+  private func waitForServer(attempt: Int) {
+    let url = URL(string: "http://\(host):\(port)/api/health")!
+    var request = URLRequest(url: url)
+    request.timeoutInterval = 1.0
+
+    URLSession.shared.dataTask(with: request) { [weak self] _, response, _ in
+      guard let self = self else { return }
+      if let http = response as? HTTPURLResponse, http.statusCode == 200 {
+        DispatchQueue.main.async { self.loadApp() }
+        return
+      }
+      if attempt < self.maxAttempts {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+          self.waitForServer(attempt: attempt + 1)
+        }
+      } else {
+        DispatchQueue.main.async { self.loadApp() }
+      }
+    }.resume()
+  }
+
+  private func loadApp() {
+    let url = URL(string: "http://\(host):\(port)/")!
+    webView.load(URLRequest(url: url))
+  }
+
+  private func showFatalError(_ message: String) {
+    DispatchQueue.main.async {
+      let alert = NSAlert()
+      alert.messageText = "Invest Log"
+      alert.informativeText = message
+      alert.alertStyle = .critical
+      alert.runModal()
+      NSApp.terminate(nil)
+    }
+  }
+}
+
+let app = NSApplication.shared
+app.setActivationPolicy(.regular)
+let delegate = AppDelegate()
+app.delegate = delegate
+app.activate(ignoringOtherApps: true)
+app.run()

@@ -677,19 +677,34 @@ function bindHoldingsActions() {
 async function renderTransactions() {
   view.innerHTML = `
     <div class="section-title">Transactions</div>
-    <div class="section-sub">Filter by symbol, account, or type.</div>
+    <div class="section-sub">Filter by symbol, account, or date range.</div>
     <div class="card">Loading transactions...</div>
   `;
 
   try {
-    const [transactions, accounts] = await Promise.all([
-      fetchJSON('/api/transactions?limit=200'),
-      fetchJSON('/api/accounts')
-    ]);
-    const accountNameMap = new Map((accounts || []).map((a) => [a.account_id, a.account_name || a.account_id]));
     const query = getRouteQuery();
     const filterSymbol = (query.get('symbol') || '').trim();
     const filterAccount = (query.get('account') || '').trim();
+    const filterStartDate = (query.get('start_date') || '').trim();
+    const filterEndDate = (query.get('end_date') || '').trim();
+    const txParams = new URLSearchParams({ limit: '200' });
+    if (filterSymbol) {
+      txParams.set('symbol', filterSymbol);
+    }
+    if (filterAccount) {
+      txParams.set('account_id', filterAccount);
+    }
+    if (filterStartDate) {
+      txParams.set('start_date', filterStartDate);
+    }
+    if (filterEndDate) {
+      txParams.set('end_date', filterEndDate);
+    }
+    const [transactions, accounts] = await Promise.all([
+      fetchJSON(`/api/transactions?${txParams.toString()}`),
+      fetchJSON('/api/accounts')
+    ]);
+    const accountNameMap = new Map((accounts || []).map((a) => [a.account_id, a.account_name || a.account_id]));
     const symbolKey = filterSymbol ? filterSymbol.toUpperCase() : '';
     const filteredTransactions = (transactions || []).filter((t) => {
       if (symbolKey && String(t.symbol || '').toUpperCase() !== symbolKey) {
@@ -698,8 +713,32 @@ async function renderTransactions() {
       if (filterAccount && String(t.account_id || '') !== filterAccount) {
         return false;
       }
+      const txnDate = String(t.transaction_date || '');
+      if (filterStartDate && txnDate < filterStartDate) {
+        return false;
+      }
+      if (filterEndDate && txnDate > filterEndDate) {
+        return false;
+      }
       return true;
     });
+    const symbolOptions = Array.from(new Set(
+      (transactions || [])
+        .map((t) => String(t.symbol || '').toUpperCase())
+        .filter(Boolean)
+    )).sort();
+    const accountIds = new Set((accounts || []).map((a) => String(a.account_id || '')));
+    let accountOptions = (accounts || []).map((a) => {
+      const accountId = String(a.account_id || '');
+      const label = a.account_name && a.account_name !== accountId
+        ? `${a.account_name} (${accountId})`
+        : accountId;
+      const selected = accountId === filterAccount ? ' selected' : '';
+      return `<option value="${escapeHtml(accountId)}"${selected}>${escapeHtml(label)}</option>`;
+    }).join('');
+    if (filterAccount && !accountIds.has(filterAccount)) {
+      accountOptions = `<option value="${escapeHtml(filterAccount)}" selected>${escapeHtml(filterAccount)}</option>${accountOptions}`;
+    }
     const rows = filteredTransactions.map((t) => {
       const tagClass = t.transaction_type === 'BUY' ? 'buy' : t.transaction_type === 'SELL' ? 'sell' : 'other';
       const displayName = t.name ? t.name : t.symbol;
@@ -729,6 +768,17 @@ async function renderTransactions() {
       const accountLabel = accountNameMap.get(filterAccount) || filterAccount;
       filterTags.push(`<span class="tag other">Account: ${escapeHtml(accountLabel)}</span>`);
     }
+    if (filterStartDate || filterEndDate) {
+      let dateLabel = 'Date: ';
+      if (filterStartDate && filterEndDate) {
+        dateLabel += `${escapeHtml(filterStartDate)} to ${escapeHtml(filterEndDate)}`;
+      } else if (filterStartDate) {
+        dateLabel += `from ${escapeHtml(filterStartDate)}`;
+      } else {
+        dateLabel += `until ${escapeHtml(filterEndDate)}`;
+      }
+      filterTags.push(`<span class="tag other">${dateLabel}</span>`);
+    }
     const filterBar = filterTags.length
       ? `
         <div class="filter-bar">
@@ -736,11 +786,43 @@ async function renderTransactions() {
           <a class="inline-link" href="#/transactions">Clear</a>
         </div>
       `
-      : '<div class="section-sub">Filter by symbol, account, or type.</div>';
+      : '<div class="section-sub">Filter by symbol, account, or date range.</div>';
 
     view.innerHTML = `
       <div class="section-title">Transactions</div>
       ${filterBar}
+      <div class="card">
+        <form id="tx-filter" class="form">
+          <div class="form-row">
+            <div class="field">
+              <label for="filter-symbol">Symbol</label>
+              <input id="filter-symbol" name="symbol" placeholder="AAPL" value="${escapeHtml(filterSymbol)}" list="tx-symbols">
+              <datalist id="tx-symbols">
+                ${symbolOptions.map((s) => `<option value="${escapeHtml(s)}"></option>`).join('')}
+              </datalist>
+            </div>
+            <div class="field">
+              <label for="filter-account">Account</label>
+              <select id="filter-account" name="account">
+                <option value="">All</option>
+                ${accountOptions}
+              </select>
+            </div>
+            <div class="field">
+              <label for="filter-start">Start date</label>
+              <input id="filter-start" name="start_date" type="date" value="${escapeHtml(filterStartDate)}">
+            </div>
+            <div class="field">
+              <label for="filter-end">End date</label>
+              <input id="filter-end" name="end_date" type="date" value="${escapeHtml(filterEndDate)}">
+            </div>
+          </div>
+          <div class="actions">
+            <button class="btn" type="submit">Apply</button>
+            <button class="btn secondary" type="button" data-action="clear-filters">Clear</button>
+          </div>
+        </form>
+      </div>
       <div class="card">
         <table class="table">
           <thead>
@@ -759,6 +841,36 @@ async function renderTransactions() {
         </table>
       </div>
     `;
+
+    const filterForm = view.querySelector('#tx-filter');
+    if (filterForm) {
+      filterForm.addEventListener('submit', (event) => {
+        event.preventDefault();
+        const formData = new FormData(filterForm);
+        const symbol = (formData.get('symbol') || '').toString().trim();
+        const account = (formData.get('account') || '').toString().trim();
+        const startDate = (formData.get('start_date') || '').toString().trim();
+        const endDate = (formData.get('end_date') || '').toString().trim();
+        if (startDate && endDate && startDate > endDate) {
+          showToast('Start date must be before end date');
+          return;
+        }
+        const params = new URLSearchParams();
+        if (symbol) params.set('symbol', symbol);
+        if (account) params.set('account', account);
+        if (startDate) params.set('start_date', startDate);
+        if (endDate) params.set('end_date', endDate);
+        const queryString = params.toString();
+        window.location.hash = queryString ? `#/transactions?${queryString}` : '#/transactions';
+      });
+    }
+
+    const clearButton = view.querySelector('[data-action="clear-filters"]');
+    if (clearButton) {
+      clearButton.addEventListener('click', () => {
+        window.location.hash = '#/transactions';
+      });
+    }
 
     view.querySelectorAll('button[data-action="delete"]').forEach((btn) => {
       btn.addEventListener('click', async () => {
