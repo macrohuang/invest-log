@@ -16,7 +16,7 @@ go run ./cmd/server --data-dir /path/to/data --port 8000
 Optional flags:
 - `--web-dir`: path to SPA static files (defaults to `static` or `../static` if found)
 
-Environment variables (same behavior as Python backend):
+Environment variables:
 - `INVEST_LOG_DATA_DIR`: override data directory
 - `INVEST_LOG_DB_PATH`: override DB file path
 

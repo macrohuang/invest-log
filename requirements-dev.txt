@@ -1,5 +1,0 @@
-# Development dependencies for building desktop app
--r requirements.txt
-
-# PyInstaller for building the sidecar binary
-pyinstaller>=6.0.0
