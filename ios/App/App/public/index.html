@@ -1,59 +1,50 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Invest Log</title>
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            margin: 0;
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            color: white;
-        }
-        .loading {
-            text-align: center;
-        }
-        .spinner {
-            width: 40px;
-            height: 40px;
-            border: 3px solid rgba(255,255,255,0.3);
-            border-top-color: white;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 20px;
-        }
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Invest Log</title>
+  <meta name="theme-color" content="#1d1f1b">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icons/icon-192.png" sizes="192x192">
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=Manrope:wght@300;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
-    <div class="loading">
-        <div class="spinner"></div>
-        <p>Starting Invest Log...</p>
+  <div class="ambient">
+    <span class="orb orb-a"></span>
+    <span class="orb orb-b"></span>
+    <span class="orb orb-c"></span>
+  </div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">◎</span>
+      <div>
+        <div class="brand-title">Invest Log</div>
+        <div class="brand-sub">Local-first portfolio tracker</div>
+      </div>
     </div>
-    <script>
-        // Wait for backend to be ready, then redirect
-        function checkBackend() {
-            fetch('http://localhost:8000/')
-                .then(response => {
-                    if (response.ok) {
-                        window.location.href = 'http://localhost:8000/';
-                    } else {
-                        setTimeout(checkBackend, 500);
-                    }
-                })
-                .catch(() => {
-                    setTimeout(checkBackend, 500);
-                });
-        }
-        // Start checking after a short delay
-        setTimeout(checkBackend, 1000);
-    </script>
+    <nav class="nav">
+      <a href="#/overview" data-route="overview">Overview</a>
+      <a href="#/holdings" data-route="holdings">Holdings</a>
+      <a href="#/charts" data-route="charts">Charts</a>
+      <a href="#/transactions" data-route="transactions">Transactions</a>
+      <a href="#/settings" data-route="settings">Settings</a>
+    </nav>
+    <div class="top-actions">
+      <button class="ghost" id="privacy-toggle" type="button">Privacy</button>
+      <a class="primary" href="#/add">New transaction</a>
+      <div class="status-pill" id="connection-pill">Offline</div>
+    </div>
+  </header>
+
+  <main id="view" class="view"></main>
+
+  <div id="toast" class="toast" aria-live="polite"></div>
+
+  <script src="app.js" defer></script>
 </body>
 </html>

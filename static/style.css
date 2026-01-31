@@ -244,6 +244,39 @@ button,
   margin-bottom: 8px;
 }
 
+.overview-summary {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 18px 22px;
+  margin-bottom: 18px;
+}
+
+.summary-title {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.summary-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--ink-0);
+}
+
+.summary-sub {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.summary-pill {
+  margin-left: auto;
+  white-space: nowrap;
+}
+
 .value {
   font-size: 28px;
   font-weight: 700;
@@ -266,6 +299,16 @@ button,
   font-weight: 600;
 }
 
+.pill.negative {
+  background: rgba(196, 75, 34, 0.16);
+  color: var(--accent-strong);
+}
+
+.pill.positive {
+  background: rgba(26, 166, 183, 0.18);
+  color: var(--accent-cool);
+}
+
 .table {
   width: 100%;
   border-collapse: collapse;
@@ -277,6 +320,13 @@ button,
   text-align: left;
   padding: 12px 10px;
   border-bottom: 1px solid rgba(29, 31, 27, 0.08);
+}
+
+.table td.num,
+.table th.num,
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 .table th {
@@ -320,6 +370,37 @@ button,
 .table td .alert {
   display: inline-flex;
   align-items: center;
+}
+
+.symbol-link {
+  text-decoration: none;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.symbol-link:hover,
+.symbol-link:focus {
+  color: var(--accent-strong);
+  text-decoration: underline;
+}
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.inline-link {
+  color: var(--accent-strong);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.inline-link:hover,
+.inline-link:focus {
+  text-decoration: underline;
 }
 
 .tag {
@@ -449,6 +530,10 @@ button,
   grid-template-columns: minmax(120px, 160px) 1fr 70px 110px;
   gap: 12px;
   align-items: center;
+}
+
+.chart-row .num {
+  justify-self: end;
 }
 
 .chart-item {
@@ -591,6 +676,26 @@ button,
   color: var(--muted);
 }
 
+.account-legend .legend-item {
+  grid-template-columns: 14px 1fr;
+}
+
+.account-legend .legend-label {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.account-legend .legend-percent {
+  font-weight: 700;
+  font-size: 12px;
+}
+
+.account-title {
+  margin-top: 14px;
+  margin-bottom: 6px;
+}
+
 .table .table-input,
 .table .table-select {
   width: 100%;
@@ -658,6 +763,9 @@ button,
     flex-direction: column;
     align-items: flex-start;
   }
+  .summary-pill {
+    margin-left: 0;
+  }
   .grid.two {
     grid-template-columns: 1fr;
   }
@@ -674,7 +782,7 @@ button,
   }
   .chart-row > div:nth-child(3),
   .chart-row > div:nth-child(4) {
-    justify-self: flex-start;
+    justify-self: flex-end;
   }
   .allocation-controls {
     grid-template-columns: repeat(2, minmax(80px, 1fr));
