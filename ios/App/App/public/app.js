@@ -483,8 +483,14 @@ async function renderHoldings() {
     `).join('');
 
     const panels = currencies.map((currency) => {
-      const symbols = data[currency].symbols || [];
+      const currencyData = data[currency] || {};
+      const symbols = currencyData.symbols || [];
       const canUpdateAll = symbols.some((s) => s.auto_update !== 0);
+      const totalMarketValue = Number(currencyData.total_market_value ?? 0);
+      const totalPnL = Number(currencyData.total_pnl ?? (totalMarketValue - Number(currencyData.total_cost ?? 0)));
+      const pnlClass = totalPnL >= 0 ? 'pnl-positive' : 'pnl-negative';
+      const totalMarketLabel = formatMoney(totalMarketValue, currency);
+      const totalPnLLabel = formatMoney(totalPnL, currency);
       const rows = symbols.map((s) => {
         const pnlClass = s.unrealized_pnl !== null && s.unrealized_pnl !== undefined ? (s.unrealized_pnl >= 0 ? 'pill' : 'alert') : '';
         const autoUpdate = s.auto_update !== 0;
@@ -519,7 +525,19 @@ async function renderHoldings() {
         <div class="tab-panel" data-holdings-panel="${currency}">
           <div class="card">
             <div class="panel-head">
-              <h3>${currency} Holdings</h3>
+              <div class="panel-left">
+                <h3>${currency} Holdings</h3>
+                <div class="panel-meta">
+                  <div class="panel-metric">
+                    <span class="section-sub">Market Value</span>
+                    <span class="metric-value" data-sensitive>${totalMarketLabel}</span>
+                  </div>
+                  <div class="panel-metric">
+                    <span class="section-sub">Total P&amp;L</span>
+                    <span class="metric-value ${pnlClass}" data-sensitive>${totalPnLLabel}</span>
+                  </div>
+                </div>
+              </div>
               <div class="actions">
                 <button class="btn secondary" data-action="update-all" data-currency="${currency}" ${canUpdateAll ? '' : 'disabled title="No auto-sync symbols"'}>Update all</button>
               </div>
@@ -677,13 +695,14 @@ function bindHoldingsActions() {
 async function renderTransactions() {
   view.innerHTML = `
     <div class="section-title">Transactions</div>
-    <div class="section-sub">Filter by symbol, account, or date range.</div>
+    <div class="section-sub">Filter by account, symbol, or date range.</div>
     <div class="card">Loading transactions...</div>
   `;
 
   try {
     const query = getRouteQuery();
-    const filterSymbol = (query.get('symbol') || '').trim();
+    const rawSymbol = (query.get('symbol') || '').trim();
+    const filterSymbol = rawSymbol.split(' - ')[0].trim();
     const filterAccount = (query.get('account') || '').trim();
     const filterStartDate = (query.get('start_date') || '').trim();
     const filterEndDate = (query.get('end_date') || '').trim();
@@ -722,11 +741,37 @@ async function renderTransactions() {
       }
       return true;
     });
-    const symbolOptions = Array.from(new Set(
-      (transactions || [])
-        .map((t) => String(t.symbol || '').toUpperCase())
-        .filter(Boolean)
-    )).sort();
+    const symbolMeta = new Map();
+    (transactions || []).forEach((t) => {
+      const symbol = String(t.symbol || '').toUpperCase();
+      if (!symbol) return;
+      const entry = symbolMeta.get(symbol) || { name: '', accounts: new Set() };
+      if (!entry.name && t.name) {
+        entry.name = String(t.name);
+      }
+      const accountLabel = t.account_name || accountNameMap.get(t.account_id) || t.account_id || '';
+      if (accountLabel) {
+        entry.accounts.add(String(accountLabel));
+      }
+      symbolMeta.set(symbol, entry);
+    });
+    let symbolOptions = Array.from(symbolMeta.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([symbol, meta]) => {
+        let label = symbol;
+        if (meta.name) {
+          label += ` - ${meta.name}`;
+        }
+        const accounts = Array.from(meta.accounts);
+        if (accounts.length) {
+          label += ` · ${accounts.join(', ')}`;
+        }
+        const selected = symbol === symbolKey ? ' selected' : '';
+        return `<option value="${escapeHtml(symbol)}"${selected}>${escapeHtml(label)}</option>`;
+      }).join('');
+    if (filterSymbol && !symbolMeta.has(symbolKey)) {
+      symbolOptions = `<option value="${escapeHtml(filterSymbol)}" selected>${escapeHtml(filterSymbol)}</option>${symbolOptions}`;
+    }
     const accountIds = new Set((accounts || []).map((a) => String(a.account_id || '')));
     let accountOptions = (accounts || []).map((a) => {
       const accountId = String(a.account_id || '');
@@ -761,12 +806,14 @@ async function renderTransactions() {
       `;
     }).join('');
     const filterTags = [];
-    if (filterSymbol) {
-      filterTags.push(`<span class="tag other">Symbol: ${escapeHtml(filterSymbol)}</span>`);
-    }
     if (filterAccount) {
       const accountLabel = accountNameMap.get(filterAccount) || filterAccount;
       filterTags.push(`<span class="tag other">Account: ${escapeHtml(accountLabel)}</span>`);
+    }
+    if (filterSymbol) {
+      const meta = symbolMeta.get(symbolKey);
+      const symbolLabel = meta && meta.name ? `${filterSymbol} - ${meta.name}` : filterSymbol;
+      filterTags.push(`<span class="tag other">Symbol: ${escapeHtml(symbolLabel)}</span>`);
     }
     if (filterStartDate || filterEndDate) {
       let dateLabel = 'Date: ';
@@ -786,7 +833,7 @@ async function renderTransactions() {
           <a class="inline-link" href="#/transactions">Clear</a>
         </div>
       `
-      : '<div class="section-sub">Filter by symbol, account, or date range.</div>';
+      : '<div class="section-sub">Filter by account, symbol, or date range.</div>';
 
     view.innerHTML = `
       <div class="section-title">Transactions</div>
@@ -795,17 +842,17 @@ async function renderTransactions() {
         <form id="tx-filter" class="form">
           <div class="form-row">
             <div class="field">
-              <label for="filter-symbol">Symbol</label>
-              <input id="filter-symbol" name="symbol" placeholder="AAPL" value="${escapeHtml(filterSymbol)}" list="tx-symbols">
-              <datalist id="tx-symbols">
-                ${symbolOptions.map((s) => `<option value="${escapeHtml(s)}"></option>`).join('')}
-              </datalist>
-            </div>
-            <div class="field">
               <label for="filter-account">Account</label>
               <select id="filter-account" name="account">
                 <option value="">All</option>
                 ${accountOptions}
+              </select>
+            </div>
+            <div class="field">
+              <label for="filter-symbol">Symbol</label>
+              <select id="filter-symbol" name="symbol">
+                <option value="">All</option>
+                ${symbolOptions}
               </select>
             </div>
             <div class="field">
@@ -847,7 +894,8 @@ async function renderTransactions() {
       filterForm.addEventListener('submit', (event) => {
         event.preventDefault();
         const formData = new FormData(filterForm);
-        const symbol = (formData.get('symbol') || '').toString().trim();
+        const symbolRaw = (formData.get('symbol') || '').toString().trim();
+        const symbol = symbolRaw.split(' - ')[0].trim();
         const account = (formData.get('account') || '').toString().trim();
         const startDate = (formData.get('start_date') || '').toString().trim();
         const endDate = (formData.get('end_date') || '').toString().trim();
@@ -1291,17 +1339,22 @@ async function renderSettings() {
   `;
 
   try {
-    const [accounts, assetTypes, allocationSettings, symbols] = await Promise.all([
+    const [accounts, assetTypes, allocationSettings, symbols, holdings] = await Promise.all([
       fetchJSON('/api/accounts'),
       fetchJSON('/api/asset-types'),
       fetchJSON('/api/allocation-settings'),
-      fetchJSON('/api/symbols')
+      fetchJSON('/api/symbols'),
+      fetchJSON('/api/holdings')
     ]);
 
     const settingsMap = {};
     allocationSettings.forEach((s) => {
       settingsMap[`${s.currency}_${s.asset_type}`] = s;
     });
+    const accountsWithHoldings = new Set((holdings || []).map((h) => String(h.account_id || '')));
+    const assetTypesWithHoldings = new Set((holdings || [])
+      .map((h) => String(h.asset_type || '').toLowerCase())
+      .filter(Boolean));
 
     const apiSection = `
       <div class="card">
@@ -1319,15 +1372,22 @@ async function renderSettings() {
       </div>
     `;
 
-    const accountsList = accounts.map((a) => `
-      <div class="list-item">
-        <div>
-          <strong>${escapeHtml(a.account_name)}</strong>
-          <div class="section-sub">${escapeHtml(a.account_id)}</div>
+    const accountsList = accounts.map((a) => {
+      const accountId = String(a.account_id || '');
+      const hasHoldings = accountsWithHoldings.has(accountId);
+      const deleteDisabled = hasHoldings ? 'disabled title="Account has holdings"' : '';
+      const holdingTag = hasHoldings ? '<span class="tag other">In use</span>' : '';
+      return `
+        <div class="list-item">
+          <div>
+            <strong>${escapeHtml(a.account_name)}</strong>
+            <div class="section-sub">${escapeHtml(accountId)}</div>
+            ${holdingTag ? `<div>${holdingTag}</div>` : ''}
+          </div>
+          <button class="btn danger" data-account="${escapeHtml(accountId)}" ${deleteDisabled}>Delete</button>
         </div>
-        <button class="btn danger" data-account="${escapeHtml(a.account_id)}">Delete</button>
-      </div>
-    `).join('');
+      `;
+    }).join('');
 
     const accountsSection = `
       <div class="card">
@@ -1363,12 +1423,21 @@ async function renderSettings() {
       </div>
     `;
 
-    const assetList = assetTypes.map((a) => `
-      <div class="list-item">
-        <div><strong>${escapeHtml(a.label)}</strong> <span class="section-sub">${escapeHtml(a.code)}</span></div>
-        <button class="btn danger" data-asset="${escapeHtml(a.code)}">Delete</button>
-      </div>
-    `).join('');
+    const assetList = assetTypes.map((a) => {
+      const assetCode = String(a.code || '');
+      const hasHoldings = assetTypesWithHoldings.has(assetCode.toLowerCase());
+      const deleteDisabled = hasHoldings ? 'disabled title="Asset type has holdings"' : '';
+      const holdingTag = hasHoldings ? '<span class="tag other">In use</span>' : '';
+      return `
+        <div class="list-item">
+          <div>
+            <div><strong>${escapeHtml(a.label)}</strong> <span class="section-sub">${escapeHtml(assetCode)}</span></div>
+            ${holdingTag ? `<div>${holdingTag}</div>` : ''}
+          </div>
+          <button class="btn danger" data-asset="${escapeHtml(assetCode)}" ${deleteDisabled}>Delete</button>
+        </div>
+      `;
+    }).join('');
 
     const assetSection = `
       <div class="card">
@@ -1531,6 +1600,7 @@ function bindSettingsActions() {
 
   view.querySelectorAll('button[data-account]').forEach((btn) => {
     btn.addEventListener('click', async () => {
+      if (btn.disabled) return;
       const accountID = btn.dataset.account;
       if (!confirm('Delete this account?')) return;
       try {
@@ -1563,6 +1633,7 @@ function bindSettingsActions() {
 
   view.querySelectorAll('button[data-asset]').forEach((btn) => {
     btn.addEventListener('click', async () => {
+      if (btn.disabled) return;
       const code = btn.dataset.asset;
       if (!confirm('Delete this asset type?')) return;
       try {

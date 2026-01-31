@@ -597,6 +597,44 @@ button,
   margin-bottom: 0;
 }
 
+.panel-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.panel-meta {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.panel-metric {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+}
+
+.panel-metric .section-sub {
+  margin-bottom: 0;
+}
+
+.panel-metric .metric-value {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.pnl-positive {
+  color: var(--accent-cool);
+}
+
+.pnl-negative {
+  color: var(--accent-strong);
+}
+
 .pie-layout {
   display: grid;
   grid-template-columns: 170px 1fr;

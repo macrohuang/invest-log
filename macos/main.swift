@@ -12,6 +12,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     setupWindow()
+    loadLoadingScreen()
     startBackend()
     waitForServer(attempt: 0)
   }
@@ -38,6 +39,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     window.title = "Invest Log"
     window.contentView = webView
     window.makeKeyAndOrderFront(nil)
+  }
+
+  private func loadLoadingScreen() {
+    if let url = Bundle.main.url(forResource: "loading", withExtension: "html") {
+      webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+    } else {
+      webView.loadHTMLString("<!doctype html><html><body><p>Loading…</p></body></html>", baseURL: nil)
+    }
   }
 
   private func startBackend() {

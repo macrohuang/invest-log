@@ -39,6 +39,7 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 echo "Copying resources..."
 cp -R "$REPO_DIR/static" "$RESOURCES_DIR/static"
 cp "$BACKEND_BUILD_DIR/invest-log-backend" "$RESOURCES_DIR/invest-log-backend"
+cp "$ROOT_DIR/loading.html" "$RESOURCES_DIR/loading.html"
 chmod +x "$RESOURCES_DIR/invest-log-backend"
 
 echo "Compiling macOS app..."
