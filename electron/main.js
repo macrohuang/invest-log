@@ -206,8 +206,13 @@ async function boot() {
     return;
   }
 
-  const target = `http://127.0.0.1:${backendPort}/?t=${Date.now()}`;
-  mainWindow.loadURL(target);
+  const uiPath = path.join(__dirname, '..', 'static', 'index.html');
+  mainWindow.loadFile(uiPath, {
+    query: {
+      api: `http://127.0.0.1:${backendPort}`,
+      t: String(Date.now()),
+    },
+  });
 }
 
 app.on('ready', boot);

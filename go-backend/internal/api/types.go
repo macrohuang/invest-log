@@ -1,0 +1,72 @@
+package api
+
+type addTransactionPayload struct {
+	TransactionDate string   `json:"transaction_date"`
+	TransactionTime *string  `json:"transaction_time"`
+	Symbol          string   `json:"symbol"`
+	TransactionType string   `json:"transaction_type"`
+	Quantity        float64  `json:"quantity"`
+	Price           float64  `json:"price"`
+	AccountID       string   `json:"account_id"`
+	AssetType       string   `json:"asset_type"`
+	Commission      float64  `json:"commission"`
+	Currency        string   `json:"currency"`
+	AccountName     *string  `json:"account_name"`
+	Notes           *string  `json:"notes"`
+	Tags            *string  `json:"tags"`
+	TotalAmount     *float64 `json:"total_amount"`
+	LinkCash        bool     `json:"link_cash"`
+}
+
+type pricePayload struct {
+	Symbol   string `json:"symbol"`
+	Currency string `json:"currency"`
+}
+
+type manualPricePayload struct {
+	Symbol   string  `json:"symbol"`
+	Currency string  `json:"currency"`
+	Price    float64 `json:"price"`
+}
+
+type updateAllPricesPayload struct {
+	Currency string `json:"currency"`
+}
+
+type addAccountPayload struct {
+	AccountID         string  `json:"account_id"`
+	AccountName       string  `json:"account_name"`
+	Broker            *string `json:"broker"`
+	AccountType       *string `json:"account_type"`
+	InitialBalanceCNY float64 `json:"initial_balance_cny"`
+	InitialBalanceUSD float64 `json:"initial_balance_usd"`
+	InitialBalanceHKD float64 `json:"initial_balance_hkd"`
+}
+
+type assetTypePayload struct {
+	Code  string `json:"code"`
+	Label string `json:"label"`
+}
+
+type allocationPayload struct {
+	Currency   string  `json:"currency"`
+	AssetType  string  `json:"asset_type"`
+	MinPercent float64 `json:"min_percent"`
+	MaxPercent float64 `json:"max_percent"`
+}
+
+type symbolUpdatePayload struct {
+	Name       *string `json:"name"`
+	AssetType  *string `json:"asset_type"`
+	AutoUpdate *int    `json:"auto_update"`
+	Sector     *string `json:"sector"`
+	Exchange   *string `json:"exchange"`
+}
+
+type updateSymbolAssetTypePayload struct {
+	AssetType string `json:"asset_type"`
+}
+
+type updateSymbolAutoUpdatePayload struct {
+	AutoUpdate int `json:"auto_update"`
+}

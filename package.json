@@ -17,6 +17,7 @@
     "afterPack": "scripts/afterPack.js",
     "files": [
       "electron/**",
+      "static/**",
       "package.json"
     ],
     "extraResources": [
