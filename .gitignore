@@ -6,3 +6,4 @@ build/**
 dist/**
 backend-dist/**
 node_modules/**
+go-backend/coverage.out

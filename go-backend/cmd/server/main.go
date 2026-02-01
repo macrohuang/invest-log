@@ -18,6 +18,10 @@ import (
 	"investlog/pkg/investlog"
 )
 
+var getppid = os.Getppid
+var sleep = time.Sleep
+var exit = os.Exit
+
 func main() {
 	var dataDir string
 	var port int
@@ -100,10 +104,10 @@ func main() {
 
 func watchParent(logger *slog.Logger) {
 	for {
-		time.Sleep(1 * time.Second)
-		if os.Getppid() == 1 {
+		sleep(1 * time.Second)
+		if getppid() == 1 {
 			logger.Info("parent process exited; shutting down")
-			os.Exit(0)
+			exit(0)
 		}
 	}
 }
