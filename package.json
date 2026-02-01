@@ -1,0 +1,16 @@
+{
+  "name": "invest-log",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Invest Log",
+  "scripts": {
+    "cap": "cap",
+    "sync:ios": "cap sync ios",
+    "open:ios": "cap open ios"
+  },
+  "dependencies": {
+    "@capacitor/cli": "^8.0.2",
+    "@capacitor/core": "^8.0.2",
+    "@capacitor/ios": "^8.0.2"
+  }
+}

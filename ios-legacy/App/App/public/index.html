@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Invest Log</title>
+  <meta name="theme-color" content="#1d1f1b">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icons/icon-192.png" sizes="192x192">
+  <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@600;700&family=Manrope:wght@300;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="ambient">
+    <span class="orb orb-a"></span>
+    <span class="orb orb-b"></span>
+    <span class="orb orb-c"></span>
+  </div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">◎</span>
+      <div>
+        <div class="brand-title">Invest Log</div>
+        <div class="brand-sub">Local-first portfolio tracker</div>
+      </div>
+    </div>
+    <nav class="nav">
+      <a href="#/overview" data-route="overview">Overview</a>
+      <a href="#/holdings" data-route="holdings">Holdings</a>
+      <a href="#/charts" data-route="charts">Charts</a>
+      <a href="#/transactions" data-route="transactions">Transactions</a>
+      <a href="#/settings" data-route="settings">Settings</a>
+    </nav>
+    <div class="top-actions">
+      <button class="ghost" id="privacy-toggle" type="button">Privacy</button>
+      <a class="primary" href="#/add">New transaction</a>
+      <div class="status-pill" id="connection-pill">Offline</div>
+    </div>
+  </header>
+
+  <main id="view" class="view"></main>
+
+  <div id="toast" class="toast" aria-live="polite"></div>
+
+  <script src="app.js" defer></script>
+</body>
+</html>
