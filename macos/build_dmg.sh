@@ -40,6 +40,7 @@ echo "Copying resources..."
 cp -R "$REPO_DIR/static" "$RESOURCES_DIR/static"
 cp "$BACKEND_BUILD_DIR/invest-log-backend" "$RESOURCES_DIR/invest-log-backend"
 cp "$ROOT_DIR/loading.html" "$RESOURCES_DIR/loading.html"
+cp "$ROOT_DIR/AppIcon.icns" "$RESOURCES_DIR/AppIcon.icns"
 chmod +x "$RESOURCES_DIR/invest-log-backend"
 
 echo "Compiling macOS app..."
@@ -62,6 +63,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<EOF
   <string>${APP_BUNDLE_ID}</string>
   <key>CFBundleExecutable</key>
   <string>${APP_NAME}</string>
+  <key>CFBundleIconFile</key>
+  <string>AppIcon</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
