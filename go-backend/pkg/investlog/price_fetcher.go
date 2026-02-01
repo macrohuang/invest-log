@@ -649,6 +649,9 @@ func (pf *priceFetcher) tencentFetchUSStock(symbol string) (*float64, error) {
 	return nil, nil
 }
 
+// maxResponseSize limits external API responses to 1MB to prevent memory exhaustion
+const maxResponseSize = 1 << 20 // 1MB
+
 func (pf *priceFetcher) httpGet(url string, headers map[string]string) ([]byte, error) {
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
@@ -665,7 +668,8 @@ func (pf *priceFetcher) httpGet(url string, headers map[string]string) ([]byte, 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("http status %d", resp.StatusCode)
 	}
-	return io.ReadAll(resp.Body)
+	// Limit response size to prevent memory exhaustion from malicious/buggy external APIs
+	return io.ReadAll(io.LimitReader(resp.Body, maxResponseSize))
 }
 
 func parseFloat(value any) (float64, error) {

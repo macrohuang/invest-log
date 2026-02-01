@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -17,7 +18,30 @@ func NewRouter(core *investlog.Core) http.Handler {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.RequestID)
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"*"},
+		AllowedOrigins: []string{
+			"http://localhost:*",
+			"http://127.0.0.1:*",
+			"capacitor://localhost",
+			"ionic://localhost",
+			"file://*",
+		},
+		AllowOriginFunc: func(r *http.Request, origin string) bool {
+			// Allow requests with no origin (same-origin, curl, mobile apps)
+			if origin == "" {
+				return true
+			}
+			// Allow localhost and 127.0.0.1 on any port
+			if strings.HasPrefix(origin, "http://localhost:") ||
+				strings.HasPrefix(origin, "http://127.0.0.1:") ||
+				strings.HasPrefix(origin, "https://localhost:") ||
+				strings.HasPrefix(origin, "https://127.0.0.1:") ||
+				origin == "capacitor://localhost" ||
+				origin == "ionic://localhost" ||
+				strings.HasPrefix(origin, "file://") {
+				return true
+			}
+			return false
+		},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
 		AllowCredentials: true,
