@@ -61,26 +61,7 @@ func initDatabase(db *sql.DB) error {
 		return err
 	}
 
-	if err := exec(tx, `
-		CREATE TABLE IF NOT EXISTS transactions (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			transaction_date DATE NOT NULL,
-			transaction_time TIME,
-			symbol_id INTEGER NOT NULL,
-			transaction_type TEXT NOT NULL CHECK(transaction_type IN ('BUY', 'SELL', 'DIVIDEND', 'SPLIT', 'TRANSFER_IN', 'TRANSFER_OUT', 'ADJUST', 'INCOME')),
-			quantity REAL NOT NULL,
-			price REAL NOT NULL,
-			total_amount REAL NOT NULL,
-			commission REAL DEFAULT 0,
-			currency TEXT DEFAULT 'CNY' CHECK(currency IN ('CNY', 'USD', 'HKD')),
-			account_id TEXT NOT NULL,
-			account_name TEXT,
-			notes TEXT,
-			tags TEXT,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			updated_at DATETIME
-		)
-	`); err != nil {
+	if err := createTransactionsTable(tx); err != nil {
 		return err
 	}
 
@@ -99,6 +80,16 @@ func initDatabase(db *sql.DB) error {
 	if !hasTxnSymbolID || hasTxnSymbol || hasTxnAssetType {
 		if err := migrateTransactions(tx, hasTxnSymbol, hasTxnAssetType); err != nil {
 			return err
+		}
+	} else {
+		hasFK, err := transactionsHasForeignKeys(tx)
+		if err != nil {
+			return err
+		}
+		if !hasFK {
+			if err := rebuildTransactionsWithForeignKeys(tx); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -211,6 +202,31 @@ func exec(tx *sql.Tx, query string) error {
 	return err
 }
 
+func createTransactionsTable(tx *sql.Tx) error {
+	return exec(tx, `
+		CREATE TABLE IF NOT EXISTS transactions (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			transaction_date DATE NOT NULL,
+			transaction_time TIME,
+			symbol_id INTEGER NOT NULL,
+			transaction_type TEXT NOT NULL CHECK(transaction_type IN ('BUY', 'SELL', 'DIVIDEND', 'SPLIT', 'TRANSFER_IN', 'TRANSFER_OUT', 'ADJUST', 'INCOME')),
+			quantity REAL NOT NULL,
+			price REAL NOT NULL,
+			total_amount REAL NOT NULL,
+			commission REAL DEFAULT 0,
+			currency TEXT DEFAULT 'CNY' CHECK(currency IN ('CNY', 'USD', 'HKD')),
+			account_id TEXT NOT NULL,
+			account_name TEXT,
+			notes TEXT,
+			tags TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME,
+			FOREIGN KEY(symbol_id) REFERENCES symbols(id) ON UPDATE CASCADE ON DELETE RESTRICT,
+			FOREIGN KEY(account_id) REFERENCES accounts(account_id) ON UPDATE CASCADE ON DELETE RESTRICT
+		)
+	`)
+}
+
 func tableExists(tx *sql.Tx, table string) (bool, error) {
 	var name string
 	err := tx.QueryRow("SELECT name FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&name)
@@ -263,6 +279,154 @@ func allocationSettingsHasAssetTypeCheck(tx *sql.Tx) (bool, error) {
 	}
 	normalized := strings.ToLower(strings.Join(strings.Fields(sqlText.String), ""))
 	return strings.Contains(normalized, "check(asset_type"), nil
+}
+
+func transactionsHasForeignKeys(tx *sql.Tx) (bool, error) {
+	var sqlText sql.NullString
+	if err := tx.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='transactions'").Scan(&sqlText); err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	if !sqlText.Valid {
+		return false, nil
+	}
+	normalized := strings.ToLower(strings.Join(strings.Fields(sqlText.String), ""))
+	hasSymbolFK := strings.Contains(normalized, "foreignkey(symbol_id)referencessymbols")
+	hasAccountFK := strings.Contains(normalized, "foreignkey(account_id)referencesaccounts")
+	return hasSymbolFK && hasAccountFK, nil
+}
+
+func rebuildTransactionsWithForeignKeys(tx *sql.Tx) error {
+	if err := exec(tx, "ALTER TABLE transactions RENAME TO transactions_old"); err != nil {
+		return err
+	}
+	oldHasSymbol, err := tableHasColumn(tx, "transactions_old", "symbol")
+	if err != nil {
+		return err
+	}
+	oldHasAssetType, err := tableHasColumn(tx, "transactions_old", "asset_type")
+	if err != nil {
+		return err
+	}
+	return rebuildTransactionsFromOld(tx, oldHasSymbol, oldHasAssetType)
+}
+
+func rebuildTransactionsFromOld(tx *sql.Tx, oldHasSymbol bool, oldHasAssetType bool) error {
+	if err := ensureAccountsFromTransactions(tx); err != nil {
+		return err
+	}
+
+	if oldHasSymbol {
+		if oldHasAssetType {
+			if err := exec(tx, `
+				INSERT OR IGNORE INTO symbols (symbol, asset_type)
+				SELECT DISTINCT UPPER(symbol), COALESCE(asset_type, 'stock')
+				FROM transactions_old
+			`); err != nil {
+				return err
+			}
+		} else {
+			if err := exec(tx, `
+				INSERT OR IGNORE INTO symbols (symbol, asset_type)
+				SELECT DISTINCT UPPER(symbol), 'stock'
+				FROM transactions_old
+			`); err != nil {
+				return err
+			}
+		}
+	} else {
+		if err := ensureMissingSymbolsForTransactions(tx); err != nil {
+			return err
+		}
+	}
+
+	if err := createTransactionsTable(tx); err != nil {
+		return err
+	}
+
+	if oldHasSymbol {
+		if err := exec(tx, `
+			INSERT INTO transactions (
+				transaction_date, transaction_time, symbol_id, transaction_type,
+				quantity, price, total_amount, commission, currency, account_id,
+				account_name, notes, tags, created_at, updated_at
+			)
+			SELECT
+				t.transaction_date, t.transaction_time, s.id, t.transaction_type,
+				t.quantity, t.price, t.total_amount, t.commission, t.currency, t.account_id,
+				t.account_name, t.notes, t.tags, t.created_at, t.updated_at
+			FROM transactions_old t
+			JOIN symbols s ON s.symbol = UPPER(t.symbol)
+		`); err != nil {
+			return err
+		}
+	} else {
+		if err := exec(tx, `
+			INSERT INTO transactions (
+				transaction_date, transaction_time, symbol_id, transaction_type,
+				quantity, price, total_amount, commission, currency, account_id,
+				account_name, notes, tags, created_at, updated_at
+			)
+			SELECT
+				transaction_date, transaction_time, symbol_id, transaction_type,
+				quantity, price, total_amount, commission, currency, account_id,
+				account_name, notes, tags, created_at, updated_at
+			FROM transactions_old
+		`); err != nil {
+			return err
+		}
+	}
+
+	return exec(tx, "DROP TABLE transactions_old")
+}
+
+func ensureAccountsFromTransactions(tx *sql.Tx) error {
+	if err := exec(tx, `
+		CREATE TABLE IF NOT EXISTS accounts (
+			account_id TEXT PRIMARY KEY,
+			account_name TEXT NOT NULL,
+			broker TEXT,
+			account_type TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)
+	`); err != nil {
+		return err
+	}
+	return exec(tx, `
+		INSERT OR IGNORE INTO accounts (account_id, account_name)
+		SELECT DISTINCT
+			account_id,
+			COALESCE(NULLIF(TRIM(account_name), ''), account_id)
+		FROM transactions_old
+	`)
+}
+
+func ensureMissingSymbolsForTransactions(tx *sql.Tx) error {
+	if err := exec(tx, `
+		CREATE TABLE IF NOT EXISTS symbols (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			symbol TEXT NOT NULL UNIQUE,
+			name TEXT,
+			asset_type TEXT NOT NULL DEFAULT 'stock',
+			sector TEXT,
+			exchange TEXT,
+			auto_update INTEGER DEFAULT 1
+		)
+	`); err != nil {
+		return err
+	}
+	return exec(tx, `
+		INSERT OR IGNORE INTO symbols (id, symbol, asset_type)
+		SELECT DISTINCT
+			t.symbol_id,
+			printf('MISSING_%d', t.symbol_id),
+			'stock'
+		FROM transactions_old t
+		LEFT JOIN symbols s ON s.id = t.symbol_id
+		WHERE s.id IS NULL
+	`)
 }
 
 func rebuildAllocationSettings(tx *sql.Tx) error {
@@ -367,81 +531,5 @@ func migrateTransactions(tx *sql.Tx, oldHasSymbol bool, oldHasAssetType bool) er
 		return err
 	}
 
-	if oldHasSymbol {
-		if oldHasAssetType {
-			if err := exec(tx, `
-				INSERT OR IGNORE INTO symbols (symbol, asset_type)
-				SELECT DISTINCT UPPER(symbol), COALESCE(asset_type, 'stock')
-				FROM transactions_old
-			`); err != nil {
-				return err
-			}
-		} else {
-			if err := exec(tx, `
-				INSERT OR IGNORE INTO symbols (symbol, asset_type)
-				SELECT DISTINCT UPPER(symbol), 'stock'
-				FROM transactions_old
-			`); err != nil {
-				return err
-			}
-		}
-	}
-
-	if err := exec(tx, `
-		CREATE TABLE transactions (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			transaction_date DATE NOT NULL,
-			transaction_time TIME,
-			symbol_id INTEGER NOT NULL,
-			transaction_type TEXT NOT NULL CHECK(transaction_type IN ('BUY', 'SELL', 'DIVIDEND', 'SPLIT', 'TRANSFER_IN', 'TRANSFER_OUT', 'ADJUST', 'INCOME')),
-			quantity REAL NOT NULL,
-			price REAL NOT NULL,
-			total_amount REAL NOT NULL,
-			commission REAL DEFAULT 0,
-			currency TEXT DEFAULT 'CNY' CHECK(currency IN ('CNY', 'USD', 'HKD')),
-			account_id TEXT NOT NULL,
-			account_name TEXT,
-			notes TEXT,
-			tags TEXT,
-			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-			updated_at DATETIME
-		)
-	`); err != nil {
-		return err
-	}
-
-	if oldHasSymbol {
-		if err := exec(tx, `
-			INSERT INTO transactions (
-				transaction_date, transaction_time, symbol_id, transaction_type,
-				quantity, price, total_amount, commission, currency, account_id,
-				account_name, notes, tags, created_at, updated_at
-			)
-			SELECT
-				t.transaction_date, t.transaction_time, s.id, t.transaction_type,
-				t.quantity, t.price, t.total_amount, t.commission, t.currency, t.account_id,
-				t.account_name, t.notes, t.tags, t.created_at, t.updated_at
-			FROM transactions_old t
-			JOIN symbols s ON s.symbol = UPPER(t.symbol)
-		`); err != nil {
-			return err
-		}
-	} else {
-		if err := exec(tx, `
-			INSERT INTO transactions (
-				transaction_date, transaction_time, symbol_id, transaction_type,
-				quantity, price, total_amount, commission, currency, account_id,
-				account_name, notes, tags, created_at, updated_at
-			)
-			SELECT
-				transaction_date, transaction_time, symbol_id, transaction_type,
-				quantity, price, total_amount, commission, currency, account_id,
-				account_name, notes, tags, created_at, updated_at
-			FROM transactions_old
-		`); err != nil {
-			return err
-		}
-	}
-
-	return exec(tx, "DROP TABLE transactions_old")
+	return rebuildTransactionsFromOld(tx, oldHasSymbol, oldHasAssetType)
 }

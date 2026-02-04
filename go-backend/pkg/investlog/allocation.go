@@ -74,6 +74,7 @@ func (c *Core) SetAllocationSetting(currency, assetType string, minPercent, maxP
 	if err := tx.Commit(); err != nil {
 		return false, err
 	}
+	c.invalidateHoldingsCache()
 	return true, nil
 }
 
@@ -88,6 +89,9 @@ func (c *Core) DeleteAllocationSetting(currency, assetType string) (bool, error)
 	rows, err := result.RowsAffected()
 	if err != nil {
 		return false, err
+	}
+	if rows > 0 {
+		c.invalidateHoldingsCache()
 	}
 	return rows > 0, nil
 }

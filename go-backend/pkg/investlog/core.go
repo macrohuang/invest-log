@@ -29,6 +29,7 @@ type Core struct {
 	logger *slog.Logger
 	price  *priceFetcher
 	dbPath string
+	cache  *holdingsCache
 }
 
 // Open initializes a Core using the provided database path.
@@ -60,6 +61,9 @@ func OpenWithOptions(opts Options) (*Core, error) {
 	if _, err := db.Exec("PRAGMA busy_timeout = 5000"); err != nil {
 		logger.Warn("pragma busy_timeout failed", "err", err)
 	}
+	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		logger.Warn("pragma foreign_keys failed", "err", err)
+	}
 
 	if err := initDatabase(db); err != nil {
 		_ = db.Close()
@@ -80,6 +84,7 @@ func OpenWithOptions(opts Options) (*Core, error) {
 		logger: logger,
 		price:  pf,
 		dbPath: cleanPath,
+		cache:  newHoldingsCache(),
 	}, nil
 }
 
@@ -94,6 +99,13 @@ func (c *Core) Close() error {
 // DBPath returns the underlying database path.
 func (c *Core) DBPath() string {
 	return c.dbPath
+}
+
+func (c *Core) invalidateHoldingsCache() {
+	if c == nil || c.cache == nil {
+		return
+	}
+	c.cache.invalidate()
 }
 
 func defaultDuration(v time.Duration, fallback time.Duration) time.Duration {

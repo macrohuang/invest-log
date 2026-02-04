@@ -143,15 +143,21 @@ func TestTransactionsEndpoints(t *testing.T) {
 	}
 
 	// Get transactions
-	rr = doRequest(router, "GET", "/api/transactions", nil)
+	rr = doRequest(router, "GET", "/api/transactions?paged=1", nil)
 	if rr.Code != http.StatusOK {
 		t.Errorf("GET /api/transactions: expected 200, got %d", rr.Code)
 	}
 
-	var transactions []map[string]interface{}
-	json.NewDecoder(rr.Body).Decode(&transactions)
-	if len(transactions) != 1 {
-		t.Errorf("expected 1 transaction, got %d", len(transactions))
+	var payload struct {
+		Items []map[string]interface{} `json:"items"`
+		Total int                      `json:"total"`
+	}
+	json.NewDecoder(rr.Body).Decode(&payload)
+	if len(payload.Items) != 1 {
+		t.Errorf("expected 1 transaction, got %d", len(payload.Items))
+	}
+	if payload.Total != 1 {
+		t.Errorf("expected total=1, got %d", payload.Total)
 	}
 
 	// Delete transaction

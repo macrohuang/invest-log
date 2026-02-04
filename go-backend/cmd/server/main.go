@@ -12,6 +12,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-chi/chi/v5/middleware"
+
 	"investlog/internal/api"
 	"investlog/internal/config"
 	"investlog/internal/logging"
@@ -77,10 +79,15 @@ func main() {
 		logger.Info("serving SPA", "web_dir", resolvedWebDir)
 		handler = api.WithSPA(handler, resolvedWebDir)
 	}
+	handler = middleware.Compress(5)(handler)
 
 	server := &http.Server{
-		Addr:    addr,
-		Handler: handler,
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      120 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	logger.Info("server starting", "addr", addr)

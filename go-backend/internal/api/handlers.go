@@ -65,12 +65,29 @@ func (h *handler) getTransactions(w http.ResponseWriter, r *http.Request) {
 		Limit:           parseIntDefault(query.Get("limit"), 100),
 		Offset:          parseIntDefault(query.Get("offset"), 0),
 	}
+	limit, offset := normalizeLimitOffset(filter.Limit, filter.Offset)
+	filter.Limit = limit
+	filter.Offset = offset
 	result, err := h.core.GetTransactions(filter)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, result)
+	if query.Get("paged") != "1" {
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
+	total, err := h.core.GetTransactionCount(filter)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, transactionsResponse{
+		Items:  result,
+		Total:  total,
+		Limit:  limit,
+		Offset: offset,
+	})
 }
 
 func (h *handler) addTransaction(w http.ResponseWriter, r *http.Request) {
@@ -414,6 +431,23 @@ func parseIntDefault(value string, fallback int) int {
 		return fallback
 	}
 	return i
+}
+
+func normalizeLimitOffset(limit, offset int) (int, int) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return limit, offset
+}
+
+type transactionsResponse struct {
+	Items  []investlog.Transaction `json:"items"`
+	Total  int                     `json:"total"`
+	Limit  int                     `json:"limit"`
+	Offset int                     `json:"offset"`
 }
 
 func ptrString(value string) *string {

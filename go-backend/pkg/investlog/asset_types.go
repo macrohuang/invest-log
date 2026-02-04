@@ -53,6 +53,7 @@ func (c *Core) AddAssetType(code, label string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	c.invalidateHoldingsCache()
 	return true, nil
 }
 
@@ -97,6 +98,7 @@ func (c *Core) DeleteAssetType(code string) (bool, string, error) {
 		return false, "", err
 	}
 	if rows > 0 {
+		c.invalidateHoldingsCache()
 		return true, "Asset type deleted", nil
 	}
 	return false, "Asset type not found", nil

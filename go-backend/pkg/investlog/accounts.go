@@ -3,6 +3,7 @@ package investlog
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // AddAccount inserts a new account.
@@ -18,6 +19,21 @@ func (c *Core) AddAccount(account Account) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+func ensureAccountTx(tx *sql.Tx, accountID string, accountName *string) error {
+	name := ""
+	if accountName != nil {
+		name = strings.TrimSpace(*accountName)
+	}
+	if name == "" {
+		name = accountID
+	}
+	_, err := tx.Exec(`
+		INSERT OR IGNORE INTO accounts (account_id, account_name)
+		VALUES (?, ?)
+	`, accountID, name)
+	return err
 }
 
 // GetAccounts returns all accounts.

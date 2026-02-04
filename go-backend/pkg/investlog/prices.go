@@ -13,7 +13,11 @@ func (c *Core) UpdateLatestPrice(symbol, currency string, price float64) error {
 			price = excluded.price,
 			updated_at = CURRENT_TIMESTAMP
 	`, symbol, currency, price)
-	return err
+	if err != nil {
+		return err
+	}
+	c.invalidateHoldingsCache()
+	return nil
 }
 
 // GetLatestPrice returns the latest price for a symbol.

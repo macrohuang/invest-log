@@ -706,7 +706,15 @@ async function renderTransactions() {
     const filterAccount = (query.get('account') || '').trim();
     const filterStartDate = (query.get('start_date') || '').trim();
     const filterEndDate = (query.get('end_date') || '').trim();
-    const txParams = new URLSearchParams({ limit: '200' });
+    const pageSize = 100;
+    const pageRaw = Number.parseInt(query.get('page') || '1', 10);
+    const page = Number.isNaN(pageRaw) || pageRaw < 1 ? 1 : pageRaw;
+    const offset = (page - 1) * pageSize;
+    const txParams = new URLSearchParams({
+      limit: String(pageSize),
+      offset: String(offset),
+      paged: '1'
+    });
     if (filterSymbol) {
       txParams.set('symbol', filterSymbol);
     }
@@ -719,28 +727,46 @@ async function renderTransactions() {
     if (filterEndDate) {
       txParams.set('end_date', filterEndDate);
     }
-    const [transactions, accounts] = await Promise.all([
+    const [transactionsResponse, accounts] = await Promise.all([
       fetchJSON(`/api/transactions?${txParams.toString()}`),
       fetchJSON('/api/accounts')
     ]);
+    const isLegacyTransactions = Array.isArray(transactionsResponse);
+    const transactions = isLegacyTransactions
+      ? transactionsResponse
+      : (transactionsResponse.items || []);
+    const totalCount = isLegacyTransactions
+      ? transactions.length
+      : Number(transactionsResponse.total ?? transactions.length);
+    const limitUsed = isLegacyTransactions
+      ? pageSize
+      : Number(transactionsResponse.limit ?? pageSize);
+    const offsetUsed = isLegacyTransactions
+      ? offset
+      : Number(transactionsResponse.offset ?? offset);
     const accountNameMap = new Map((accounts || []).map((a) => [a.account_id, a.account_name || a.account_id]));
     const symbolKey = filterSymbol ? filterSymbol.toUpperCase() : '';
-    const filteredTransactions = (transactions || []).filter((t) => {
-      if (symbolKey && String(t.symbol || '').toUpperCase() !== symbolKey) {
-        return false;
-      }
-      if (filterAccount && String(t.account_id || '') !== filterAccount) {
-        return false;
-      }
-      const txnDate = String(t.transaction_date || '');
-      if (filterStartDate && txnDate < filterStartDate) {
-        return false;
-      }
-      if (filterEndDate && txnDate > filterEndDate) {
-        return false;
-      }
-      return true;
-    });
+    const filteredTransactions = isLegacyTransactions
+      ? (transactions || []).filter((t) => {
+          if (symbolKey && String(t.symbol || '').toUpperCase() !== symbolKey) {
+            return false;
+          }
+          if (filterAccount && String(t.account_id || '') !== filterAccount) {
+            return false;
+          }
+          const txnDate = String(t.transaction_date || '');
+          if (filterStartDate && txnDate < filterStartDate) {
+            return false;
+          }
+          if (filterEndDate && txnDate > filterEndDate) {
+            return false;
+          }
+          return true;
+        })
+      : (transactions || []);
+    const effectiveTotal = isLegacyTransactions ? filteredTransactions.length : totalCount;
+    const currentPage = limitUsed > 0 ? Math.floor(offsetUsed / limitUsed) + 1 : 1;
+    const totalPages = limitUsed > 0 ? Math.max(1, Math.ceil(effectiveTotal / limitUsed)) : 1;
     const symbolMeta = new Map();
     (transactions || []).forEach((t) => {
       const symbol = String(t.symbol || '').toUpperCase();
@@ -835,6 +861,16 @@ async function renderTransactions() {
       `
       : '<div class="section-sub">Filter by account, symbol, or date range.</div>';
 
+    const pagination = `
+      <div class="card">
+        <div class="pagination-bar">
+          <button class="btn secondary" data-action="page-prev" ${currentPage <= 1 ? 'disabled' : ''}>Prev</button>
+          <div class="section-sub">Page ${currentPage} / ${totalPages} · Total ${effectiveTotal}</div>
+          <button class="btn secondary" data-action="page-next" ${currentPage >= totalPages ? 'disabled' : ''}>Next</button>
+        </div>
+      </div>
+    `;
+
     view.innerHTML = `
       <div class="section-title">Transactions</div>
       ${filterBar}
@@ -887,6 +923,7 @@ async function renderTransactions() {
           <tbody>${rows || '<tr><td colspan="8">No transactions found.</td></tr>'}</tbody>
         </table>
       </div>
+      ${totalPages > 1 ? pagination : ''}
     `;
 
     const filterForm = view.querySelector('#tx-filter');
@@ -917,6 +954,33 @@ async function renderTransactions() {
     if (clearButton) {
       clearButton.addEventListener('click', () => {
         window.location.hash = '#/transactions';
+      });
+    }
+
+    const buildPageQuery = (nextPage) => {
+      const params = new URLSearchParams();
+      if (filterSymbol) params.set('symbol', filterSymbol);
+      if (filterAccount) params.set('account', filterAccount);
+      if (filterStartDate) params.set('start_date', filterStartDate);
+      if (filterEndDate) params.set('end_date', filterEndDate);
+      if (nextPage > 1) params.set('page', String(nextPage));
+      const queryString = params.toString();
+      window.location.hash = queryString ? `#/transactions?${queryString}` : '#/transactions';
+    };
+
+    const prevButton = view.querySelector('[data-action="page-prev"]');
+    if (prevButton) {
+      prevButton.addEventListener('click', () => {
+        if (currentPage <= 1) return;
+        buildPageQuery(currentPage - 1);
+      });
+    }
+
+    const nextButton = view.querySelector('[data-action="page-next"]');
+    if (nextButton) {
+      nextButton.addEventListener('click', () => {
+        if (currentPage >= totalPages) return;
+        buildPageQuery(currentPage + 1);
       });
     }
 

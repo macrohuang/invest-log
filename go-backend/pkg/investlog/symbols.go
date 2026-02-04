@@ -136,6 +136,9 @@ func (c *Core) UpdateSymbolMetadata(symbol string, name *string, assetType *stri
 	if err != nil {
 		return false, err
 	}
+	if rows > 0 {
+		c.invalidateHoldingsCache()
+	}
 	return rows > 0, nil
 }
 
@@ -176,6 +179,7 @@ func (c *Core) UpdateSymbolAssetType(symbol, assetType string) (bool, string, st
 	if err := tx.Commit(); err != nil {
 		return false, "", "", err
 	}
+	c.invalidateHoldingsCache()
 	return true, current, assetType, nil
 }
 
@@ -186,5 +190,6 @@ func (c *Core) UpdateSymbolAutoUpdate(symbol string, autoUpdate int) (bool, erro
 	if err != nil {
 		return false, err
 	}
+	c.invalidateHoldingsCache()
 	return true, nil
 }

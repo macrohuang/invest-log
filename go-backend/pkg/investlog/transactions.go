@@ -100,6 +100,10 @@ func (c *Core) AddTransaction(req AddTransactionRequest) (int64, error) {
 		_ = tx.Rollback()
 	}()
 
+	if err := ensureAccountTx(tx, req.AccountID, req.AccountName); err != nil {
+		return 0, err
+	}
+
 	symbolID, symbol, _, err := c.ensureSymbol(tx, req.Symbol, &req.AssetType)
 	if err != nil {
 		return 0, err
@@ -145,6 +149,7 @@ func (c *Core) AddTransaction(req AddTransactionRequest) (int64, error) {
 	if err := tx.Commit(); err != nil {
 		return 0, err
 	}
+	c.invalidateHoldingsCache()
 
 	return id, nil
 }
@@ -279,6 +284,14 @@ func (c *Core) GetTransactions(filter TransactionFilter) ([]Transaction, error) 
 		query.WriteString(" AND t.transaction_date <= ?")
 		params = append(params, filter.EndDate)
 	}
+	if filter.StartDate != "" {
+		query.WriteString(" AND t.transaction_date >= ?")
+		params = append(params, filter.StartDate)
+	}
+	if filter.EndDate != "" {
+		query.WriteString(" AND t.transaction_date <= ?")
+		params = append(params, filter.EndDate)
+	}
 
 	query.WriteString(" ORDER BY t.transaction_date DESC, t.id DESC LIMIT ? OFFSET ?")
 	params = append(params, limit, offset)
@@ -375,6 +388,9 @@ func (c *Core) DeleteTransaction(id int64) (bool, error) {
 	affected, err := result.RowsAffected()
 	if err != nil {
 		return false, err
+	}
+	if affected > 0 {
+		c.invalidateHoldingsCache()
 	}
 	return affected > 0, nil
 }

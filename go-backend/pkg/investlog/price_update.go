@@ -2,6 +2,8 @@ package investlog
 
 import (
 	"fmt"
+	"sync"
+	"time"
 )
 
 // UpdatePrice fetches and stores latest price for a symbol.
@@ -54,18 +56,89 @@ func (c *Core) UpdateAllPrices(currency string) (int, []string, error) {
 		return 0, nil, fmt.Errorf("currency not found")
 	}
 
-	updated := 0
-	var errors []string
+	const recentThreshold = 5 * time.Minute
+	jobs := make([]string, 0, len(currencyData.Symbols))
 	for _, s := range currencyData.Symbols {
 		if s.AutoUpdate == 0 {
 			continue
 		}
-		result, err := c.UpdatePrice(s.Symbol, currency)
-		if result.Price != nil {
+		if recentlyUpdated(s.PriceUpdatedAt, recentThreshold) {
+			continue
+		}
+		jobs = append(jobs, s.Symbol)
+	}
+	if len(jobs) == 0 {
+		return 0, nil, nil
+	}
+
+	workerCount := updateWorkerCount(len(jobs))
+	jobsCh := make(chan string)
+	resultsCh := make(chan updateResult, len(jobs))
+	var wg sync.WaitGroup
+
+	for i := 0; i < workerCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for symbol := range jobsCh {
+				result, err := c.UpdatePrice(symbol, currency)
+				resultsCh <- updateResult{
+					symbol:  symbol,
+					message: result.Message,
+					updated: result.Price != nil,
+					err:     err,
+				}
+			}
+		}()
+	}
+
+	go func() {
+		for _, symbol := range jobs {
+			jobsCh <- symbol
+		}
+		close(jobsCh)
+		wg.Wait()
+		close(resultsCh)
+	}()
+
+	updated := 0
+	var errors []string
+	for res := range resultsCh {
+		if res.updated {
 			updated++
-		} else if err != nil {
-			errors = append(errors, fmt.Sprintf("%s: %s", s.Symbol, result.Message))
+			continue
+		}
+		if res.err != nil {
+			errors = append(errors, fmt.Sprintf("%s: %s", res.symbol, res.message))
 		}
 	}
 	return updated, errors, nil
+}
+
+type updateResult struct {
+	symbol  string
+	message string
+	updated bool
+	err     error
+}
+
+func updateWorkerCount(total int) int {
+	if total <= 0 {
+		return 0
+	}
+	if total < 4 {
+		return total
+	}
+	return 4
+}
+
+func recentlyUpdated(updatedAt *string, threshold time.Duration) bool {
+	if updatedAt == nil || *updatedAt == "" {
+		return false
+	}
+	parsed, err := time.Parse("2006-01-02 15:04:05", *updatedAt)
+	if err != nil {
+		return false
+	}
+	return time.Since(parsed) < threshold
 }

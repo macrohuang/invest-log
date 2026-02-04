@@ -9,6 +9,11 @@ import (
 
 // GetHoldings calculates holdings aggregated by symbol, currency, and account.
 func (c *Core) GetHoldings(accountID string) ([]Holding, error) {
+	if accountID == "" && c.cache != nil {
+		if cached, ok := c.cache.getHoldings(); ok {
+			return cached, nil
+		}
+	}
 	query := `
 		SELECT
 			s.symbol AS symbol,
@@ -64,11 +69,22 @@ func (c *Core) GetHoldings(accountID string) ([]Holding, error) {
 		}
 		holdings = append(holdings, h)
 	}
-	return holdings, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if accountID == "" && c.cache != nil {
+		c.cache.setHoldings(holdings)
+	}
+	return holdings, nil
 }
 
 // GetHoldingsBySymbol returns holdings grouped by currency with PnL data.
 func (c *Core) GetHoldingsBySymbol() (HoldingsBySymbolResult, error) {
+	if c.cache != nil {
+		if cached, ok := c.cache.getBySymbol(); ok {
+			return cached, nil
+		}
+	}
 	holdings, err := c.GetHoldings("")
 	if err != nil {
 		return nil, err
@@ -210,11 +226,19 @@ func (c *Core) GetHoldingsBySymbol() (HoldingsBySymbolResult, error) {
 			ByAccount:        byAccount,
 		}
 	}
+	if c.cache != nil {
+		c.cache.setBySymbol(result)
+	}
 	return result, nil
 }
 
 // GetHoldingsByCurrency calculates allocation by asset type within currency.
 func (c *Core) GetHoldingsByCurrency() (HoldingsByCurrencyResult, error) {
+	if c.cache != nil {
+		if cached, ok := c.cache.getByCurrency(); ok {
+			return cached, nil
+		}
+	}
 	holdings, err := c.GetHoldings("")
 	if err != nil {
 		return nil, err
@@ -345,11 +369,19 @@ func (c *Core) GetHoldingsByCurrency() (HoldingsByCurrencyResult, error) {
 		}
 		result[curr] = CurrencyAllocation{Total: data.total, Allocations: allocations}
 	}
+	if c.cache != nil {
+		c.cache.setByCurrency(result)
+	}
 	return result, nil
 }
 
 // GetHoldingsByCurrencyAndAccount returns holdings grouped by currency and account.
 func (c *Core) GetHoldingsByCurrencyAndAccount() (HoldingsByCurrencyAccountResult, error) {
+	if c.cache != nil {
+		if cached, ok := c.cache.getByCurrencyAccount(); ok {
+			return cached, nil
+		}
+	}
 	holdings, err := c.GetHoldings("")
 	if err != nil {
 		return nil, err
@@ -449,6 +481,9 @@ func (c *Core) GetHoldingsByCurrencyAndAccount() (HoldingsByCurrencyAccountResul
 			TotalMarketValue: currencyTotal,
 			Accounts:         accountResults,
 		}
+	}
+	if c.cache != nil {
+		c.cache.setByCurrencyAccount(result)
 	}
 	return result, nil
 }
