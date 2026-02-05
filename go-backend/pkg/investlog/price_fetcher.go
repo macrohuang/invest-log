@@ -157,7 +157,7 @@ func (pf *priceFetcher) buildAttempts(symbolType, symbol, currency, assetType st
 			{"Eastmoney Fund", func() (*float64, error) { return pf.eastmoneyFetchFund(symbol) }},
 			{"Yahoo Finance", func() (*float64, error) { return pf.yahooFetchStock(symbol, currency) }},
 		}
-	case "fund":
+	case "fund", "etf":
 		return []fetchAttempt{
 			{"Eastmoney Fund GZ", func() (*float64, error) { return pf.eastmoneyFetchFund(symbol) }},
 			{"Eastmoney Fund PZ", func() (*float64, error) { return pf.eastmoneyFetchFundPingzhong(symbol) }},
@@ -263,11 +263,9 @@ func detectSymbolType(symbol, currency, assetType string) string {
 		return false
 	}
 	isETFOrLOF := func(code string) bool {
-		// Priority: If CNY and assetType is ETF or Metal, trust the asset type
-		if currency == "CNY" {
-			if assetType == "etf" {
-				return true
-			}
+		// If assetType says etf/fund, trust it for CNY symbols.
+		if currency == "CNY" && (assetType == "etf" || assetType == "fund") {
+			return true
 		}
 		// ETF/LOF prefixes: Shanghai (510,513,588,501,502) and Shenzhen (159,160,161,162,163,164,165,166)
 		prefixes := []string{"510", "513", "588", "501", "502", "159", "160", "161", "162", "163", "164", "165", "166"}
@@ -284,14 +282,12 @@ func detectSymbolType(symbol, currency, assetType string) string {
 	}
 	if currency == "CNY" && regexp.MustCompile(`^\d{6}$`).MatchString(symbol) {
 		if isETFOrLOF(symbol) {
-			return "fund"
+			return "etf"
 		}
-
 		if isAShareStock(symbol) {
 			return "a_share"
 		}
-
-		return "fund"
+		return "etf"
 	}
 	if currency == "HKD" || regexp.MustCompile(`^0\d{4}$`).MatchString(symbol) {
 		return "hk_stock"

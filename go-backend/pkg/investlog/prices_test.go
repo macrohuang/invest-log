@@ -133,11 +133,11 @@ func TestDetectSymbolType(t *testing.T) {
 		{"SH600000", "CNY", "a_share"},
 		{"SZ000001", "CNY", "a_share"},
 
-		// ETFs (now correctly classified as fund type)
+		// ETFs
 		{"510300", "CNY", "etf"},
 		{"159915", "CNY", "etf"},
 
-		// Funds (6-digit CNY that don't match stock patterns)
+		// Funds (6-digit CNY that don't match stock patterns, treated as etf)
 		{"110011", "CNY", "etf"},
 		{"000001", "CNY", "a_share"}, // This is actually a stock code
 

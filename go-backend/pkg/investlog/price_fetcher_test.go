@@ -81,6 +81,7 @@ func TestBuildAttemptsInvoke(t *testing.T) {
 	}{
 		{"a_share", "600000", "CNY"},
 		{"fund", "110001", "CNY"},
+		{"etf", "510300", "CNY"},
 		{"hk_stock", "00001", "HKD"},
 		{"us_stock", "AAPL", "USD"},
 		{"gold", "AU9999", "CNY"},
@@ -175,7 +176,7 @@ func TestBuildAttemptsAndDetectSymbolType(t *testing.T) {
 	}{
 		{"SH600000", "CNY", "a_share"},
 		{"600000", "CNY", "a_share"},
-		{"110001", "CNY", "fund"},
+		{"110001", "CNY", "etf"},
 		{"00001", "HKD", "hk_stock"},
 		{"AAPL", "USD", "us_stock"},
 		{"AU9999", "CNY", "gold"},
