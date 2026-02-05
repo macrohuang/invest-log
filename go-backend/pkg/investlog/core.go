@@ -16,6 +16,9 @@ import (
 type Options struct {
 	DBPath             string
 	Logger             *slog.Logger
+	MaxOpenConns       int           // Maximum number of open connections to the database
+	MaxIdleConns       int           // Maximum number of idle connections in the pool
+	ConnMaxLifetime    time.Duration // Maximum lifetime of a connection
 	PriceCacheTTL      time.Duration
 	PriceFailThreshold int
 	PriceFailWindow    time.Duration
@@ -33,6 +36,7 @@ type Core struct {
 }
 
 // Open initializes a Core using the provided database path.
+// For new code, prefer OpenWithOptions which provides more configuration options.
 func Open(dbPath string) (*Core, error) {
 	return OpenWithOptions(Options{DBPath: dbPath})
 }
@@ -55,9 +59,13 @@ func OpenWithOptions(opts Options) (*Core, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
-	// SQLite performs best with a single writer.
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
+	// Configure connection pool. For SQLite, we typically use single connection
+	// but allow configuration for flexibility.
+	db.SetMaxOpenConns(defaultInt(opts.MaxOpenConns, 1))
+	db.SetMaxIdleConns(defaultInt(opts.MaxIdleConns, 1))
+	if opts.ConnMaxLifetime > 0 {
+		db.SetConnMaxLifetime(opts.ConnMaxLifetime)
+	}
 	if _, err := db.Exec("PRAGMA busy_timeout = 5000"); err != nil {
 		logger.Warn("pragma busy_timeout failed", "err", err)
 	}

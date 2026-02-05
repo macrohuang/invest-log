@@ -15,6 +15,18 @@ import (
 	"time"
 )
 
+// Price conversion constants.
+const (
+	// priceScaleThreshold is the threshold above which prices are scaled down.
+	// Some data sources return prices in cents/fen, requiring division by 100.
+	priceScaleThreshold = 1000.0
+	priceScaleFactor    = 100.0
+
+	// Gold price conversion constants.
+	ouncesToGrams = 31.1035 // Troy ounces to grams
+	usdToCnyRate  = 7.2     // Approximate USD to CNY exchange rate (should be from config/API)
+)
+
 type priceFetcherOptions struct {
 	Logger        *slog.Logger
 	CacheTTL      time.Duration
@@ -341,8 +353,8 @@ func (pf *priceFetcher) eastmoneyFetchAShare(symbol string) (*float64, error) {
 	if err != nil {
 		return nil, err
 	}
-	if price > 1000 {
-		price = price / 100
+	if price > priceScaleThreshold {
+		price = price / priceScaleFactor
 	}
 	return &price, nil
 }
@@ -536,8 +548,8 @@ func (pf *priceFetcher) yahooFetchGold() (*float64, error) {
 	if pricePerOz <= 0 {
 		return nil, nil
 	}
-	// Convert to CNY per gram using a stable approximate rate.
-	converted := pricePerOz / 31.1035 * 7.2
+	// Convert to CNY per gram using configured rates.
+	converted := pricePerOz / ouncesToGrams * usdToCnyRate
 	converted = math.Round(converted*100) / 100
 	return &converted, nil
 }
@@ -678,7 +690,7 @@ func (pf *priceFetcher) tencentFetchUSStock(symbol string) (*float64, error) {
 	return nil, nil
 }
 
-// maxResponseSize limits external API responses to 1MB to prevent memory exhaustion
+// maxResponseSize limits external API responses to 1MB to prevent memory exhaustion.
 const maxResponseSize = 1 << 20 // 1MB
 
 func (pf *priceFetcher) httpGet(url string, headers map[string]string) ([]byte, error) {
