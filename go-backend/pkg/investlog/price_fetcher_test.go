@@ -86,7 +86,7 @@ func TestBuildAttemptsInvoke(t *testing.T) {
 		{"gold", "AU9999", "CNY"},
 	}
 	for _, c := range cases {
-		attempts := pf.buildAttempts(c.symbolType, c.symbol, c.currency)
+		attempts := pf.buildAttempts(c.symbolType, c.symbol, c.currency, "")
 		for _, attempt := range attempts {
 			_, _ = attempt.fn()
 		}
@@ -149,22 +149,22 @@ func TestPriceFetcherFetchSuccessAndCooldown(t *testing.T) {
 
 func TestBuildAttemptsAndDetectSymbolType(t *testing.T) {
 	pf := newPriceFetcher(priceFetcherOptions{})
-	if attempts := pf.buildAttempts("a_share", "600000", "CNY"); len(attempts) == 0 {
+	if attempts := pf.buildAttempts("a_share", "600000", "CNY", ""); len(attempts) == 0 {
 		t.Fatalf("expected attempts for a_share")
 	}
-	if attempts := pf.buildAttempts("fund", "110001", "CNY"); len(attempts) == 0 {
+	if attempts := pf.buildAttempts("fund", "110001", "CNY", ""); len(attempts) == 0 {
 		t.Fatalf("expected attempts for fund")
 	}
-	if attempts := pf.buildAttempts("hk_stock", "00001", "HKD"); len(attempts) == 0 {
+	if attempts := pf.buildAttempts("hk_stock", "00001", "HKD", ""); len(attempts) == 0 {
 		t.Fatalf("expected attempts for hk_stock")
 	}
-	if attempts := pf.buildAttempts("us_stock", "AAPL", "USD"); len(attempts) == 0 {
+	if attempts := pf.buildAttempts("us_stock", "AAPL", "USD", ""); len(attempts) == 0 {
 		t.Fatalf("expected attempts for us_stock")
 	}
-	if attempts := pf.buildAttempts("gold", "AU9999", "CNY"); len(attempts) == 0 {
+	if attempts := pf.buildAttempts("gold", "AU9999", "CNY", ""); len(attempts) == 0 {
 		t.Fatalf("expected attempts for gold")
 	}
-	if attempts := pf.buildAttempts("unknown", "AAPL", "USD"); attempts != nil {
+	if attempts := pf.buildAttempts("unknown", "AAPL", "USD", ""); attempts != nil {
 		t.Fatalf("expected nil attempts for unknown")
 	}
 
@@ -184,7 +184,7 @@ func TestBuildAttemptsAndDetectSymbolType(t *testing.T) {
 		{"???", "", "unknown"},
 	}
 	for _, c := range cases {
-		if got := detectSymbolType(c.symbol, c.currency); got != c.want {
+		if got := detectSymbolType(c.symbol, c.currency, ""); got != c.want {
 			t.Fatalf("detectSymbolType(%s,%s)=%s want %s", c.symbol, c.currency, got, c.want)
 		}
 	}

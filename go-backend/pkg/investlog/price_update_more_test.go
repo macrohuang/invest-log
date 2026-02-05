@@ -6,7 +6,7 @@ func TestUpdatePriceAndUpdateAllPrices(t *testing.T) {
 	core, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	result, err := core.UpdatePrice("CASH", "USD")
+	result, err := core.UpdatePrice("CASH", "USD", "cash")
 	if err != nil {
 		t.Fatalf("UpdatePrice: %v", err)
 	}

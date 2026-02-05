@@ -133,12 +133,12 @@ func TestDetectSymbolType(t *testing.T) {
 		{"SH600000", "CNY", "a_share"},
 		{"SZ000001", "CNY", "a_share"},
 
-		// ETFs
-		{"510300", "CNY", "a_share"},
-		{"159915", "CNY", "a_share"},
+		// ETFs (now correctly classified as fund type)
+		{"510300", "CNY", "etf"},
+		{"159915", "CNY", "etf"},
 
 		// Funds (6-digit CNY that don't match stock patterns)
-		{"110011", "CNY", "fund"},
+		{"110011", "CNY", "etf"},
 		{"000001", "CNY", "a_share"}, // This is actually a stock code
 
 		// HK stocks
@@ -164,7 +164,7 @@ func TestDetectSymbolType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.symbol+"_"+tt.currency, func(t *testing.T) {
-			result := detectSymbolType(tt.symbol, tt.currency)
+			result := detectSymbolType(tt.symbol, tt.currency, "")
 			if result != tt.expected {
 				t.Errorf("detectSymbolType(%s, %s) = %s, want %s",
 					tt.symbol, tt.currency, result, tt.expected)
@@ -180,13 +180,13 @@ func TestBuildYahooSymbol(t *testing.T) {
 		expected string
 	}{
 		// CNY stocks
-		{"600000", "CNY", "600000.SS"},    // Shanghai
-		{"000001", "CNY", "000001.SZ"},    // Shenzhen
-		{"SH600000", "CNY", "600000.SS"},  // With prefix
+		{"600000", "CNY", "600000.SS"},   // Shanghai
+		{"000001", "CNY", "000001.SZ"},   // Shenzhen
+		{"SH600000", "CNY", "600000.SS"}, // With prefix
 
 		// HK stocks (pads to 4 digits minimum)
-		{"00700", "HKD", "00700.HK"},      // Already 5 digits
-		{"9988", "HKD", "9988.HK"},        // 4 digits, no padding needed
+		{"00700", "HKD", "00700.HK"}, // Already 5 digits
+		{"9988", "HKD", "9988.HK"},   // 4 digits, no padding needed
 
 		// US stocks
 		{"AAPL", "USD", "AAPL"},
@@ -253,6 +253,39 @@ func TestPriceFetcher_CacheKey(t *testing.T) {
 	}
 }
 
+func TestBuildAttempts_ASharePreference(t *testing.T) {
+	pf := newPriceFetcher(priceFetcherOptions{})
+	tests := []struct {
+		name            string
+		assetType       string
+		expectFundFirst bool
+	}{
+		{"stock prefers stock", "stock", false},
+		{"etf prefers fund", "etf", true},
+		{"bond prefers fund", "bond", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			attempts := pf.buildAttempts("a_share", "510300", "CNY", tt.assetType)
+			if len(attempts) == 0 {
+				t.Fatalf("expected attempts for a_share")
+			}
+			fundIdx := indexAttempt(attempts, "Eastmoney Fund")
+			stockIdx := indexAttempt(attempts, "Eastmoney")
+			if fundIdx == -1 || stockIdx == -1 {
+				t.Fatalf("expected Eastmoney Fund and Eastmoney attempts, got fund=%d stock=%d", fundIdx, stockIdx)
+			}
+			if tt.expectFundFirst && fundIdx > stockIdx {
+				t.Errorf("expected fund before stock for assetType %s", tt.assetType)
+			}
+			if !tt.expectFundFirst && stockIdx > fundIdx {
+				t.Errorf("expected stock before fund for assetType %s", tt.assetType)
+			}
+		})
+	}
+}
+
 func TestParseFloat(t *testing.T) {
 	tests := []struct {
 		input    interface{}
@@ -284,4 +317,13 @@ func TestParseFloat(t *testing.T) {
 			}
 		}
 	}
+}
+
+func indexAttempt(attempts []fetchAttempt, name string) int {
+	for i, attempt := range attempts {
+		if attempt.name == name {
+			return i
+		}
+	}
+	return -1
 }

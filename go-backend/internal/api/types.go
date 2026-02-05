@@ -19,8 +19,9 @@ type addTransactionPayload struct {
 }
 
 type pricePayload struct {
-	Symbol   string `json:"symbol"`
-	Currency string `json:"currency"`
+	Symbol    string `json:"symbol"`
+	Currency  string `json:"currency"`
+	AssetType string `json:"asset_type"`
 }
 
 type manualPricePayload struct {

@@ -512,7 +512,7 @@ async function renderHoldings() {
             <td class="num">${pnlMarkup}</td>
             <td>
               <div class="actions">
-                <button class="btn secondary" data-action="update" data-symbol="${escapeHtml(s.symbol)}" data-currency="${currency}" ${updateDisabled}>Update</button>
+                <button class="btn secondary" data-action="update" data-symbol="${escapeHtml(s.symbol)}" data-currency="${currency}" data-asset-type="${escapeHtml(s.asset_type || '')}" ${updateDisabled}>Update</button>
                 <button class="btn" data-action="manual" data-symbol="${escapeHtml(s.symbol)}" data-currency="${currency}">Manual</button>
                 ${autoTag}
               </div>
@@ -655,6 +655,7 @@ function bindHoldingsActions() {
       const action = btn.dataset.action;
       const symbol = btn.dataset.symbol;
       const currency = btn.dataset.currency;
+      const assetType = btn.dataset.assetType || '';
       try {
         if (action === 'update-all') {
           await fetchJSON('/api/prices/update-all', {
@@ -666,7 +667,7 @@ function bindHoldingsActions() {
         if (action === 'update') {
           await fetchJSON('/api/prices/update', {
             method: 'POST',
-            body: JSON.stringify({ symbol, currency }),
+            body: JSON.stringify({ symbol, currency, asset_type: assetType }),
           });
           showToast(`${symbol} updated`);
         }

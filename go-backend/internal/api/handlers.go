@@ -155,7 +155,7 @@ func (h *handler) updatePrice(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	result, err := h.core.UpdatePrice(payload.Symbol, payload.Currency)
+	result, err := h.core.UpdatePrice(payload.Symbol, payload.Currency, payload.AssetType)
 	if err != nil && result.Price == nil {
 		writeError(w, http.StatusBadRequest, result.Message)
 		return

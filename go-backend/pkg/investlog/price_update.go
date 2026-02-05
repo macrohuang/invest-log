@@ -7,8 +7,8 @@ import (
 )
 
 // UpdatePrice fetches and stores latest price for a symbol.
-func (c *Core) UpdatePrice(symbol, currency string) (PriceResult, error) {
-	result, err := c.FetchPrice(symbol, currency, "stock")
+func (c *Core) UpdatePrice(symbol, currency, assetType string) (PriceResult, error) {
+	result, err := c.FetchPrice(symbol, currency, assetType)
 	if result.Price != nil {
 		_ = c.UpdateLatestPrice(symbol, currency, *result.Price)
 		_, _ = c.AddOperationLog(OperationLog{
@@ -57,7 +57,11 @@ func (c *Core) UpdateAllPrices(currency string) (int, []string, error) {
 	}
 
 	const recentThreshold = 5 * time.Minute
-	jobs := make([]string, 0, len(currencyData.Symbols))
+	type symbolJob struct {
+		symbol    string
+		assetType string
+	}
+	jobs := make([]symbolJob, 0, len(currencyData.Symbols))
 	for _, s := range currencyData.Symbols {
 		if s.AutoUpdate == 0 {
 			continue
@@ -65,14 +69,14 @@ func (c *Core) UpdateAllPrices(currency string) (int, []string, error) {
 		if recentlyUpdated(s.PriceUpdatedAt, recentThreshold) {
 			continue
 		}
-		jobs = append(jobs, s.Symbol)
+		jobs = append(jobs, symbolJob{symbol: s.Symbol, assetType: s.AssetType})
 	}
 	if len(jobs) == 0 {
 		return 0, nil, nil
 	}
 
 	workerCount := updateWorkerCount(len(jobs))
-	jobsCh := make(chan string)
+	jobsCh := make(chan symbolJob)
 	resultsCh := make(chan updateResult, len(jobs))
 	var wg sync.WaitGroup
 
@@ -80,10 +84,10 @@ func (c *Core) UpdateAllPrices(currency string) (int, []string, error) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for symbol := range jobsCh {
-				result, err := c.UpdatePrice(symbol, currency)
+			for job := range jobsCh {
+				result, err := c.UpdatePrice(job.symbol, currency, job.assetType)
 				resultsCh <- updateResult{
-					symbol:  symbol,
+					symbol:  job.symbol,
 					message: result.Message,
 					updated: result.Price != nil,
 					err:     err,
@@ -93,8 +97,8 @@ func (c *Core) UpdateAllPrices(currency string) (int, []string, error) {
 	}
 
 	go func() {
-		for _, symbol := range jobs {
-			jobsCh <- symbol
+		for _, job := range jobs {
+			jobsCh <- job
 		}
 		close(jobsCh)
 		wg.Wait()

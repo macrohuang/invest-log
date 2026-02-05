@@ -89,8 +89,8 @@ func (pf *priceFetcher) fetch(symbol, currency, assetType string) (*float64, str
 		return &cachedPrice, msg, nil
 	}
 
-	symbolType := detectSymbolType(symbol, currency)
-	pf.logger.Info("fetching price", "symbol", symbol, "currency", currency, "type", symbolType)
+	symbolType := detectSymbolType(symbol, currency, assetType)
+	pf.logger.Info("fetching price", "symbol", symbol, "currency", currency, "assetType", assetType, "type", symbolType)
 
 	if symbolType == "bond" {
 		return nil, "债券价格暂不支持自动获取", errors.New("bond price not supported")
@@ -103,7 +103,7 @@ func (pf *priceFetcher) fetch(symbol, currency, assetType string) (*float64, str
 		return nil, fmt.Sprintf("无法识别标的类型: %s", symbol), errors.New("unknown symbol type")
 	}
 
-	attempts := pf.buildAttempts(symbolType, symbol, currency)
+	attempts := pf.buildAttempts(symbolType, symbol, currency, assetType)
 	var errorsList []string
 	for _, attempt := range attempts {
 		service := attempt.name
@@ -138,9 +138,18 @@ type fetchAttempt struct {
 	fn   func() (*float64, error)
 }
 
-func (pf *priceFetcher) buildAttempts(symbolType, symbol, currency string) []fetchAttempt {
+func (pf *priceFetcher) buildAttempts(symbolType, symbol, currency, assetType string) []fetchAttempt {
 	switch symbolType {
 	case "a_share":
+		if preferFundFirstForAShare(assetType) {
+			return []fetchAttempt{
+				{"Eastmoney Fund", func() (*float64, error) { return pf.eastmoneyFetchFund(symbol) }},
+				{"Eastmoney", func() (*float64, error) { return pf.eastmoneyFetchAShare(symbol) }},
+				{"Tencent Finance", func() (*float64, error) { return pf.tencentFetchAShare(symbol) }},
+				{"Sina Finance", func() (*float64, error) { return pf.sinaFetchAShare(symbol) }},
+				{"Yahoo Finance", func() (*float64, error) { return pf.yahooFetchStock(symbol, currency) }},
+			}
+		}
 		return []fetchAttempt{
 			{"Eastmoney", func() (*float64, error) { return pf.eastmoneyFetchAShare(symbol) }},
 			{"Tencent Finance", func() (*float64, error) { return pf.tencentFetchAShare(symbol) }},
@@ -172,6 +181,11 @@ func (pf *priceFetcher) buildAttempts(symbolType, symbol, currency string) []fet
 	default:
 		return nil
 	}
+}
+
+func preferFundFirstForAShare(assetType string) bool {
+	assetType = strings.ToLower(strings.TrimSpace(assetType))
+	return assetType != "" && assetType != "stock"
 }
 
 func (pf *priceFetcher) getCached(symbol, currency, assetType string) (float64, string, bool) {
@@ -234,9 +248,10 @@ func (pf *priceFetcher) recordServiceSuccess(service string) {
 	delete(pf.serviceState, service)
 }
 
-func detectSymbolType(symbol, currency string) string {
+func detectSymbolType(symbol, currency, assetType string) string {
 	symbol = normalizeSymbol(symbol)
 	currency = normalizeCurrency(currency)
+	assetType = strings.ToLower(strings.TrimSpace(assetType))
 
 	isAShareStock := func(code string) bool {
 		prefixes := []string{"000", "001", "002", "003", "300", "301", "600", "601", "603", "605", "688", "689"}
@@ -248,16 +263,34 @@ func detectSymbolType(symbol, currency string) string {
 		return false
 	}
 	isETFOrLOF := func(code string) bool {
-		return strings.HasPrefix(code, "5") || strings.HasPrefix(code, "15") || strings.HasPrefix(code, "16")
+		// Priority: If CNY and assetType is ETF or Metal, trust the asset type
+		if currency == "CNY" {
+			if assetType == "etf" {
+				return true
+			}
+		}
+		// ETF/LOF prefixes: Shanghai (510,513,588,501,502) and Shenzhen (159,160,161,162,163,164,165,166)
+		prefixes := []string{"510", "513", "588", "501", "502", "159", "160", "161", "162", "163", "164", "165", "166"}
+		for _, p := range prefixes {
+			if strings.HasPrefix(code, p) {
+				return true
+			}
+		}
+		return false
 	}
 
 	if strings.HasPrefix(symbol, "SH") || strings.HasPrefix(symbol, "SZ") {
 		return "a_share"
 	}
 	if currency == "CNY" && regexp.MustCompile(`^\d{6}$`).MatchString(symbol) {
-		if isAShareStock(symbol) || isETFOrLOF(symbol) {
+		if isETFOrLOF(symbol) {
+			return "fund"
+		}
+
+		if isAShareStock(symbol) {
 			return "a_share"
 		}
+
 		return "fund"
 	}
 	if currency == "HKD" || regexp.MustCompile(`^0\d{4}$`).MatchString(symbol) {

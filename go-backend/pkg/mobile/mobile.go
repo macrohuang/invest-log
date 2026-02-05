@@ -123,7 +123,7 @@ func (c *Core) UpdatePriceJSON(payloadJSON string) (string, error) {
 	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil {
 		return "", err
 	}
-	result, err := c.core.UpdatePrice(payload.Symbol, payload.Currency)
+	result, err := c.core.UpdatePrice(payload.Symbol, payload.Currency, payload.AssetType)
 	if err != nil && result.Price == nil {
 		return "", fmt.Errorf(result.Message)
 	}
@@ -174,6 +174,7 @@ type transactionPayload struct {
 }
 
 type pricePayload struct {
-	Symbol   string `json:"symbol"`
-	Currency string `json:"currency"`
+	Symbol    string `json:"symbol"`
+	Currency  string `json:"currency"`
+	AssetType string `json:"asset_type"`
 }
