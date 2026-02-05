@@ -1396,20 +1396,82 @@ async function renderAddTransaction() {
   }
 }
 
+async function fetchAllTransactionsForExport() {
+  const pageSize = 500;
+  let offset = 0;
+  let total = 0;
+  const items = [];
+
+  while (true) {
+    const page = await fetchJSON(`/api/transactions?paged=1&limit=${pageSize}&offset=${offset}`);
+    const batch = Array.isArray(page.items) ? page.items : [];
+    total = Number(page.total || total);
+    items.push(...batch);
+    offset += batch.length;
+    if (total > 0) {
+      if (offset >= total) {
+        break;
+      }
+    } else if (batch.length < pageSize) {
+      break;
+    }
+  }
+
+  return items;
+}
+
+async function exportBackupData() {
+  const [accounts, assetTypes, allocationSettings, symbols, storageInfo, transactions] = await Promise.all([
+    fetchJSON('/api/accounts'),
+    fetchJSON('/api/asset-types'),
+    fetchJSON('/api/allocation-settings'),
+    fetchJSON('/api/symbols'),
+    fetchJSON('/api/storage'),
+    fetchAllTransactionsForExport(),
+  ]);
+
+  const payload = {
+    exported_at: new Date().toISOString(),
+    storage: {
+      db_name: storageInfo && storageInfo.db_name ? storageInfo.db_name : '',
+      data_dir: storageInfo && storageInfo.data_dir ? storageInfo.data_dir : '',
+    },
+    data: {
+      accounts,
+      asset_types: assetTypes,
+      allocation_settings: allocationSettings,
+      symbols,
+      transactions,
+    },
+  };
+
+  const stamp = new Date().toISOString().slice(0, 10);
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `invest-log-backup-${stamp}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
 async function renderSettings() {
   view.innerHTML = `
     <div class="section-title">Settings</div>
-    <div class="section-sub">Accounts, asset types, allocation ranges, and API connection.</div>
+    <div class="section-sub">Accounts, asset types, allocation ranges, storage, and API connection.</div>
     <div class="card">Loading settings...</div>
   `;
 
   try {
-    const [accounts, assetTypes, allocationSettings, symbols, holdings] = await Promise.all([
+    const [accounts, assetTypes, allocationSettings, symbols, holdings, storageInfo] = await Promise.all([
       fetchJSON('/api/accounts'),
       fetchJSON('/api/asset-types'),
       fetchJSON('/api/allocation-settings'),
       fetchJSON('/api/symbols'),
-      fetchJSON('/api/holdings')
+      fetchJSON('/api/holdings'),
+      fetchJSON('/api/storage')
     ]);
 
     const settingsMap = {};
@@ -1604,6 +1666,74 @@ async function renderSettings() {
       </div>
     `;
 
+    const storage = storageInfo || {};
+    const availableFiles = Array.isArray(storage.available) ? [...storage.available] : [];
+    const currentDBName = storage.db_name || '';
+    if (currentDBName && !availableFiles.includes(currentDBName)) {
+      availableFiles.unshift(currentDBName);
+    }
+    const canSwitch = storage.can_switch !== false;
+    const switchDisabled = canSwitch ? '' : 'disabled';
+    const switchNote = canSwitch
+      ? ''
+      : `<div class="section-sub">${escapeHtml(storage.switch_reason || 'Storage switching disabled.')}</div>`;
+    const storageOptions = availableFiles.length
+      ? availableFiles.map((name) => {
+        const selected = name === currentDBName ? 'selected' : '';
+        return `<option value="${escapeHtml(name)}" ${selected}>${escapeHtml(name)}</option>`;
+      }).join('')
+      : '<option value="">No storage files</option>';
+
+    const storageSection = `
+      <div class="card">
+        <h3>Storage</h3>
+        <div class="section-sub">Switch data files for different users.</div>
+        <div class="form">
+          <div class="form-row">
+            <div class="field">
+              <label>Current File</label>
+              <input type="text" value="${escapeHtml(currentDBName || 'Unknown')}" disabled>
+            </div>
+            <div class="field">
+              <label>Data Directory</label>
+              <input type="text" value="${escapeHtml(storage.data_dir || 'Unknown')}" disabled>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="field">
+              <label>Existing Files</label>
+              <select id="storage-select" ${switchDisabled}>
+                ${storageOptions}
+              </select>
+            </div>
+            <div class="actions">
+              <button class="btn" id="storage-switch" type="button" ${switchDisabled}>Switch</button>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="field">
+              <label>New File</label>
+              <input id="storage-new" placeholder="alice.db" ${switchDisabled}>
+            </div>
+            <div class="actions">
+              <button class="btn secondary" id="storage-create" type="button" ${switchDisabled}>Create & Switch</button>
+            </div>
+          </div>
+          ${switchNote}
+        </div>
+      </div>
+    `;
+
+    const backupSection = `
+      <div class="card">
+        <h3>Backup</h3>
+        <div class="section-sub">Export all data as a JSON file for local backup.</div>
+        <div class="actions">
+          <button class="btn" id="export-data" type="button">Export data</button>
+        </div>
+      </div>
+    `;
+
     const settingsTabs = [
       {
         key: 'accounts',
@@ -1626,6 +1756,11 @@ async function renderSettings() {
         content: `<div class="grid two">${symbolsSection}</div>`,
       },
       {
+        key: 'storage',
+        label: 'Storage',
+        content: `<div class="grid two">${storageSection}${backupSection}</div>`,
+      },
+      {
         key: 'api',
         label: 'API',
         content: `<div class="grid two">${apiSection}</div>`,
@@ -1644,7 +1779,7 @@ async function renderSettings() {
 
     view.innerHTML = `
       <div class="section-title">Settings</div>
-      <div class="section-sub">Accounts, asset types, allocation ranges, and API connection.</div>
+      <div class="section-sub">Accounts, asset types, allocation ranges, storage, and API connection.</div>
       <div class="tab-bar" role="tablist">${tabButtons}</div>
       ${panels}
     `;
@@ -1701,6 +1836,68 @@ function bindSettingsActions() {
       }
       updateConnectionStatus();
       showToast('API base saved');
+    });
+  }
+
+  const storageSwitch = document.getElementById('storage-switch');
+  if (storageSwitch) {
+    storageSwitch.addEventListener('click', async () => {
+      if (storageSwitch.disabled) return;
+      const select = document.getElementById('storage-select');
+      if (!select || !select.value) {
+        showToast('Select a storage file');
+        return;
+      }
+      try {
+        await fetchJSON('/api/storage/switch', {
+          method: 'POST',
+          body: JSON.stringify({ db_name: select.value }),
+        });
+        showToast('Storage switched');
+        renderSettings();
+      } catch (err) {
+        showToast('Switch failed');
+      }
+    });
+  }
+
+  const storageCreate = document.getElementById('storage-create');
+  if (storageCreate) {
+    storageCreate.addEventListener('click', async () => {
+      if (storageCreate.disabled) return;
+      const input = document.getElementById('storage-new');
+      const value = input ? input.value.trim() : '';
+      if (!value) {
+        showToast('Enter a new file name');
+        return;
+      }
+      try {
+        await fetchJSON('/api/storage/switch', {
+          method: 'POST',
+          body: JSON.stringify({ db_name: value, create: true }),
+        });
+        if (input) {
+          input.value = '';
+        }
+        showToast('Storage switched');
+        renderSettings();
+      } catch (err) {
+        showToast('Create failed');
+      }
+    });
+  }
+
+  const exportBtn = document.getElementById('export-data');
+  if (exportBtn) {
+    exportBtn.addEventListener('click', async () => {
+      if (exportBtn.disabled) return;
+      try {
+        showToast('Preparing export...');
+        await exportBackupData();
+        showToast('Export ready');
+      } catch (err) {
+        showToast('Export failed');
+      }
     });
   }
 

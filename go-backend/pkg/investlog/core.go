@@ -109,6 +109,14 @@ func (c *Core) DBPath() string {
 	return c.dbPath
 }
 
+// Logger returns the Core logger, falling back to the default logger.
+func (c *Core) Logger() *slog.Logger {
+	if c == nil || c.logger == nil {
+		return slog.Default()
+	}
+	return c.logger
+}
+
 func (c *Core) invalidateHoldingsCache() {
 	if c == nil || c.cache == nil {
 		return

@@ -2,8 +2,10 @@ package api
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -47,7 +49,16 @@ func NewRouter(core *investlog.Core) http.Handler {
 		AllowCredentials: true,
 	}))
 
-	h := &handler{core: core}
+	logger := slog.Default()
+	if core != nil {
+		logger = core.Logger()
+	}
+	h := &handler{
+		core:   core,
+		logger: logger,
+	}
+
+	r.Use(h.coreLockMiddleware)
 
 	r.Get("/api/health", h.health)
 	// Holdings
@@ -93,11 +104,17 @@ func NewRouter(core *investlog.Core) http.Handler {
 	// Operation logs
 	r.Get("/api/operation-logs", h.getOperationLogs)
 
+	// Storage
+	r.Get("/api/storage", h.getStorageInfo)
+	r.Post("/api/storage/switch", h.switchStorage)
+
 	return r
 }
 
 type handler struct {
-	core *investlog.Core
+	core   *investlog.Core
+	logger *slog.Logger
+	coreMu sync.RWMutex
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

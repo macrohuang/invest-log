@@ -71,3 +71,18 @@ type updateSymbolAssetTypePayload struct {
 type updateSymbolAutoUpdatePayload struct {
 	AutoUpdate int `json:"auto_update"`
 }
+
+type storageSwitchPayload struct {
+	DBName string `json:"db_name"`
+	Create bool   `json:"create"`
+}
+
+type storageInfoResponse struct {
+	DBName       string   `json:"db_name"`
+	DBPath       string   `json:"db_path"`
+	DataDir      string   `json:"data_dir"`
+	UseICloud    bool     `json:"use_icloud"`
+	Available    []string `json:"available"`
+	CanSwitch    bool     `json:"can_switch"`
+	SwitchReason string   `json:"switch_reason,omitempty"`
+}
