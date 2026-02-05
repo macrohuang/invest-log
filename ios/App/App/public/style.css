@@ -392,6 +392,14 @@ button,
   margin-bottom: 24px;
 }
 
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
 .inline-link {
   color: var(--accent-strong);
   text-decoration: none;

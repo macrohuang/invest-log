@@ -1604,22 +1604,85 @@ async function renderSettings() {
       </div>
     `;
 
+    const settingsTabs = [
+      {
+        key: 'accounts',
+        label: 'Accounts',
+        content: `<div class="grid two">${accountsSection}</div>`,
+      },
+      {
+        key: 'assets',
+        label: 'Asset Types',
+        content: `<div class="grid two">${assetSection}</div>`,
+      },
+      {
+        key: 'allocations',
+        label: 'Allocations',
+        content: `<div class="grid three">${allocationCards}</div>`,
+      },
+      {
+        key: 'symbols',
+        label: 'Symbols',
+        content: `<div class="grid two">${symbolsSection}</div>`,
+      },
+      {
+        key: 'api',
+        label: 'API',
+        content: `<div class="grid two">${apiSection}</div>`,
+      },
+    ];
+
+    const tabButtons = settingsTabs.map((tab) => `
+      <button class="tab-button" data-settings-tab="${tab.key}" type="button">${tab.label}</button>
+    `).join('');
+
+    const panels = settingsTabs.map((tab) => `
+      <div class="tab-panel" data-settings-panel="${tab.key}">
+        ${tab.content}
+      </div>
+    `).join('');
+
     view.innerHTML = `
       <div class="section-title">Settings</div>
       <div class="section-sub">Accounts, asset types, allocation ranges, and API connection.</div>
-      <div class="grid two">
-        ${apiSection}
-        ${accountsSection}
-        ${assetSection}
-        ${allocationCards}
-        ${symbolsSection}
-      </div>
+      <div class="tab-bar" role="tablist">${tabButtons}</div>
+      ${panels}
     `;
 
+    initSettingsTabs();
     bindSettingsActions();
   } catch (err) {
     view.innerHTML = renderEmptyState('Unable to load settings.');
   }
+}
+
+function initSettingsTabs() {
+  const tabs = Array.from(view.querySelectorAll('[data-settings-tab]'));
+  const panels = Array.from(view.querySelectorAll('[data-settings-panel]'));
+  if (!tabs.length || !panels.length) {
+    return;
+  }
+  const available = tabs.map((btn) => btn.dataset.settingsTab);
+  const saved = localStorage.getItem('activeSettingsTab');
+  const initial = available.includes(saved) ? saved : available[0];
+
+  const setActive = (key) => {
+    tabs.forEach((btn) => {
+      btn.classList.toggle('active', btn.dataset.settingsTab === key);
+    });
+    panels.forEach((panel) => {
+      panel.classList.toggle('active', panel.dataset.settingsPanel === key);
+    });
+    localStorage.setItem('activeSettingsTab', key);
+  };
+
+  tabs.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      setActive(btn.dataset.settingsTab);
+    });
+  });
+
+  setActive(initial);
 }
 
 function bindSettingsActions() {
