@@ -93,6 +93,27 @@ func TestAllocationSettingsRebuild(t *testing.T) {
 	}
 }
 
+func TestInitDatabaseCreatesDefaultExchangeRates(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	defer db.Close()
+
+	if err := initDatabase(db); err != nil {
+		t.Fatalf("initDatabase: %v", err)
+	}
+
+	row := db.QueryRow("SELECT COUNT(*) FROM exchange_rates")
+	var count int
+	if err := row.Scan(&count); err != nil {
+		t.Fatalf("count exchange_rates: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 default exchange rates, got %d", count)
+	}
+}
+
 func TestAllocationSettingsHasAssetTypeCheckMissing(t *testing.T) {
 	db, tx := openTestTx(t)
 	defer db.Close()

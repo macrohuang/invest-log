@@ -56,6 +56,12 @@ type allocationPayload struct {
 	MaxPercent float64 `json:"max_percent"`
 }
 
+type exchangeRatePayload struct {
+	FromCurrency string  `json:"from_currency"`
+	ToCurrency   string  `json:"to_currency"`
+	Rate         float64 `json:"rate"`
+}
+
 type symbolUpdatePayload struct {
 	Name       *string `json:"name"`
 	AssetType  *string `json:"asset_type"`

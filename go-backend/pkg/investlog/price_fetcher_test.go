@@ -1,6 +1,7 @@
 package investlog
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"math"
@@ -10,28 +11,29 @@ import (
 	"time"
 )
 
-type roundTripFunc func(*http.Request) (*http.Response, error)
+// mockHTTPClient implements HTTPDoer for testing.
+type mockHTTPClient struct {
+	status int
+	body   string
+}
 
-func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return f(req)
+func (m *mockHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: m.status,
+		Body:       io.NopCloser(strings.NewReader(m.body)),
+		Header:     make(http.Header),
+	}, nil
 }
 
 func newFetcherWithBody(status int, body string) *priceFetcher {
-	pf := newPriceFetcher(priceFetcherOptions{
+	return newPriceFetcher(priceFetcherOptions{
 		CacheTTL:      time.Second,
 		FailThreshold: 2,
 		FailWindow:    time.Second,
 		Cooldown:      time.Second,
 		HTTPTimeout:   time.Second,
+		HTTPClient:    &mockHTTPClient{status: status, body: body},
 	})
-	pf.client.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return &http.Response{
-			StatusCode: status,
-			Body:       io.NopCloser(strings.NewReader(body)),
-			Header:     make(http.Header),
-		}, nil
-	})
-	return pf
 }
 
 func TestPriceFetcherCacheAndServiceState(t *testing.T) {
@@ -372,10 +374,10 @@ func TestTencentFetchers(t *testing.T) {
 
 func TestHTTPGetNon2xx(t *testing.T) {
 	pf := newFetcherWithBody(http.StatusInternalServerError, "")
-	if _, err := pf.httpGet("http://example.com", nil); err == nil {
+	if _, err := pf.httpGet(context.Background(), "http://example.com", nil); err == nil {
 		t.Fatalf("expected error for non-2xx")
 	}
-	if _, err := pf.httpGet("://bad-url", nil); err == nil {
+	if _, err := pf.httpGet(context.Background(), "://bad-url", nil); err == nil {
 		t.Fatalf("expected error for bad url")
 	}
 }

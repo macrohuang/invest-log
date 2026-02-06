@@ -84,6 +84,9 @@ func TestInitDatabaseWithLegacySchema(t *testing.T) {
 	if hasSymbolID, err := tableHasColumn(tx, "transactions", "symbol_id"); err != nil || !hasSymbolID {
 		t.Fatalf("expected transactions symbol_id column")
 	}
+	if exists, err := tableExists(tx, "exchange_rates"); err != nil || !exists {
+		t.Fatalf("expected exchange_rates table")
+	}
 }
 
 func TestInitDatabaseClosedDB(t *testing.T) {

@@ -333,6 +333,41 @@ func (h *handler) deleteAllocationSetting(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
+func (h *handler) getExchangeRates(w http.ResponseWriter, r *http.Request) {
+	result, err := h.core.GetExchangeRates()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *handler) setExchangeRate(w http.ResponseWriter, r *http.Request) {
+	var payload exchangeRatePayload
+	if err := decodeJSON(r, &payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	_, err := h.core.SetExchangeRate(payload.FromCurrency, payload.ToCurrency, payload.Rate, "manual")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+func (h *handler) refreshExchangeRates(w http.ResponseWriter, r *http.Request) {
+	updated, errors, err := h.core.RefreshExchangeRates()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"updated": updated,
+		"errors":  errors,
+	})
+}
+
 func (h *handler) getSymbols(w http.ResponseWriter, r *http.Request) {
 	result, err := h.core.GetSymbols()
 	if err != nil {

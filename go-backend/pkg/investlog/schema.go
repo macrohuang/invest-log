@@ -106,6 +106,46 @@ func initDatabase(db *sql.DB) error {
 		return err
 	}
 
+	if err := exec(tx, `
+		CREATE TABLE IF NOT EXISTS exchange_rates (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			from_currency TEXT NOT NULL CHECK(from_currency IN ('USD', 'HKD')),
+			to_currency TEXT NOT NULL CHECK(to_currency = 'CNY'),
+			rate REAL NOT NULL CHECK(rate > 0),
+			source TEXT NOT NULL DEFAULT 'manual',
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(from_currency, to_currency)
+		)
+	`); err != nil {
+		return err
+	}
+
+	var exchangeRateCount int
+	if err := tx.QueryRow("SELECT COUNT(*) FROM exchange_rates").Scan(&exchangeRateCount); err != nil {
+		return err
+	}
+	if exchangeRateCount == 0 {
+		defaults := []struct {
+			FromCurrency string
+			ToCurrency   string
+			Rate         float64
+		}{
+			{FromCurrency: "USD", ToCurrency: "CNY", Rate: defaultUSDToCNYRate},
+			{FromCurrency: "HKD", ToCurrency: "CNY", Rate: defaultHKDToCNYRate},
+		}
+		for _, item := range defaults {
+			if _, err := tx.Exec(
+				"INSERT INTO exchange_rates (from_currency, to_currency, rate, source) VALUES (?, ?, ?, ?)",
+				item.FromCurrency,
+				item.ToCurrency,
+				item.Rate,
+				"default",
+			); err != nil {
+				return err
+			}
+		}
+	}
+
 	hasAssetTypeCheck, err := allocationSettingsHasAssetTypeCheck(tx)
 	if err != nil {
 		return err

@@ -1,6 +1,7 @@
 package investlog
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,9 +24,64 @@ const (
 	priceScaleFactor    = 100.0
 
 	// Gold price conversion constants.
-	ouncesToGrams = 31.1035 // Troy ounces to grams
-	usdToCnyRate  = 7.2     // Approximate USD to CNY exchange rate (should be from config/API)
+	ouncesToGrams         = 31.1035 // Troy ounces to grams
+	defaultUSDToCNYRate   = 7.2     // Default USD/CNY rate; should be overridden with real-time rate
 )
+
+// Pre-compiled regexes for symbol detection and parsing.
+// These are compiled once at package init to avoid repeated compilation in hot paths.
+var (
+	reSixDigit   = regexp.MustCompile(`^\d{6}$`)       // Chinese stock/fund codes
+	reHKStock    = regexp.MustCompile(`^0\d{4}$`)      // Hong Kong stock codes (e.g., 00001)
+	reUSStock    = regexp.MustCompile(`^[A-Z]+$`)      // US stock tickers (e.g., AAPL)
+	reFundLsjzTD = regexp.MustCompile(`<td[^>]*>\d{4}-\d{2}-\d{2}</td>\s*<td[^>]*>([\d.]+)</td>`)
+)
+
+// Price fetcher errors. Use errors.Is() to check for these conditions.
+var (
+	// ErrInvalidSymbol indicates the symbol format is not recognized by the data source.
+	ErrInvalidSymbol = errors.New("invalid symbol format")
+	// ErrNoData indicates the data source returned no price data for the symbol.
+	ErrNoData = errors.New("no price data available")
+	// ErrBondNotSupported indicates bond price fetching is not implemented.
+	ErrBondNotSupported = errors.New("bond price not supported")
+	// ErrUnknownSymbol indicates the symbol type could not be determined.
+	ErrUnknownSymbol = errors.New("unknown symbol type")
+)
+
+// Symbol classification prefixes for Chinese markets.
+// A-share stocks: main board (000, 001, 600, 601, 603, 605), SME board (002, 003),
+// ChiNext (300, 301), STAR market (688, 689).
+var aSharePrefixes = []string{
+	"000", "001", "002", "003", // Shenzhen main board & SME
+	"300", "301",               // ChiNext
+	"600", "601", "603", "605", // Shanghai main board
+	"688", "689",               // STAR market
+}
+
+// ETF/LOF prefixes for Chinese markets.
+// Shanghai: 510 (ETF), 513 (cross-border ETF), 588 (sci-tech ETF), 501/502 (LOF).
+// Shenzhen: 159 (ETF), 160-166 (LOF).
+var etfLofPrefixes = []string{
+	"510", "513", "588", "501", "502", // Shanghai
+	"159", "160", "161", "162", "163", "164", "165", "166", // Shenzhen
+}
+
+// hasAnyPrefix checks if s starts with any of the given prefixes.
+func hasAnyPrefix(s string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// HTTPDoer is an interface for making HTTP requests. It enables dependency
+// injection for testing without network calls.
+type HTTPDoer interface {
+	Do(*http.Request) (*http.Response, error)
+}
 
 type priceFetcherOptions struct {
 	Logger        *slog.Logger
@@ -34,6 +90,8 @@ type priceFetcherOptions struct {
 	FailWindow    time.Duration
 	Cooldown      time.Duration
 	HTTPTimeout   time.Duration
+	HTTPClient    HTTPDoer // Optional: inject custom client for testing
+	USDToCNYRate  float64  // Optional: USD/CNY exchange rate for gold price conversion
 }
 
 type priceFetcher struct {
@@ -42,10 +100,15 @@ type priceFetcher struct {
 	failThreshold int
 	failWindow    time.Duration
 	cooldown      time.Duration
-	client        *http.Client
-	mu            sync.Mutex
-	cache         map[string]cacheEntry
-	serviceState  map[string]*serviceState
+	client        HTTPDoer
+	usdToCNYRate  float64
+
+	// Separate locks for cache and circuit breaker to reduce contention.
+	// Cache operations are frequent reads; circuit breaker updates are less frequent.
+	cacheMu      sync.RWMutex
+	cache        map[string]cacheEntry
+	circuitMu    sync.Mutex
+	serviceState map[string]*serviceState
 }
 
 type cacheEntry struct {
@@ -65,15 +128,24 @@ func newPriceFetcher(opts priceFetcherOptions) *priceFetcher {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	client := opts.HTTPClient
+	if client == nil {
+		client = &http.Client{
+			Timeout: opts.HTTPTimeout,
+		}
+	}
+	usdToCNYRate := opts.USDToCNYRate
+	if usdToCNYRate <= 0 {
+		usdToCNYRate = defaultUSDToCNYRate
+	}
 	return &priceFetcher{
 		logger:        logger,
 		cacheTTL:      opts.CacheTTL,
 		failThreshold: opts.FailThreshold,
 		failWindow:    opts.FailWindow,
 		cooldown:      opts.Cooldown,
-		client: &http.Client{
-			Timeout: opts.HTTPTimeout,
-		},
+		client:        client,
+		usdToCNYRate:  usdToCNYRate,
 		cache:        map[string]cacheEntry{},
 		serviceState: map[string]*serviceState{},
 	}
@@ -105,14 +177,14 @@ func (pf *priceFetcher) fetch(symbol, currency, assetType string) (*float64, str
 	pf.logger.Info("fetching price", "symbol", symbol, "currency", currency, "assetType", assetType, "type", symbolType)
 
 	if symbolType == "bond" {
-		return nil, "债券价格暂不支持自动获取", errors.New("bond price not supported")
+		return nil, "债券价格暂不支持自动获取", ErrBondNotSupported
 	}
 	if symbolType == "cash" {
 		price := 1.0
 		return &price, "现金价格固定为 1.0", nil
 	}
 	if symbolType == "unknown" {
-		return nil, fmt.Sprintf("无法识别标的类型: %s", symbol), errors.New("unknown symbol type")
+		return nil, fmt.Sprintf("无法识别标的类型: %s", symbol), ErrUnknownSymbol
 	}
 
 	attempts := pf.buildAttempts(symbolType, symbol, currency, assetType)
@@ -202,8 +274,8 @@ func preferFundFirstForAShare(assetType string) bool {
 
 func (pf *priceFetcher) getCached(symbol, currency, assetType string) (float64, string, bool) {
 	key := cacheKey(symbol, currency, assetType)
-	pf.mu.Lock()
-	defer pf.mu.Unlock()
+	pf.cacheMu.RLock()
+	defer pf.cacheMu.RUnlock()
 	entry, ok := pf.cache[key]
 	if !ok {
 		return 0, "", false
@@ -216,8 +288,8 @@ func (pf *priceFetcher) getCached(symbol, currency, assetType string) (float64, 
 
 func (pf *priceFetcher) setCached(symbol, currency, assetType string, price float64, source string) {
 	key := cacheKey(symbol, currency, assetType)
-	pf.mu.Lock()
-	defer pf.mu.Unlock()
+	pf.cacheMu.Lock()
+	defer pf.cacheMu.Unlock()
 	pf.cache[key] = cacheEntry{price: price, source: source, ts: time.Now()}
 }
 
@@ -226,8 +298,8 @@ func cacheKey(symbol, currency, assetType string) string {
 }
 
 func (pf *priceFetcher) serviceAvailable(service string) bool {
-	pf.mu.Lock()
-	defer pf.mu.Unlock()
+	pf.circuitMu.Lock()
+	defer pf.circuitMu.Unlock()
 	state, ok := pf.serviceState[service]
 	if !ok {
 		return true
@@ -236,8 +308,8 @@ func (pf *priceFetcher) serviceAvailable(service string) bool {
 }
 
 func (pf *priceFetcher) recordServiceFailure(service string) {
-	pf.mu.Lock()
-	defer pf.mu.Unlock()
+	pf.circuitMu.Lock()
+	defer pf.circuitMu.Unlock()
 	state := pf.serviceState[service]
 	now := time.Now()
 	if state == nil {
@@ -255,8 +327,8 @@ func (pf *priceFetcher) recordServiceFailure(service string) {
 }
 
 func (pf *priceFetcher) recordServiceSuccess(service string) {
-	pf.mu.Lock()
-	defer pf.mu.Unlock()
+	pf.circuitMu.Lock()
+	defer pf.circuitMu.Unlock()
 	delete(pf.serviceState, service)
 }
 
@@ -265,57 +337,53 @@ func detectSymbolType(symbol, currency, assetType string) string {
 	currency = normalizeCurrency(currency)
 	assetType = strings.ToLower(strings.TrimSpace(assetType))
 
-	isAShareStock := func(code string) bool {
-		prefixes := []string{"000", "001", "002", "003", "300", "301", "600", "601", "603", "605", "688", "689"}
-		for _, p := range prefixes {
-			if strings.HasPrefix(code, p) {
-				return true
-			}
-		}
-		return false
-	}
-	isETFOrLOF := func(code string) bool {
-		// If assetType says etf/fund, trust it for CNY symbols.
-		if currency == "CNY" && (assetType == "etf" || assetType == "fund") {
-			return true
-		}
-		// ETF/LOF prefixes: Shanghai (510,513,588,501,502) and Shenzhen (159,160,161,162,163,164,165,166)
-		prefixes := []string{"510", "513", "588", "501", "502", "159", "160", "161", "162", "163", "164", "165", "166"}
-		for _, p := range prefixes {
-			if strings.HasPrefix(code, p) {
-				return true
-			}
-		}
-		return false
-	}
-
+	// Explicit exchange prefix (SH/SZ) -> A-share
 	if strings.HasPrefix(symbol, "SH") || strings.HasPrefix(symbol, "SZ") {
 		return "a_share"
 	}
-	if currency == "CNY" && regexp.MustCompile(`^\d{6}$`).MatchString(symbol) {
-		if isETFOrLOF(symbol) {
+
+	// Chinese 6-digit codes
+	if currency == "CNY" && reSixDigit.MatchString(symbol) {
+		// Trust explicit asset type for ETF/fund
+		if assetType == "etf" || assetType == "fund" {
 			return "etf"
 		}
-		if isAShareStock(symbol) {
+		// Check by prefix
+		if hasAnyPrefix(symbol, etfLofPrefixes) {
+			return "etf"
+		}
+		if hasAnyPrefix(symbol, aSharePrefixes) {
 			return "a_share"
 		}
+		// Default unknown 6-digit CNY codes to ETF (likely OTC funds)
 		return "etf"
 	}
-	if currency == "HKD" || regexp.MustCompile(`^0\d{4}$`).MatchString(symbol) {
+
+	// Hong Kong stocks
+	if currency == "HKD" || reHKStock.MatchString(symbol) {
 		return "hk_stock"
 	}
+
+	// Gold
 	if strings.Contains(symbol, "AU") || strings.Contains(symbol, "GOLD") {
 		return "gold"
 	}
+
+	// Cash
 	if symbol == "CASH" {
 		return "cash"
 	}
-	if currency == "USD" || regexp.MustCompile(`^[A-Z]+$`).MatchString(symbol) {
+
+	// US stocks
+	if currency == "USD" || reUSStock.MatchString(symbol) {
 		return "us_stock"
 	}
+
+	// Bonds
 	if strings.Contains(symbol, "BOND") {
 		return "bond"
 	}
+
 	return "unknown"
 }
 
@@ -332,11 +400,11 @@ func (pf *priceFetcher) eastmoneyFetchAShare(symbol string) (*float64, error) {
 	} else if strings.HasPrefix(code, "6") {
 		market = 1
 	}
-	if !regexp.MustCompile(`^\d{6}$`).MatchString(code) {
+	if !reSixDigit.MatchString(code) {
 		return nil, nil
 	}
 	url := fmt.Sprintf("http://push2.eastmoney.com/api/qt/stock/get?secid=%d.%s&fields=f43&ut=fa5fd1943c7b386f172d6893dbfba10b", market, code)
-	body, err := pf.httpGet(url, map[string]string{"User-Agent": "Mozilla/5.0", "Referer": "http://quote.eastmoney.com/"})
+	body, err := pf.httpGet(context.Background(), url, map[string]string{"User-Agent": "Mozilla/5.0", "Referer": "http://quote.eastmoney.com/"})
 	if err != nil {
 		return nil, err
 	}
@@ -361,11 +429,11 @@ func (pf *priceFetcher) eastmoneyFetchAShare(symbol string) (*float64, error) {
 
 func (pf *priceFetcher) eastmoneyFetchFund(symbol string) (*float64, error) {
 	code := normalizeSymbol(symbol)
-	if !regexp.MustCompile(`^\d{6}$`).MatchString(code) {
+	if !reSixDigit.MatchString(code) {
 		return nil, nil
 	}
 	url := fmt.Sprintf("http://fundgz.1234567.com.cn/js/%s.js", code)
-	body, err := pf.httpGet(url, map[string]string{"User-Agent": "Mozilla/5.0", "Referer": "http://fund.eastmoney.com/"})
+	body, err := pf.httpGet(context.Background(), url, map[string]string{"User-Agent": "Mozilla/5.0", "Referer": "http://fund.eastmoney.com/"})
 	if err != nil {
 		return nil, err
 	}
@@ -393,11 +461,11 @@ func (pf *priceFetcher) eastmoneyFetchFund(symbol string) (*float64, error) {
 
 func (pf *priceFetcher) eastmoneyFetchFundPingzhong(symbol string) (*float64, error) {
 	code := normalizeSymbol(symbol)
-	if !regexp.MustCompile(`^\d{6}$`).MatchString(code) {
+	if !reSixDigit.MatchString(code) {
 		return nil, nil
 	}
 	url := fmt.Sprintf("http://fund.eastmoney.com/pingzhongdata/%s.js", code)
-	body, err := pf.httpGet(url, map[string]string{"User-Agent": "Mozilla/5.0", "Referer": "http://fund.eastmoney.com/"})
+	body, err := pf.httpGet(context.Background(), url, map[string]string{"User-Agent": "Mozilla/5.0", "Referer": "http://fund.eastmoney.com/"})
 	if err != nil {
 		return nil, err
 	}
@@ -447,16 +515,15 @@ func (pf *priceFetcher) eastmoneyFetchFundPingzhong(symbol string) (*float64, er
 
 func (pf *priceFetcher) eastmoneyFetchFundLsjz(symbol string) (*float64, error) {
 	code := normalizeSymbol(symbol)
-	if !regexp.MustCompile(`^\d{6}$`).MatchString(code) {
+	if !reSixDigit.MatchString(code) {
 		return nil, nil
 	}
 	url := fmt.Sprintf("http://fund.eastmoney.com/f10/F10DataApi.aspx?type=lsjz&code=%s&page=1&per=1", code)
-	body, err := pf.httpGet(url, map[string]string{"User-Agent": "Mozilla/5.0", "Referer": "http://fund.eastmoney.com/"})
+	body, err := pf.httpGet(context.Background(), url, map[string]string{"User-Agent": "Mozilla/5.0", "Referer": "http://fund.eastmoney.com/"})
 	if err != nil {
 		return nil, err
 	}
-	re := regexp.MustCompile(`<td[^>]*>\d{4}-\d{2}-\d{2}</td>\s*<td[^>]*>([\d.]+)</td>`)
-	matches := re.FindStringSubmatch(string(body))
+	matches := reFundLsjzTD.FindStringSubmatch(string(body))
 	if len(matches) < 2 {
 		return nil, nil
 	}
@@ -473,7 +540,7 @@ func (pf *priceFetcher) yahooFetchStock(symbol, currency string) (*float64, erro
 		return nil, nil
 	}
 	url := fmt.Sprintf("https://query1.finance.yahoo.com/v8/finance/chart/%s?interval=1d&range=1d", yahooSymbol)
-	body, err := pf.httpGet(url, map[string]string{"User-Agent": "Mozilla/5.0"})
+	body, err := pf.httpGet(context.Background(), url, map[string]string{"User-Agent": "Mozilla/5.0"})
 	if err != nil {
 		return nil, err
 	}
@@ -522,7 +589,7 @@ func buildYahooSymbol(symbol, currency string) string {
 		if strings.HasPrefix(code, "6") {
 			return code + ".SS"
 		}
-		if regexp.MustCompile(`^\d{6}$`).MatchString(code) {
+		if reSixDigit.MatchString(code) {
 			return code + ".SZ"
 		}
 	}
@@ -548,8 +615,8 @@ func (pf *priceFetcher) yahooFetchGold() (*float64, error) {
 	if pricePerOz <= 0 {
 		return nil, nil
 	}
-	// Convert to CNY per gram using configured rates.
-	converted := pricePerOz / ouncesToGrams * usdToCnyRate
+	// Convert to CNY per gram using configured exchange rate.
+	converted := pricePerOz / ouncesToGrams * pf.usdToCNYRate
 	converted = math.Round(converted*100) / 100
 	return &converted, nil
 }
@@ -565,7 +632,7 @@ func (pf *priceFetcher) sinaFetchAShare(symbol string) (*float64, error) {
 		prefix = "sh"
 	}
 	url := fmt.Sprintf("http://hq.sinajs.cn/list=%s%s", prefix, code)
-	body, err := pf.httpGet(url, map[string]string{"Referer": "http://finance.sina.com.cn"})
+	body, err := pf.httpGet(context.Background(), url, map[string]string{"Referer": "http://finance.sina.com.cn"})
 	if err != nil {
 		return nil, err
 	}
@@ -589,7 +656,7 @@ func (pf *priceFetcher) sinaFetchHKStock(symbol string) (*float64, error) {
 		code = strings.Repeat("0", 5-len(code)) + code
 	}
 	url := fmt.Sprintf("http://hq.sinajs.cn/list=hk%s", code)
-	body, err := pf.httpGet(url, map[string]string{"Referer": "http://finance.sina.com.cn"})
+	body, err := pf.httpGet(context.Background(), url, map[string]string{"Referer": "http://finance.sina.com.cn"})
 	if err != nil {
 		return nil, err
 	}
@@ -610,7 +677,7 @@ func (pf *priceFetcher) sinaFetchHKStock(symbol string) (*float64, error) {
 func (pf *priceFetcher) sinaFetchUSStock(symbol string) (*float64, error) {
 	code := strings.ToLower(symbol)
 	url := fmt.Sprintf("http://hq.sinajs.cn/list=gb_%s", code)
-	body, err := pf.httpGet(url, map[string]string{"Referer": "http://finance.sina.com.cn"})
+	body, err := pf.httpGet(context.Background(), url, map[string]string{"Referer": "http://finance.sina.com.cn"})
 	if err != nil {
 		return nil, err
 	}
@@ -639,7 +706,7 @@ func (pf *priceFetcher) tencentFetchAShare(symbol string) (*float64, error) {
 		prefix = "sh"
 	}
 	url := fmt.Sprintf("http://qt.gtimg.cn/q=%s%s", prefix, code)
-	body, err := pf.httpGet(url, nil)
+	body, err := pf.httpGet(context.Background(), url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -659,7 +726,7 @@ func (pf *priceFetcher) tencentFetchHKStock(symbol string) (*float64, error) {
 		code = strings.Repeat("0", 5-len(code)) + code
 	}
 	url := fmt.Sprintf("http://qt.gtimg.cn/q=hk%s", code)
-	body, err := pf.httpGet(url, nil)
+	body, err := pf.httpGet(context.Background(), url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -676,7 +743,7 @@ func (pf *priceFetcher) tencentFetchHKStock(symbol string) (*float64, error) {
 func (pf *priceFetcher) tencentFetchUSStock(symbol string) (*float64, error) {
 	code := normalizeSymbol(symbol)
 	url := fmt.Sprintf("http://qt.gtimg.cn/q=us%s", code)
-	body, err := pf.httpGet(url, nil)
+	body, err := pf.httpGet(context.Background(), url, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -693,8 +760,8 @@ func (pf *priceFetcher) tencentFetchUSStock(symbol string) (*float64, error) {
 // maxResponseSize limits external API responses to 1MB to prevent memory exhaustion.
 const maxResponseSize = 1 << 20 // 1MB
 
-func (pf *priceFetcher) httpGet(url string, headers map[string]string) ([]byte, error) {
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+func (pf *priceFetcher) httpGet(ctx context.Context, url string, headers map[string]string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}

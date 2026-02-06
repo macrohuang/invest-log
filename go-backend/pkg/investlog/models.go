@@ -174,6 +174,16 @@ type AllocationSetting struct {
 	MaxPercent float64 `json:"max_percent"`
 }
 
+// ExchangeRateSetting represents a maintained FX rate.
+type ExchangeRateSetting struct {
+	ID           int64   `json:"id"`
+	FromCurrency string  `json:"from_currency"`
+	ToCurrency   string  `json:"to_currency"`
+	Rate         float64 `json:"rate"`
+	Source       string  `json:"source"`
+	UpdatedAt    string  `json:"updated_at"`
+}
+
 // AssetType represents a dynamic asset type.
 type AssetType struct {
 	ID        int64  `json:"id"`

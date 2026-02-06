@@ -5,12 +5,12 @@
   --ink-1: #3f463e;
   --muted: #6b6f66;
   --accent: #f06c3b;
-  --accent-strong: #c44b22;
-  --accent-cool: #1aa6b7;
+  --accent-strong: #ef4444;
+  --accent-cool: #10b981;
   --card: #ffffff;
-  --shadow: 0 20px 45px rgba(29, 31, 27, 0.12);
+  --shadow: 0 20px 30px rgba(29, 31, 27, 0.20);
   --shadow-soft: 0 10px 24px rgba(29, 31, 27, 0.08);
-  --radius-lg: 20px;
+  --radius-lg: 16px;
   --radius-md: 14px;
   --radius-sm: 10px;
   --border: 1px solid rgba(29, 31, 27, 0.08);
@@ -312,13 +312,13 @@ button,
 .table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 14px;
+  font-size: 15px;
 }
 
 .table th,
 .table td {
   text-align: left;
-  padding: 12px 10px;
+  padding: 10px 15px;
   border-bottom: 1px solid rgba(29, 31, 27, 0.08);
 }
 
@@ -330,7 +330,7 @@ button,
 }
 
 .table th {
-  font-size: 12px;
+  font-size: 14px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--muted);
@@ -370,6 +370,33 @@ button,
 .table td .alert {
   display: inline-flex;
   align-items: center;
+}
+
+.pnl-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+}
+
+.pnl-cell .pill,
+.pnl-cell .alert {
+  display: inline-block;
+  padding: 4px 6px;
+  border-radius: 870px;
+}
+
+.pnl-cell .pill {
+  background: rgba(16, 185, 129, 0.2);
+}
+
+.pnl-cell .alert {
+  background: rgba(239, 68, 68, 0.2);
+}
+
+.pnl-percent {
+  font-size: 0.83em;
+  opacity: 0.6;
 }
 
 .symbol-link {
@@ -485,6 +512,18 @@ button,
   color: var(--accent-strong);
 }
 
+select.btn {
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+}
+
+select.btn.trade-select {
+  min-width: 90px;
+}
+
 .list {
   display: grid;
   gap: 12px;
@@ -511,6 +550,10 @@ button,
   grid-template-columns: repeat(2, minmax(80px, 1fr)) auto;
   gap: 10px;
   align-items: center;
+}
+
+.fx-controls {
+  grid-template-columns: minmax(120px, 1fr) auto;
 }
 
 .allocation-controls input {
@@ -603,6 +646,7 @@ button,
 
 .panel-head h3 {
   margin-bottom: 0;
+  font-size: 20px;
 }
 
 .panel-left {
@@ -632,7 +676,19 @@ button,
 
 .panel-metric .metric-value {
   font-weight: 600;
-  font-size: 14px;
+  font-size: 16px;
+}
+
+.metric-value-group {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.total-pnl-percent {
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 0.9;
 }
 
 .pnl-positive {

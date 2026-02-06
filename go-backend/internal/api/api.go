@@ -94,6 +94,9 @@ func NewRouter(core *investlog.Core) http.Handler {
 	r.Get("/api/allocation-settings", h.getAllocationSettings)
 	r.Put("/api/allocation-settings", h.setAllocationSetting)
 	r.Delete("/api/allocation-settings", h.deleteAllocationSetting)
+	r.Get("/api/exchange-rates", h.getExchangeRates)
+	r.Put("/api/exchange-rates", h.setExchangeRate)
+	r.Post("/api/exchange-rates/refresh", h.refreshExchangeRates)
 
 	// Symbols
 	r.Get("/api/symbols", h.getSymbols)

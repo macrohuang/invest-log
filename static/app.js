@@ -380,9 +380,10 @@ async function renderOverview() {
   `;
 
   try {
-    const [byCurrency, bySymbol] = await Promise.all([
+    const [byCurrency, bySymbol, exchangeRates] = await Promise.all([
       fetchJSON('/api/holdings-by-currency'),
-      fetchJSON('/api/holdings-by-symbol')
+      fetchJSON('/api/holdings-by-symbol'),
+      fetchJSON('/api/exchange-rates'),
     ]);
 
     const currencyOrder = ['CNY', 'USD', 'HKD'];
@@ -391,13 +392,24 @@ async function renderOverview() {
       .filter((curr) => !currencyOrder.includes(curr))
       .sort();
     currencyList.push(...extraCurrencies);
+    const rateMap = { CNY: 1 };
+    (exchangeRates || []).forEach((item) => {
+      if (item && item.to_currency === 'CNY' && Number(item.rate) > 0) {
+        rateMap[item.from_currency] = Number(item.rate);
+      }
+    });
+
     let totalMarket = 0;
     let totalCost = 0;
 
     if (bySymbol) {
-      Object.values(bySymbol).forEach((entry) => {
-        totalMarket += entry.total_market_value || 0;
-        totalCost += entry.total_cost || 0;
+      Object.entries(bySymbol).forEach(([currency, entry]) => {
+        const rate = Number(rateMap[currency] || 0);
+        if (rate <= 0) {
+          return;
+        }
+        totalMarket += Number(entry.total_market_value || 0) * rate;
+        totalCost += Number(entry.total_cost || 0) * rate;
       });
     }
 
@@ -405,10 +417,10 @@ async function renderOverview() {
     const pnlClass = totalPnL >= 0 ? 'pill positive' : 'pill negative';
     const summaryCard = `
       <div class="overview-summary card">
-        <div class="summary-title">Total Market Value</div>
-        <div class="summary-value" data-sensitive>${formatNumber(totalMarket)}</div>
-        <div class="summary-sub">Sum across currencies (no FX conversion)</div>
-        <div class="summary-pill ${pnlClass}" data-sensitive>${formatNumber(totalPnL)} total PnL</div>
+        <div class="summary-title">Total Market Value (CNY)</div>
+        <div class="summary-value" data-sensitive>${formatMoney(totalMarket, 'CNY')}</div>
+        <div class="summary-sub">Converted by Settings exchange rates.</div>
+        <div class="summary-pill ${pnlClass}" data-sensitive>${formatMoney(totalPnL, 'CNY')} total PnL</div>
       </div>
     `;
 
@@ -487,18 +499,24 @@ async function renderHoldings() {
       const symbols = currencyData.symbols || [];
       const canUpdateAll = symbols.some((s) => s.auto_update !== 0);
       const totalMarketValue = Number(currencyData.total_market_value ?? 0);
-      const totalPnL = Number(currencyData.total_pnl ?? (totalMarketValue - Number(currencyData.total_cost ?? 0)));
+      const totalCost = Number(currencyData.total_cost ?? 0);
+      const totalPnL = Number(currencyData.total_pnl ?? (totalMarketValue - totalCost));
+      const totalPnLPercent = totalCost > 0 ? (totalPnL / totalCost) * 100 : null;
       const pnlClass = totalPnL >= 0 ? 'pnl-positive' : 'pnl-negative';
       const totalMarketLabel = formatMoney(totalMarketValue, currency);
       const totalPnLLabel = formatMoney(totalPnL, currency);
+      const totalPnLPercentLabel = totalPnLPercent !== null ? `<span class="total-pnl-percent">${formatPercent(totalPnLPercent)}</span>` : '';
       const rows = symbols.map((s) => {
         const pnlClass = s.unrealized_pnl !== null && s.unrealized_pnl !== undefined ? (s.unrealized_pnl >= 0 ? 'pill' : 'alert') : '';
         const autoUpdate = s.auto_update !== 0;
         const updateDisabled = autoUpdate ? '' : 'disabled title="Auto sync off"';
         const autoTag = autoUpdate ? '' : '<span class="tag other">Auto off</span>';
         const symbolLink = `#/transactions?symbol=${encodeURIComponent(s.symbol || '')}&account=${encodeURIComponent(s.account_id || '')}`;
+        const symbolCost = (s.avg_cost || 0) * (s.total_shares || 0);
+        const pnlPercent = symbolCost > 0 && s.unrealized_pnl !== null ? (s.unrealized_pnl / symbolCost) * 100 : null;
+        const pnlPercentLabel = pnlPercent !== null ? `<span class="pnl-percent section-sub">${formatPercent(pnlPercent)}</span>` : '';
         const pnlMarkup = s.unrealized_pnl !== null && s.unrealized_pnl !== undefined
-          ? `<span class="${pnlClass}" data-sensitive>${formatMoneyPlain(s.unrealized_pnl)}</span>`
+          ? `<div class="pnl-cell"><span class="${pnlClass}" data-sensitive>${formatMoneyPlain(s.unrealized_pnl)}</span>${pnlPercentLabel}</div>`
           : '<span class="section-sub">—</span>';
         const accountSort = (s.account_name || s.account_id || '').toString();
         return `
@@ -512,6 +530,14 @@ async function renderHoldings() {
             <td class="num">${pnlMarkup}</td>
             <td>
               <div class="actions">
+                <select class="btn trade-select" data-symbol="${escapeHtml(s.symbol)}" data-currency="${currency}" data-account="${escapeHtml(s.account_id || '')}" data-asset-type="${escapeHtml(s.asset_type || '')}">
+                  <option value="">Trade</option>
+                  <option value="BUY">Buy</option>
+                  <option value="SELL">Sell</option>
+                  <option value="DIVIDEND">Dividend</option>
+                  <option value="TRANSFER_IN">Transfer In</option>
+                  <option value="TRANSFER_OUT">Transfer Out</option>
+                </select>
                 <button class="btn secondary" data-action="update" data-symbol="${escapeHtml(s.symbol)}" data-currency="${currency}" data-asset-type="${escapeHtml(s.asset_type || '')}" ${updateDisabled}>Update</button>
                 <button class="btn" data-action="manual" data-symbol="${escapeHtml(s.symbol)}" data-currency="${currency}">Manual</button>
                 ${autoTag}
@@ -534,7 +560,10 @@ async function renderHoldings() {
                   </div>
                   <div class="panel-metric">
                     <span class="section-sub">Total P&amp;L</span>
-                    <span class="metric-value ${pnlClass}" data-sensitive>${totalPnLLabel}</span>
+                    <div class="metric-value-group">
+                      <span class="metric-value ${pnlClass}" data-sensitive>${totalPnLLabel}</span>
+                      ${totalPnLPercentLabel}
+                    </div>
                   </div>
                 </div>
               </div>
@@ -647,6 +676,25 @@ function initHoldingsSort() {
 }
 
 function bindHoldingsActions() {
+  // Trade dropdown navigation
+  view.querySelectorAll('select.trade-select').forEach((sel) => {
+    sel.addEventListener('change', () => {
+      const type = sel.value;
+      if (!type) return;
+      const symbol = sel.dataset.symbol;
+      const currency = sel.dataset.currency;
+      const account = sel.dataset.account;
+      const assetType = sel.dataset.assetType;
+      const params = new URLSearchParams();
+      params.set('type', type);
+      params.set('symbol', symbol);
+      params.set('currency', currency);
+      if (account) params.set('account', account);
+      if (assetType) params.set('asset_type', assetType);
+      window.location.hash = `#/add?${params.toString()}`;
+    });
+  });
+
   view.querySelectorAll('button[data-action]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       if (btn.disabled) {
@@ -1353,6 +1401,46 @@ async function renderAddTransaction() {
     updatePriceLock();
     updateSymbolMode();
 
+    // Prefill from URL parameters (from Holdings quick trade)
+    const hashParams = new URLSearchParams(window.location.hash.split('?')[1] || '');
+    const prefillCurrency = hashParams.get('currency');
+    const prefillAccount = hashParams.get('account');
+    const prefillType = hashParams.get('type');
+    const prefillSymbol = hashParams.get('symbol');
+    const prefillAssetType = hashParams.get('asset_type');
+
+    if (prefillCurrency && ['CNY', 'USD', 'HKD'].includes(prefillCurrency)) {
+      currencySelect.value = prefillCurrency;
+      updateAccountOptions();
+      updateAssetTypeOptions();
+    }
+    if (prefillAccount && Array.from(accountSelect.options).some((o) => o.value === prefillAccount)) {
+      accountSelect.value = prefillAccount;
+      updateAssetTypeOptions();
+    }
+    if (prefillAssetType) {
+      const assetMatch = Array.from(assetSelect.options).find((o) => o.value.toLowerCase() === prefillAssetType.toLowerCase());
+      if (assetMatch) {
+        assetSelect.value = assetMatch.value;
+        updatePriceLock();
+      }
+    }
+    if (prefillType && Array.from(typeSelect.options).some((o) => o.value === prefillType)) {
+      typeSelect.value = prefillType;
+      updateSymbolMode();
+    }
+    if (prefillSymbol) {
+      if (typeSelect.value === 'SELL') {
+        const sellMatch = Array.from(symbolSelect.options).find((o) => o.value === prefillSymbol);
+        if (sellMatch) {
+          symbolSelect.value = prefillSymbol;
+          updateSellConstraints();
+        }
+      } else {
+        symbolInput.value = prefillSymbol;
+      }
+    }
+
     const form = document.getElementById('tx-form');
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
@@ -1421,10 +1509,11 @@ async function fetchAllTransactionsForExport() {
 }
 
 async function exportBackupData() {
-  const [accounts, assetTypes, allocationSettings, symbols, storageInfo, transactions] = await Promise.all([
+  const [accounts, assetTypes, allocationSettings, exchangeRates, symbols, storageInfo, transactions] = await Promise.all([
     fetchJSON('/api/accounts'),
     fetchJSON('/api/asset-types'),
     fetchJSON('/api/allocation-settings'),
+    fetchJSON('/api/exchange-rates'),
     fetchJSON('/api/symbols'),
     fetchJSON('/api/storage'),
     fetchAllTransactionsForExport(),
@@ -1440,6 +1529,7 @@ async function exportBackupData() {
       accounts,
       asset_types: assetTypes,
       allocation_settings: allocationSettings,
+      exchange_rates: exchangeRates,
       symbols,
       transactions,
     },
@@ -1460,15 +1550,16 @@ async function exportBackupData() {
 async function renderSettings() {
   view.innerHTML = `
     <div class="section-title">Settings</div>
-    <div class="section-sub">Accounts, asset types, allocation ranges, storage, and API connection.</div>
+    <div class="section-sub">Accounts, FX rates, asset types, allocation ranges, storage, and API connection.</div>
     <div class="card">Loading settings...</div>
   `;
 
   try {
-    const [accounts, assetTypes, allocationSettings, symbols, holdings, storageInfo] = await Promise.all([
+    const [accounts, assetTypes, allocationSettings, exchangeRates, symbols, holdings, storageInfo] = await Promise.all([
       fetchJSON('/api/accounts'),
       fetchJSON('/api/asset-types'),
       fetchJSON('/api/allocation-settings'),
+      fetchJSON('/api/exchange-rates'),
       fetchJSON('/api/symbols'),
       fetchJSON('/api/holdings'),
       fetchJSON('/api/storage')
@@ -1496,6 +1587,50 @@ async function renderSettings() {
             <button class="btn" id="save-api" type="button">Save</button>
           </div>
         </div>
+      </div>
+    `;
+
+    const exchangeRateMap = {};
+    (exchangeRates || []).forEach((item) => {
+      if (!item) {
+        return;
+      }
+      const key = `${item.from_currency}_${item.to_currency}`;
+      exchangeRateMap[key] = item;
+    });
+
+    const exchangePairs = [
+      { from: 'USD', to: 'CNY', label: 'USD → CNY' },
+      { from: 'HKD', to: 'CNY', label: 'HKD → CNY' },
+    ];
+    const exchangeRows = exchangePairs.map((pair) => {
+      const key = `${pair.from}_${pair.to}`;
+      const item = exchangeRateMap[key] || {};
+      const rate = Number(item.rate || 0);
+      const updatedAt = item.updated_at ? escapeHtml(String(item.updated_at)) : '—';
+      const source = item.source ? escapeHtml(String(item.source)) : 'manual';
+      return `
+        <div class="list-item allocation-item">
+          <div>
+            <strong>${pair.label}</strong>
+            <div class="section-sub">Source: ${source} · Updated: ${updatedAt}</div>
+          </div>
+          <div class="allocation-controls fx-controls">
+            <input type="number" step="0.0001" min="0.0001" value="${rate > 0 ? rate : ''}" data-fx-rate data-from="${pair.from}" data-to="${pair.to}">
+            <button class="btn secondary" data-fx-save data-from="${pair.from}" data-to="${pair.to}">Save</button>
+          </div>
+        </div>
+      `;
+    }).join('');
+
+    const exchangeSection = `
+      <div class="card">
+        <h3>Exchange Rates</h3>
+        <div class="section-sub">Maintain USD/HKD conversion rates to CNY for total assets.</div>
+        <div class="actions" style="margin-bottom: 12px;">
+          <button class="btn" id="refresh-exchange-rates" type="button">Fetch Online</button>
+        </div>
+        <div class="list">${exchangeRows}</div>
       </div>
     `;
 
@@ -1741,6 +1876,11 @@ async function renderSettings() {
         content: `<div class="grid two">${accountsSection}</div>`,
       },
       {
+        key: 'exchange',
+        label: 'Exchange Rates',
+        content: `<div class="grid two">${exchangeSection}</div>`,
+      },
+      {
         key: 'assets',
         label: 'Asset Types',
         content: `<div class="grid two">${assetSection}</div>`,
@@ -1779,7 +1919,7 @@ async function renderSettings() {
 
     view.innerHTML = `
       <div class="section-title">Settings</div>
-      <div class="section-sub">Accounts, asset types, allocation ranges, storage, and API connection.</div>
+      <div class="section-sub">Accounts, FX rates, asset types, allocation ranges, storage, and API connection.</div>
       <div class="tab-bar" role="tablist">${tabButtons}</div>
       ${panels}
     `;
@@ -1995,6 +2135,64 @@ function bindSettingsActions() {
       }
     });
   });
+
+  view.querySelectorAll('button[data-fx-save]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const fromCurrency = btn.dataset.from;
+      const toCurrency = btn.dataset.to;
+      const input = view.querySelector(`input[data-fx-rate][data-from="${fromCurrency}"][data-to="${toCurrency}"]`);
+      if (!input) {
+        return;
+      }
+      const rate = Number(input.value || 0);
+      if (!(rate > 0)) {
+        showToast('Enter a valid rate');
+        return;
+      }
+      try {
+        await fetchJSON('/api/exchange-rates', {
+          method: 'PUT',
+          body: JSON.stringify({
+            from_currency: fromCurrency,
+            to_currency: toCurrency,
+            rate,
+          }),
+        });
+        showToast(`${fromCurrency}/${toCurrency} updated`);
+        renderSettings();
+      } catch (err) {
+        showToast('Exchange rate update failed');
+      }
+    });
+  });
+
+  const refreshExchangeRatesBtn = document.getElementById('refresh-exchange-rates');
+  if (refreshExchangeRatesBtn) {
+    refreshExchangeRatesBtn.addEventListener('click', async () => {
+      if (refreshExchangeRatesBtn.disabled) {
+        return;
+      }
+      refreshExchangeRatesBtn.disabled = true;
+      try {
+        const result = await fetchJSON('/api/exchange-rates/refresh', {
+          method: 'POST',
+          body: JSON.stringify({}),
+        });
+        const updated = Number(result && result.updated ? result.updated : 0);
+        const errors = Array.isArray(result && result.errors) ? result.errors : [];
+        if (errors.length) {
+          showToast(`Fetched ${updated}, ${errors.length} failed`);
+        } else {
+          showToast(`Fetched ${updated} rate(s)`);
+        }
+        renderSettings();
+      } catch (err) {
+        showToast('Fetch exchange rates failed');
+      } finally {
+        refreshExchangeRatesBtn.disabled = false;
+      }
+    });
+  }
 
   view.querySelectorAll('button[data-action="save-symbol"]').forEach((btn) => {
     btn.addEventListener('click', async () => {
