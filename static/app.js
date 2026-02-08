@@ -507,16 +507,15 @@ async function renderHoldings() {
       const totalPnLLabel = formatMoney(totalPnL, currency);
       const totalPnLPercentLabel = totalPnLPercent !== null ? `<span class="total-pnl-percent">${formatPercent(totalPnLPercent)}</span>` : '';
       const rows = symbols.map((s) => {
-        const pnlClass = s.unrealized_pnl !== null && s.unrealized_pnl !== undefined ? (s.unrealized_pnl >= 0 ? 'pill' : 'alert') : '';
+        const pnlClass = s.unrealized_pnl !== null && s.unrealized_pnl !== undefined ? (s.unrealized_pnl >= 0 ? 'pnl-positive' : 'pnl-negative') : '';
         const autoUpdate = s.auto_update !== 0;
         const updateDisabled = autoUpdate ? '' : 'disabled title="Auto sync off"';
-        const autoTag = autoUpdate ? '' : '<span class="tag other">Auto off</span>';
         const symbolLink = `#/transactions?symbol=${encodeURIComponent(s.symbol || '')}&account=${encodeURIComponent(s.account_id || '')}`;
         const symbolCost = (s.avg_cost || 0) * (s.total_shares || 0);
         const pnlPercent = symbolCost > 0 && s.unrealized_pnl !== null ? (s.unrealized_pnl / symbolCost) * 100 : null;
-        const pnlPercentLabel = pnlPercent !== null ? `<span class="pnl-percent section-sub">${formatPercent(pnlPercent)}</span>` : '';
+        const pnlPercentLabel = pnlPercent !== null ? `<span class="pnl-percent">${formatPercent(pnlPercent)}</span>` : '';
         const pnlMarkup = s.unrealized_pnl !== null && s.unrealized_pnl !== undefined
-          ? `<div class="pnl-cell"><span class="${pnlClass}" data-sensitive>${formatMoneyPlain(s.unrealized_pnl)}</span>${pnlPercentLabel}</div>`
+          ? `<div class="pnl-cell"><span class="pnl-value ${pnlClass}" data-sensitive>${formatMoneyPlain(s.unrealized_pnl)}</span>${pnlPercentLabel}</div>`
           : '<span class="section-sub">—</span>';
         const accountSort = (s.account_name || s.account_id || '').toString();
         return `
@@ -528,8 +527,8 @@ async function renderHoldings() {
             <td class="num" data-sensitive>${s.latest_price !== null ? formatMoneyPlain(s.latest_price) : '—'}</td>
             <td class="num" data-sensitive>${formatMoneyPlain(s.market_value)}</td>
             <td class="num">${pnlMarkup}</td>
-            <td>
-              <div class="actions">
+            <td class="actions-column">
+              <div class="actions holdings-actions">
                 <select class="btn trade-select" data-symbol="${escapeHtml(s.symbol)}" data-currency="${currency}" data-account="${escapeHtml(s.account_id || '')}" data-asset-type="${escapeHtml(s.asset_type || '')}">
                   <option value="">Trade</option>
                   <option value="BUY">Buy</option>
@@ -539,8 +538,7 @@ async function renderHoldings() {
                   <option value="TRANSFER_OUT">Transfer Out</option>
                 </select>
                 <button class="btn secondary" data-action="update" data-symbol="${escapeHtml(s.symbol)}" data-currency="${currency}" data-asset-type="${escapeHtml(s.asset_type || '')}" ${updateDisabled}>Update</button>
-                <button class="btn" data-action="manual" data-symbol="${escapeHtml(s.symbol)}" data-currency="${currency}">Manual</button>
-                ${autoTag}
+                <button class="btn tertiary" data-action="manual" data-symbol="${escapeHtml(s.symbol)}" data-currency="${currency}">Manual</button>
               </div>
             </td>
           </tr>
@@ -549,7 +547,7 @@ async function renderHoldings() {
 
       return `
         <div class="tab-panel" data-holdings-panel="${currency}">
-          <div class="card">
+          <div class="card holdings-card">
             <div class="panel-head">
               <div class="panel-left">
                 <h3>${currency} Holdings</h3>
