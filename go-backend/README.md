@@ -38,6 +38,7 @@ Operational endpoints:
 - `POST /api/prices/update`
 - `POST /api/prices/manual`
 - `POST /api/prices/update-all`
+- `POST /api/ai/holdings-analysis`
 - `GET /api/accounts`
 - `POST /api/accounts`
 - `DELETE /api/accounts/{id}`
@@ -58,6 +59,10 @@ Operational endpoints:
 The SPA lives in the repo `static/` directory and calls the Go API. When running the server from `go-backend`, it auto-detects `../static` and serves it at `/`.
 
 If you open `static/index.html` directly (file or Capacitor), set the API base in Settings or pass `?api=http://127.0.0.1:8000`.
+
+The Holdings page includes an `AI Analyze` action that calls
+`/api/ai/holdings-analysis`. It accepts OpenAI-compatible `base_url`, `model`,
+and `api_key`, and returns structured analysis plus symbol-level suggestions.
 
 ## macOS build
 

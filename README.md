@@ -8,6 +8,7 @@ database and can be packaged for desktop or mobile wrappers.
 - Track accounts, holdings, and transactions
 - Update and manage security prices (multi-source fallback)
 - Portfolio allocation settings and history
+- AI holdings analysis and suggestions (OpenAI-compatible API)
 - Operation logs for audit and troubleshooting
 
 ## Project Layout
@@ -32,6 +33,8 @@ Notes:
   in Settings or pass `?api=http://127.0.0.1:8000`.
 - Create accounts and asset types, add transactions, update prices, and review
   holdings and portfolio history.
+- In Holdings view, use `AI Analyze` to generate AI-based portfolio insights and
+  symbol-level suggestions.
 
 ## Packaging & Installation
 

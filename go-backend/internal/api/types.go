@@ -34,6 +34,17 @@ type updateAllPricesPayload struct {
 	Currency string `json:"currency"`
 }
 
+type aiHoldingsAnalysisPayload struct {
+	BaseURL         string `json:"base_url"`
+	APIKey          string `json:"api_key"`
+	Model           string `json:"model"`
+	Currency        string `json:"currency"`
+	RiskProfile     string `json:"risk_profile"`
+	Horizon         string `json:"horizon"`
+	AdviceStyle     string `json:"advice_style"`
+	AllowNewSymbols *bool  `json:"allow_new_symbols"`
+}
+
 type addAccountPayload struct {
 	AccountID         string  `json:"account_id"`
 	AccountName       string  `json:"account_name"`

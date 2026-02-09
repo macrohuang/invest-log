@@ -790,6 +790,79 @@ select.btn.trade-select {
   font-size: 16px;
 }
 
+.ai-analysis-card {
+  margin-top: 14px;
+  border: 1px solid rgba(26, 115, 232, 0.22);
+  background: rgba(26, 115, 232, 0.03);
+}
+
+.ai-analysis-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.ai-analysis-head h4 {
+  margin: 0;
+  font-size: 16px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #1a73e8;
+}
+
+.ai-summary {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.ai-section {
+  margin-bottom: 10px;
+}
+
+.ai-section h5 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.ai-findings {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 4px;
+}
+
+.ai-recommendations {
+  display: grid;
+  gap: 8px;
+}
+
+.ai-rec-item {
+  padding: 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid rgba(29, 31, 27, 0.08);
+}
+
+.ai-rec-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 6px;
+}
+
+.ai-rec-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
 .metric-value-group {
   display: flex;
   align-items: baseline;

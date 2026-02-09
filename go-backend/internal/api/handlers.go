@@ -190,6 +190,41 @@ func (h *handler) updateAllPrices(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"updated": count, "errors": errors})
 }
 
+func (h *handler) analyzeHoldingsWithAI(w http.ResponseWriter, r *http.Request) {
+	var payload aiHoldingsAnalysisPayload
+	if err := decodeJSON(r, &payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	allowNewSymbols := true
+	if payload.AllowNewSymbols != nil {
+		allowNewSymbols = *payload.AllowNewSymbols
+	}
+
+	result, err := h.core.AnalyzeHoldings(investlog.HoldingsAnalysisRequest{
+		BaseURL:         payload.BaseURL,
+		APIKey:          payload.APIKey,
+		Model:           payload.Model,
+		Currency:        payload.Currency,
+		RiskProfile:     payload.RiskProfile,
+		Horizon:         payload.Horizon,
+		AdviceStyle:     payload.AdviceStyle,
+		AllowNewSymbols: allowNewSymbols,
+	})
+	if err != nil {
+		h.logger.Error("ai holdings analysis failed",
+			"currency", payload.Currency,
+			"model", payload.Model,
+			"base_url", payload.BaseURL,
+			"err", err,
+		)
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (h *handler) getAccounts(w http.ResponseWriter, r *http.Request) {
 	result, err := h.core.GetAccounts()
 	if err != nil {
