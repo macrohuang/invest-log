@@ -93,3 +93,25 @@ xcodebuild -project ios/App/App.xcodeproj \
 Alternative native path:
 - The Go backend exposes a gomobile wrapper in `go-backend/pkg/mobile`.
   See `go-backend/README.md` for building an XCFramework for a native iPad app.
+
+## Git Large File Guard
+
+To prevent large build artifacts from entering Git history again, this repo
+includes a local `pre-commit` hook.
+
+Install once per clone:
+```bash
+scripts/install_git_hooks.sh
+```
+
+What it blocks by default:
+- Staged files larger than `20MB`
+- Staged paths under build/output folders such as:
+  `node_modules/`, `output/`, `src-tauri/target/`, `src-tauri/binaries/`,
+  `build/`, `dist/`, `backend-dist/`, `logs/`, `__pycache__/`, `.qoder/repowiki/`
+
+Optional:
+- Change max file size for current shell:
+  ```bash
+  MAX_FILE_SIZE_MB=10 git commit -m "your message"
+  ```

@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+max_file_size_mb="${MAX_FILE_SIZE_MB:-20}"
+if ! [[ "$max_file_size_mb" =~ ^[0-9]+$ ]]; then
+  echo "MAX_FILE_SIZE_MB must be an integer." >&2
+  exit 1
+fi
+
+max_bytes=$((max_file_size_mb * 1024 * 1024))
+blocked_paths_regex='^(invest-log-backend$|node_modules/|output/|logs/|build/|dist/|backend-dist/|src-tauri/target/|src-tauri/binaries/|__pycache__/|\.qoder/repowiki/)'
+blocked=0
+
+while IFS= read -r -d '' path; do
+  if [[ "$path" =~ $blocked_paths_regex ]]; then
+    echo "Blocked path staged: $path" >&2
+    blocked=1
+    continue
+  fi
+
+  file_size=$(git cat-file -s ":$path" 2>/dev/null || echo 0)
+  if (( file_size > max_bytes )); then
+    echo "File too large: $path (${file_size} bytes, limit ${max_bytes} bytes)" >&2
+    blocked=1
+  fi
+done < <(git diff --cached --name-only --diff-filter=ACM -z)
+
+if (( blocked )); then
+  echo "Commit blocked. Remove staged large/build files first." >&2
+  echo "Tip: git rm -r --cached <path>" >&2
+  exit 1
+fi

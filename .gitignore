@@ -6,4 +6,10 @@ build/**
 dist/**
 backend-dist/**
 node_modules/**
+src-tauri/target/**
+src-tauri/binaries/**
+__pycache__/**
+.qoder/repowiki/**
+invest-log-backend
 go-backend/coverage.out
+*.pyc
