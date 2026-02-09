@@ -993,6 +993,39 @@ select.btn.trade-select {
   font-family: "Manrope", "Segoe UI", sans-serif;
 }
 
+.symbols-filter-row {
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+.symbols-filter-actions {
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.symbols-empty-row td {
+  text-align: center;
+  color: var(--muted);
+  padding: 18px 10px;
+}
+
+.table mark {
+  background: rgba(240, 108, 59, 0.22);
+  color: inherit;
+  border-radius: 4px;
+  padding: 0 2px;
+}
+
+.symbol-match-hit {
+  color: var(--accent-strong);
+}
+
+.table .table-input.filter-hit,
+.table .table-select.filter-hit {
+  border-color: rgba(240, 108, 59, 0.7);
+  box-shadow: 0 0 0 2px rgba(240, 108, 59, 0.15);
+}
+
 .toggle {
   display: inline-flex;
   align-items: center;

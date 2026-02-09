@@ -1,7 +1,10 @@
 const state = {
   apiBase: '',
   privacy: false,
+  aiAnalysisByCurrency: {},
 };
+
+const aiAnalysisSettingsKey = 'aiHoldingsAnalysisSettings';
 
 const view = document.getElementById('view');
 const toastEl = document.getElementById('toast');
@@ -110,6 +113,115 @@ function getRouteQuery() {
     return new URLSearchParams();
   }
   return new URLSearchParams(hash.slice(queryIndex + 1));
+}
+
+function loadAIAnalysisSettings() {
+  try {
+    const raw = localStorage.getItem(aiAnalysisSettingsKey);
+    if (!raw) {
+      return {
+        baseUrl: 'https://api.openai.com/v1',
+        model: '',
+        apiKey: '',
+        riskProfile: 'balanced',
+        horizon: 'medium',
+        adviceStyle: 'balanced',
+        allowNewSymbols: true,
+      };
+    }
+    const parsed = JSON.parse(raw);
+    return {
+      baseUrl: parsed.baseUrl || 'https://api.openai.com/v1',
+      model: parsed.model || '',
+      apiKey: parsed.apiKey || '',
+      riskProfile: parsed.riskProfile || 'balanced',
+      horizon: parsed.horizon || 'medium',
+      adviceStyle: parsed.adviceStyle || 'balanced',
+      allowNewSymbols: parsed.allowNewSymbols !== false,
+    };
+  } catch (err) {
+    return {
+      baseUrl: 'https://api.openai.com/v1',
+      model: '',
+      apiKey: '',
+      riskProfile: 'balanced',
+      horizon: 'medium',
+      adviceStyle: 'balanced',
+      allowNewSymbols: true,
+    };
+  }
+}
+
+function saveAIAnalysisSettings(settings) {
+  localStorage.setItem(aiAnalysisSettingsKey, JSON.stringify(settings));
+}
+
+function formatActionLabel(action) {
+  const normalized = String(action || '').toLowerCase();
+  if (normalized === 'increase') return 'Increase';
+  if (normalized === 'reduce') return 'Reduce';
+  if (normalized === 'add') return 'Add';
+  return 'Hold';
+}
+
+function renderAIAnalysisCard(result, currency) {
+  if (!result) {
+    return '';
+  }
+  const findings = Array.isArray(result.key_findings) ? result.key_findings : [];
+  const recommendations = Array.isArray(result.recommendations) ? result.recommendations : [];
+  const findingsMarkup = findings.length
+    ? `<ul class="ai-findings">${findings.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`
+    : '<div class="section-sub">No key findings.</div>';
+  const recommendationMarkup = recommendations.length
+    ? `<div class="ai-recommendations">${recommendations.map((item) => {
+      const symbol = item.symbol ? `<strong>${escapeHtml(item.symbol)}</strong>` : '<strong>Portfolio</strong>';
+      const action = formatActionLabel(item.action);
+      const theory = escapeHtml(item.theory_tag || 'N/A');
+      const rationale = escapeHtml(item.rationale || 'No rationale');
+      const targetWeight = item.target_weight ? `<span class="section-sub">Target: ${escapeHtml(item.target_weight)}</span>` : '';
+      const priority = item.priority ? `<span class="section-sub">Priority: ${escapeHtml(item.priority)}</span>` : '';
+      return `
+        <div class="ai-rec-item">
+          <div class="ai-rec-head">
+            ${symbol}
+            <span class="tag other">${escapeHtml(action)}</span>
+            <span class="tag other">${theory}</span>
+          </div>
+          <div class="section-sub">${rationale}</div>
+          <div class="ai-rec-meta">${targetWeight}${priority}</div>
+        </div>
+      `;
+    }).join('')}</div>`
+    : '<div class="section-sub">No recommendations returned.</div>';
+
+  const generatedAt = result.generated_at ? escapeHtml(String(result.generated_at)) : '—';
+  const model = result.model ? escapeHtml(String(result.model)) : '—';
+  const riskLevel = result.risk_level ? escapeHtml(String(result.risk_level)) : 'unknown';
+  const summary = result.overall_summary ? escapeHtml(String(result.overall_summary)) : '—';
+  const disclaimer = result.disclaimer ? escapeHtml(String(result.disclaimer)) : 'For reference only.';
+
+  return `
+    <div class="card ai-analysis-card" data-ai-analysis-card="${currency}">
+      <div class="ai-analysis-head">
+        <h4>AI Analysis</h4>
+        <div class="section-sub">Model: ${model} · Generated: ${generatedAt}</div>
+      </div>
+      <div class="ai-summary">
+        <div><strong>Risk Level:</strong> ${riskLevel}</div>
+        <div class="section-sub">${summary}</div>
+      </div>
+      <div class="ai-section">
+        <h5>Key Findings</h5>
+        ${findingsMarkup}
+      </div>
+      <div class="ai-section">
+        <h5>Recommendations</h5>
+        ${recommendationMarkup}
+      </div>
+      <div class="section-sub">${disclaimer}</div>
+    </div>
+  `;
 }
 
 function renderRoute() {
@@ -230,6 +342,37 @@ function escapeHtml(value) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
+}
+
+function escapeRegExp(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function highlightMatchText(text, keyword) {
+  const source = String(text || '');
+  const needle = String(keyword || '').trim();
+  if (!needle) {
+    return escapeHtml(source);
+  }
+  const regex = new RegExp(escapeRegExp(needle), 'ig');
+  let lastIndex = 0;
+  let output = '';
+  let matched = false;
+  let hit = regex.exec(source);
+  while (hit) {
+    matched = true;
+    const start = hit.index;
+    const end = start + hit[0].length;
+    output += escapeHtml(source.slice(lastIndex, start));
+    output += `<mark>${escapeHtml(source.slice(start, end))}</mark>`;
+    lastIndex = end;
+    hit = regex.exec(source);
+  }
+  if (!matched) {
+    return escapeHtml(source);
+  }
+  output += escapeHtml(source.slice(lastIndex));
+  return output;
 }
 
 function formatValue(value, currency) {
@@ -498,6 +641,7 @@ async function renderHoldings() {
       const currencyData = data[currency] || {};
       const symbols = currencyData.symbols || [];
       const canUpdateAll = symbols.some((s) => s.auto_update !== 0);
+      const aiResult = state.aiAnalysisByCurrency[currency] || null;
       const totalMarketValue = Number(currencyData.total_market_value ?? 0);
       const totalCost = Number(currencyData.total_cost ?? 0);
       const totalPnL = Number(currencyData.total_pnl ?? (totalMarketValue - totalCost));
@@ -567,6 +711,7 @@ async function renderHoldings() {
               </div>
               <div class="actions">
                 <button class="btn secondary" data-action="update-all" data-currency="${currency}" ${canUpdateAll ? '' : 'disabled title="No auto-sync symbols"'}>Update all</button>
+                <button class="btn tertiary" data-action="ai-analyze" data-currency="${currency}">AI Analyze</button>
               </div>
             </div>
             <table class="table" data-holdings-table>
@@ -584,6 +729,7 @@ async function renderHoldings() {
               </thead>
               <tbody>${rows}</tbody>
             </table>
+            ${renderAIAnalysisCard(aiResult, currency)}
           </div>
         </div>
       `;
@@ -731,12 +877,84 @@ function bindHoldingsActions() {
           });
           showToast(`${symbol} saved`);
         }
+        if (action === 'ai-analyze') {
+          btn.disabled = true;
+          btn.textContent = 'Analyzing...';
+          try {
+            const analyzed = await runAIHoldingsAnalysis(currency);
+            if (analyzed) {
+              showToast(`${currency} analysis ready`);
+            }
+          } finally {
+            btn.disabled = false;
+            btn.textContent = 'AI Analyze';
+          }
+        }
         renderHoldings();
       } catch (err) {
-        showToast('Price update failed');
+        if (action === 'ai-analyze') {
+          let message = 'AI analysis failed';
+          if (err && err.message) {
+            const raw = String(err.message);
+            try {
+              const parsed = JSON.parse(raw);
+              if (parsed && parsed.error) {
+                message = String(parsed.error);
+              }
+            } catch (parseErr) {
+              message = raw;
+            }
+            const firstLine = message.split('\n')[0];
+            const trimmed = firstLine.length > 140 ? `${firstLine.slice(0, 137)}...` : firstLine;
+            message = trimmed;
+          }
+          showToast(message);
+        } else {
+          showToast('Price update failed');
+        }
       }
     });
   });
+}
+
+async function runAIHoldingsAnalysis(currency) {
+  const settings = loadAIAnalysisSettings();
+
+  const normalizedSettings = {
+    baseUrl: (settings.baseUrl || 'https://api.openai.com/v1').trim(),
+    model: (settings.model || '').trim(),
+    apiKey: (settings.apiKey || '').trim(),
+    riskProfile: settings.riskProfile || 'balanced',
+    horizon: settings.horizon || 'medium',
+    adviceStyle: settings.adviceStyle || 'balanced',
+    allowNewSymbols: settings.allowNewSymbols !== false,
+  };
+
+  if (!normalizedSettings.model || !normalizedSettings.apiKey) {
+    localStorage.setItem('activeSettingsTab', 'api');
+    window.location.hash = '#/settings';
+    showToast('Set AI model and API Key in Settings > API');
+    return false;
+  }
+
+  saveAIAnalysisSettings(normalizedSettings);
+
+  const result = await fetchJSON('/api/ai/holdings-analysis', {
+    method: 'POST',
+    body: JSON.stringify({
+      base_url: normalizedSettings.baseUrl,
+      api_key: normalizedSettings.apiKey,
+      model: normalizedSettings.model,
+      currency,
+      risk_profile: normalizedSettings.riskProfile,
+      horizon: normalizedSettings.horizon,
+      advice_style: normalizedSettings.adviceStyle,
+      allow_new_symbols: normalizedSettings.allowNewSymbols,
+    }),
+  });
+
+  state.aiAnalysisByCurrency[currency] = result;
+  return true;
 }
 
 async function renderTransactions() {
@@ -1588,6 +1806,69 @@ async function renderSettings() {
       </div>
     `;
 
+    const aiSettings = loadAIAnalysisSettings();
+    const aiAnalysisSection = `
+      <div class="card">
+        <h3>AI Analysis</h3>
+        <div class="section-sub">OpenAI-compatible configuration for holdings analysis.</div>
+        <div class="form">
+          <div class="form-row">
+            <div class="field">
+              <label>AI Base URL</label>
+              <input id="ai-base-url" type="text" placeholder="https://api.openai.com/v1" value="${escapeHtml(aiSettings.baseUrl || 'https://api.openai.com/v1')}">
+            </div>
+            <div class="field">
+              <label>Model</label>
+              <input id="ai-model" type="text" placeholder="gpt-4o-mini" value="${escapeHtml(aiSettings.model || '')}">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="field">
+              <label>API Key</label>
+              <input id="ai-api-key" type="password" autocomplete="off" placeholder="sk-..." value="${escapeHtml(aiSettings.apiKey || '')}">
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="field">
+              <label>Risk Profile</label>
+              <select id="ai-risk-profile">
+                <option value="conservative" ${aiSettings.riskProfile === 'conservative' ? 'selected' : ''}>Conservative</option>
+                <option value="balanced" ${aiSettings.riskProfile === 'balanced' ? 'selected' : ''}>Balanced</option>
+                <option value="aggressive" ${aiSettings.riskProfile === 'aggressive' ? 'selected' : ''}>Aggressive</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Horizon</label>
+              <select id="ai-horizon">
+                <option value="short" ${aiSettings.horizon === 'short' ? 'selected' : ''}>Short</option>
+                <option value="medium" ${aiSettings.horizon === 'medium' ? 'selected' : ''}>Medium</option>
+                <option value="long" ${aiSettings.horizon === 'long' ? 'selected' : ''}>Long</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>Advice Style</label>
+              <select id="ai-advice-style">
+                <option value="conservative" ${aiSettings.adviceStyle === 'conservative' ? 'selected' : ''}>Conservative</option>
+                <option value="balanced" ${aiSettings.adviceStyle === 'balanced' ? 'selected' : ''}>Balanced</option>
+                <option value="aggressive" ${aiSettings.adviceStyle === 'aggressive' ? 'selected' : ''}>Aggressive</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="field">
+              <label>
+                <input id="ai-allow-new-symbols" type="checkbox" ${aiSettings.allowNewSymbols !== false ? 'checked' : ''}>
+                Allow new symbols in suggestions
+              </label>
+            </div>
+            <div class="actions">
+              <button class="btn" id="save-ai-analysis" type="button">Save AI Settings</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
     const exchangeRateMap = {};
     (exchangeRates || []).forEach((item) => {
       if (!item) {
@@ -1747,8 +2028,10 @@ async function renderSettings() {
     }).join('');
 
     const symbolRows = (symbols || []).map((sym) => {
-      const symbol = escapeHtml(sym.symbol);
-      const nameValue = sym.name ? escapeHtml(sym.name) : '';
+      const symbolRaw = String(sym.symbol || '');
+      const symbol = escapeHtml(symbolRaw);
+      const nameRaw = sym.name ? String(sym.name) : '';
+      const nameValue = nameRaw ? escapeHtml(nameRaw) : '';
       const symAsset = sym.asset_type ? String(sym.asset_type).toLowerCase() : '';
       const assetOptions = assetTypes.map((a) => {
         const assetCode = String(a.code).toLowerCase();
@@ -1757,8 +2040,8 @@ async function renderSettings() {
       }).join('');
       const autoChecked = sym.auto_update ? 'checked' : '';
       return `
-        <tr>
-          <td><strong>${symbol}</strong></td>
+        <tr data-symbol-row data-symbol-raw="${symbol}">
+          <td><strong data-symbol-text>${symbol}</strong></td>
           <td><input class="table-input" type="text" value="${nameValue}" data-symbol-field="name" data-symbol="${symbol}"></td>
           <td>
             <select class="table-select" data-symbol-field="asset" data-symbol="${symbol}">
@@ -1778,12 +2061,23 @@ async function renderSettings() {
       `;
     }).join('');
 
+    const symbolCount = (symbols || []).length;
     const symbolsSection = `
       <div class="card span-2">
         <h3>Symbols</h3>
         <div class="section-sub">Update display names, asset types, and auto sync status.</div>
         ${symbolRows
-          ? `<table class="table">
+          ? `<div class="form-row symbols-filter-row">
+              <div class="field">
+                <label for="symbol-filter-input">Quick Filter</label>
+                <input id="symbol-filter-input" type="search" placeholder="Search symbol, name, or asset type" autocomplete="off">
+              </div>
+              <div class="actions symbols-filter-actions">
+                <button class="btn secondary" id="symbol-filter-clear" type="button" disabled>Clear</button>
+                <span class="tag other" id="symbol-filter-count">Total ${symbolCount} symbol(s)</span>
+              </div>
+            </div>
+            <table class="table">
               <thead>
                 <tr>
                   <th>Symbol</th>
@@ -1793,7 +2087,12 @@ async function renderSettings() {
                   <th>Action</th>
                 </tr>
               </thead>
-              <tbody>${symbolRows}</tbody>
+              <tbody data-symbols-table-body>
+                ${symbolRows}
+                <tr class="symbols-empty-row" data-symbols-empty-row style="display:none;">
+                  <td colspan="5">No matching symbols.</td>
+                </tr>
+              </tbody>
             </table>`
           : '<div class="section-sub">No symbols found yet.</div>'}
       </div>
@@ -1901,7 +2200,7 @@ async function renderSettings() {
       {
         key: 'api',
         label: 'API',
-        content: `<div class="grid two">${apiSection}</div>`,
+        content: `<div class="grid two">${apiSection}${aiAnalysisSection}</div>`,
       },
     ];
 
@@ -1974,6 +2273,36 @@ function bindSettingsActions() {
       }
       updateConnectionStatus();
       showToast('API base saved');
+    });
+  }
+
+  const saveAIAnalysis = document.getElementById('save-ai-analysis');
+  if (saveAIAnalysis) {
+    saveAIAnalysis.addEventListener('click', () => {
+      const baseUrlInput = document.getElementById('ai-base-url');
+      const modelInput = document.getElementById('ai-model');
+      const apiKeyInput = document.getElementById('ai-api-key');
+      const riskProfileInput = document.getElementById('ai-risk-profile');
+      const horizonInput = document.getElementById('ai-horizon');
+      const adviceStyleInput = document.getElementById('ai-advice-style');
+      const allowNewSymbolsInput = document.getElementById('ai-allow-new-symbols');
+
+      const settings = {
+        baseUrl: trimTrailingSlash(baseUrlInput && baseUrlInput.value ? baseUrlInput.value.trim() : '') || 'https://api.openai.com/v1',
+        model: modelInput && modelInput.value ? modelInput.value.trim() : '',
+        apiKey: apiKeyInput && apiKeyInput.value ? apiKeyInput.value.trim() : '',
+        riskProfile: riskProfileInput && riskProfileInput.value ? riskProfileInput.value : 'balanced',
+        horizon: horizonInput && horizonInput.value ? horizonInput.value : 'medium',
+        adviceStyle: adviceStyleInput && adviceStyleInput.value ? adviceStyleInput.value : 'balanced',
+        allowNewSymbols: allowNewSymbolsInput ? !!allowNewSymbolsInput.checked : true,
+      };
+
+      saveAIAnalysisSettings(settings);
+      if (!settings.model || !settings.apiKey) {
+        showToast('Saved. Set model and API key before running analysis');
+      } else {
+        showToast('AI settings saved');
+      }
     });
   }
 
@@ -2190,6 +2519,90 @@ function bindSettingsActions() {
         refreshExchangeRatesBtn.disabled = false;
       }
     });
+  }
+
+  const symbolFilterInput = document.getElementById('symbol-filter-input');
+  const symbolFilterClear = document.getElementById('symbol-filter-clear');
+  const symbolFilterCount = document.getElementById('symbol-filter-count');
+  const symbolsTableBody = view.querySelector('[data-symbols-table-body]');
+  const symbolsEmptyRow = view.querySelector('[data-symbols-empty-row]');
+
+  if (symbolFilterInput && symbolsTableBody) {
+    const symbolTableRows = Array.from(symbolsTableBody.querySelectorAll('tr[data-symbol-row]'));
+    const totalCount = symbolTableRows.length;
+
+    const applySymbolFilter = () => {
+      const keyword = symbolFilterInput.value.trim().toLowerCase();
+      let visibleCount = 0;
+
+      symbolTableRows.forEach((row) => {
+        const symbolRaw = String(row.dataset.symbolRaw || '');
+        const symbolEl = row.querySelector('[data-symbol-text]');
+        const nameInput = row.querySelector('input[data-symbol-field="name"]');
+        const assetSelect = row.querySelector('select[data-symbol-field="asset"]');
+        const nameText = nameInput ? String(nameInput.value || '') : '';
+        const assetValue = assetSelect ? String(assetSelect.value || '') : '';
+        const assetLabel = assetSelect && assetSelect.selectedOptions && assetSelect.selectedOptions[0]
+          ? String(assetSelect.selectedOptions[0].textContent || '')
+          : '';
+        const rowFilterText = `${symbolRaw} ${nameText} ${assetValue} ${assetLabel}`.toLowerCase();
+        const symbolHit = keyword && symbolRaw.toLowerCase().includes(keyword);
+        const nameHit = keyword && nameText.toLowerCase().includes(keyword);
+        const assetHit = keyword && `${assetValue} ${assetLabel}`.toLowerCase().includes(keyword);
+        const matched = !keyword || rowFilterText.includes(keyword);
+
+        if (symbolEl) {
+          symbolEl.innerHTML = keyword ? highlightMatchText(symbolRaw, keyword) : escapeHtml(symbolRaw);
+          symbolEl.classList.toggle('symbol-match-hit', !!symbolHit);
+        }
+        if (nameInput) {
+          nameInput.classList.toggle('filter-hit', !!nameHit);
+        }
+        if (assetSelect) {
+          assetSelect.classList.toggle('filter-hit', !!assetHit);
+        }
+
+        row.style.display = matched ? '' : 'none';
+        if (matched) {
+          visibleCount += 1;
+        }
+      });
+
+      if (symbolFilterCount) {
+        symbolFilterCount.textContent = keyword
+          ? `Showing ${visibleCount} / ${totalCount}`
+          : `Total ${totalCount} symbol(s)`;
+      }
+      if (symbolsEmptyRow) {
+        symbolsEmptyRow.style.display = visibleCount === 0 ? '' : 'none';
+      }
+      if (symbolFilterClear) {
+        symbolFilterClear.disabled = keyword.length === 0;
+      }
+    };
+
+    symbolFilterInput.addEventListener('input', applySymbolFilter);
+
+    symbolsTableBody.addEventListener('input', (event) => {
+      if (event.target && event.target.matches('input[data-symbol-field="name"]')) {
+        applySymbolFilter();
+      }
+    });
+    symbolsTableBody.addEventListener('change', (event) => {
+      if (event.target && event.target.matches('select[data-symbol-field="asset"]')) {
+        applySymbolFilter();
+      }
+    });
+
+    if (symbolFilterClear) {
+      symbolFilterClear.addEventListener('click', () => {
+        symbolFilterInput.value = '';
+        applySymbolFilter();
+        symbolFilterInput.focus();
+      });
+    }
+
+    applySymbolFilter();
   }
 
   view.querySelectorAll('button[data-action="save-symbol"]').forEach((btn) => {

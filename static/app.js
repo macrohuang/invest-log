@@ -344,6 +344,37 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
+function escapeRegExp(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function highlightMatchText(text, keyword) {
+  const source = String(text || '');
+  const needle = String(keyword || '').trim();
+  if (!needle) {
+    return escapeHtml(source);
+  }
+  const regex = new RegExp(escapeRegExp(needle), 'ig');
+  let lastIndex = 0;
+  let output = '';
+  let matched = false;
+  let hit = regex.exec(source);
+  while (hit) {
+    matched = true;
+    const start = hit.index;
+    const end = start + hit[0].length;
+    output += escapeHtml(source.slice(lastIndex, start));
+    output += `<mark>${escapeHtml(source.slice(start, end))}</mark>`;
+    lastIndex = end;
+    hit = regex.exec(source);
+  }
+  if (!matched) {
+    return escapeHtml(source);
+  }
+  output += escapeHtml(source.slice(lastIndex));
+  return output;
+}
+
 function formatValue(value, currency) {
   if (currency) {
     return formatMoney(value, currency);
@@ -1997,8 +2028,10 @@ async function renderSettings() {
     }).join('');
 
     const symbolRows = (symbols || []).map((sym) => {
-      const symbol = escapeHtml(sym.symbol);
-      const nameValue = sym.name ? escapeHtml(sym.name) : '';
+      const symbolRaw = String(sym.symbol || '');
+      const symbol = escapeHtml(symbolRaw);
+      const nameRaw = sym.name ? String(sym.name) : '';
+      const nameValue = nameRaw ? escapeHtml(nameRaw) : '';
       const symAsset = sym.asset_type ? String(sym.asset_type).toLowerCase() : '';
       const assetOptions = assetTypes.map((a) => {
         const assetCode = String(a.code).toLowerCase();
@@ -2007,8 +2040,8 @@ async function renderSettings() {
       }).join('');
       const autoChecked = sym.auto_update ? 'checked' : '';
       return `
-        <tr>
-          <td><strong>${symbol}</strong></td>
+        <tr data-symbol-row data-symbol-raw="${symbol}">
+          <td><strong data-symbol-text>${symbol}</strong></td>
           <td><input class="table-input" type="text" value="${nameValue}" data-symbol-field="name" data-symbol="${symbol}"></td>
           <td>
             <select class="table-select" data-symbol-field="asset" data-symbol="${symbol}">
@@ -2028,12 +2061,23 @@ async function renderSettings() {
       `;
     }).join('');
 
+    const symbolCount = (symbols || []).length;
     const symbolsSection = `
       <div class="card span-2">
         <h3>Symbols</h3>
         <div class="section-sub">Update display names, asset types, and auto sync status.</div>
         ${symbolRows
-          ? `<table class="table">
+          ? `<div class="form-row symbols-filter-row">
+              <div class="field">
+                <label for="symbol-filter-input">Quick Filter</label>
+                <input id="symbol-filter-input" type="search" placeholder="Search symbol, name, or asset type" autocomplete="off">
+              </div>
+              <div class="actions symbols-filter-actions">
+                <button class="btn secondary" id="symbol-filter-clear" type="button" disabled>Clear</button>
+                <span class="tag other" id="symbol-filter-count">Total ${symbolCount} symbol(s)</span>
+              </div>
+            </div>
+            <table class="table">
               <thead>
                 <tr>
                   <th>Symbol</th>
@@ -2043,7 +2087,12 @@ async function renderSettings() {
                   <th>Action</th>
                 </tr>
               </thead>
-              <tbody>${symbolRows}</tbody>
+              <tbody data-symbols-table-body>
+                ${symbolRows}
+                <tr class="symbols-empty-row" data-symbols-empty-row style="display:none;">
+                  <td colspan="5">No matching symbols.</td>
+                </tr>
+              </tbody>
             </table>`
           : '<div class="section-sub">No symbols found yet.</div>'}
       </div>
@@ -2470,6 +2519,90 @@ function bindSettingsActions() {
         refreshExchangeRatesBtn.disabled = false;
       }
     });
+  }
+
+  const symbolFilterInput = document.getElementById('symbol-filter-input');
+  const symbolFilterClear = document.getElementById('symbol-filter-clear');
+  const symbolFilterCount = document.getElementById('symbol-filter-count');
+  const symbolsTableBody = view.querySelector('[data-symbols-table-body]');
+  const symbolsEmptyRow = view.querySelector('[data-symbols-empty-row]');
+
+  if (symbolFilterInput && symbolsTableBody) {
+    const symbolTableRows = Array.from(symbolsTableBody.querySelectorAll('tr[data-symbol-row]'));
+    const totalCount = symbolTableRows.length;
+
+    const applySymbolFilter = () => {
+      const keyword = symbolFilterInput.value.trim().toLowerCase();
+      let visibleCount = 0;
+
+      symbolTableRows.forEach((row) => {
+        const symbolRaw = String(row.dataset.symbolRaw || '');
+        const symbolEl = row.querySelector('[data-symbol-text]');
+        const nameInput = row.querySelector('input[data-symbol-field="name"]');
+        const assetSelect = row.querySelector('select[data-symbol-field="asset"]');
+        const nameText = nameInput ? String(nameInput.value || '') : '';
+        const assetValue = assetSelect ? String(assetSelect.value || '') : '';
+        const assetLabel = assetSelect && assetSelect.selectedOptions && assetSelect.selectedOptions[0]
+          ? String(assetSelect.selectedOptions[0].textContent || '')
+          : '';
+        const rowFilterText = `${symbolRaw} ${nameText} ${assetValue} ${assetLabel}`.toLowerCase();
+        const symbolHit = keyword && symbolRaw.toLowerCase().includes(keyword);
+        const nameHit = keyword && nameText.toLowerCase().includes(keyword);
+        const assetHit = keyword && `${assetValue} ${assetLabel}`.toLowerCase().includes(keyword);
+        const matched = !keyword || rowFilterText.includes(keyword);
+
+        if (symbolEl) {
+          symbolEl.innerHTML = keyword ? highlightMatchText(symbolRaw, keyword) : escapeHtml(symbolRaw);
+          symbolEl.classList.toggle('symbol-match-hit', !!symbolHit);
+        }
+        if (nameInput) {
+          nameInput.classList.toggle('filter-hit', !!nameHit);
+        }
+        if (assetSelect) {
+          assetSelect.classList.toggle('filter-hit', !!assetHit);
+        }
+
+        row.style.display = matched ? '' : 'none';
+        if (matched) {
+          visibleCount += 1;
+        }
+      });
+
+      if (symbolFilterCount) {
+        symbolFilterCount.textContent = keyword
+          ? `Showing ${visibleCount} / ${totalCount}`
+          : `Total ${totalCount} symbol(s)`;
+      }
+      if (symbolsEmptyRow) {
+        symbolsEmptyRow.style.display = visibleCount === 0 ? '' : 'none';
+      }
+      if (symbolFilterClear) {
+        symbolFilterClear.disabled = keyword.length === 0;
+      }
+    };
+
+    symbolFilterInput.addEventListener('input', applySymbolFilter);
+
+    symbolsTableBody.addEventListener('input', (event) => {
+      if (event.target && event.target.matches('input[data-symbol-field="name"]')) {
+        applySymbolFilter();
+      }
+    });
+    symbolsTableBody.addEventListener('change', (event) => {
+      if (event.target && event.target.matches('select[data-symbol-field="asset"]')) {
+        applySymbolFilter();
+      }
+    });
+
+    if (symbolFilterClear) {
+      symbolFilterClear.addEventListener('click', () => {
+        symbolFilterInput.value = '';
+        applySymbolFilter();
+        symbolFilterInput.focus();
+      });
+    }
+
+    applySymbolFilter();
   }
 
   view.querySelectorAll('button[data-action="save-symbol"]').forEach((btn) => {
