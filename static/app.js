@@ -1267,6 +1267,235 @@ async function renderTransactions() {
   }
 }
 
+/**
+ * 按账户分组标的并计算汇总
+ * @param {Array} symbols - 标的列表
+ * @param {number} totalMarketValue - 该币种总市值
+ * @returns {Array} - 排序后的账户分组
+ */
+function groupSymbolsByAccount(symbols, totalMarketValue) {
+  const accountMap = new Map();
+
+  (symbols || []).forEach((s) => {
+    const accountId = s.account_id || 'unknown';
+    if (!accountMap.has(accountId)) {
+      accountMap.set(accountId, {
+        accountId,
+        accountName: s.account_name || accountId,
+        totalMarketValue: 0,
+        symbols: [],
+      });
+    }
+    const group = accountMap.get(accountId);
+    group.totalMarketValue += s.market_value || 0;
+    group.symbols.push({
+      symbol: s.symbol,
+      displayName: s.display_name || s.symbol,
+      marketValue: s.market_value || 0,
+      percent: s.percent || 0,
+      pnl: s.unrealized_pnl || 0,
+      pieKey: `${s.symbol}-${accountId}`,
+    });
+  });
+
+  // 排序：账户按市值降序，标的按占比降序
+  const groups = Array.from(accountMap.values());
+  groups.sort((a, b) => b.totalMarketValue - a.totalMarketValue);
+  groups.forEach((g) => {
+    g.percent = totalMarketValue > 0 ? (g.totalMarketValue / totalMarketValue) * 100 : 0;
+    g.symbols.sort((a, b) => b.percent - a.percent);
+  });
+
+  return groups.filter((g) => g.totalMarketValue > 0);
+}
+
+/**
+ * 渲染支持高亮的SVG环图
+ */
+function renderInteractivePieChart({ items, totalLabel, totalValue, currency, pieId }) {
+  const data = buildPieData(items);
+  if (!data) {
+    return '<div class="section-sub">No data</div>';
+  }
+
+  const size = 160;
+  const cx = size / 2;
+  const cy = size / 2;
+  const outerRadius = 70;
+  const innerRadius = 45;
+
+  const paths = data.segments.map((seg) => {
+    const startAngle = (seg.start / 100) * 360 - 90;
+    const endAngle = (seg.end / 100) * 360 - 90;
+    const largeArc = seg.end - seg.start > 50 ? 1 : 0;
+
+    const startRad = (startAngle * Math.PI) / 180;
+    const endRad = (endAngle * Math.PI) / 180;
+
+    const x1 = cx + outerRadius * Math.cos(startRad);
+    const y1 = cy + outerRadius * Math.sin(startRad);
+    const x2 = cx + outerRadius * Math.cos(endRad);
+    const y2 = cy + outerRadius * Math.sin(endRad);
+    const x3 = cx + innerRadius * Math.cos(endRad);
+    const y3 = cy + innerRadius * Math.sin(endRad);
+    const x4 = cx + innerRadius * Math.cos(startRad);
+    const y4 = cy + innerRadius * Math.sin(startRad);
+
+    const d = `M ${x1} ${y1} A ${outerRadius} ${outerRadius} 0 ${largeArc} 1 ${x2} ${y2} L ${x3} ${y3} A ${innerRadius} ${innerRadius} 0 ${largeArc} 0 ${x4} ${y4} Z`;
+
+    const segKey = seg.key || seg.label || '';
+    return `<path d="${d}" fill="${seg.color}"
+                  data-pie-id="${pieId}"
+                  data-symbol-key="${escapeHtml(segKey)}"
+                  data-label="${escapeHtml(seg.label)}"
+                  data-value="${seg.value || 0}"
+                  data-percent="${seg.percent || 0}"
+                  class="pie-sector"/>`;
+  }).join('');
+
+  const centerValue = totalValue !== undefined && totalValue !== null
+    ? formatValue(totalValue, currency)
+    : '';
+
+  return `
+    <div class="pie-svg-container">
+      <svg class="pie-svg" viewBox="0 0 ${size} ${size}" data-pie-id="${pieId}">
+        ${paths}
+      </svg>
+      <div class="pie-center-label">
+        ${totalLabel ? `<div class="pie-label">${escapeHtml(totalLabel)}</div>` : ''}
+        ${centerValue ? `<div class="pie-value" data-sensitive>${centerValue}</div>` : ''}
+      </div>
+      <div class="pie-tooltip" data-pie-id="${pieId}" style="display:none;"></div>
+    </div>
+  `;
+}
+
+/**
+ * 渲染账户分组列表
+ */
+function renderAccountGroupList(accountGroups, currency, pieId) {
+  if (!accountGroups || !accountGroups.length) {
+    return '<div class="section-sub">No holdings</div>';
+  }
+
+  return accountGroups.map((group, index) => {
+    const rows = group.symbols.map((s) => {
+      const pnlClass = s.pnl >= 0 ? 'positive' : 'negative';
+      return `
+        <div class="symbol-row" data-pie-id="${pieId}" data-symbol-key="${escapeHtml(s.pieKey)}">
+          <div class="symbol-info">
+            <span class="symbol-name">${escapeHtml(s.displayName)}</span>
+            <span class="symbol-code">${escapeHtml(s.symbol)}</span>
+          </div>
+          <div class="symbol-value num" data-sensitive>${formatMoneyPlain(s.marketValue)}</div>
+          <div class="symbol-percent num">${formatPercent(s.percent)}</div>
+          <div class="symbol-pnl num ${pnlClass}" data-sensitive>${formatMoneyPlain(s.pnl)}</div>
+        </div>
+      `;
+    }).join('');
+
+    return `
+      <div class="account-group ${index % 2 === 1 ? 'alt' : ''}">
+        <div class="account-header">
+          <span class="account-name">${escapeHtml(group.accountName)}</span>
+          <span class="account-total" data-sensitive>${formatMoneyPlain(group.totalMarketValue)}</span>
+          <span class="account-percent">${formatPercent(group.percent)}</span>
+        </div>
+        <div class="account-symbols">${rows}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+/**
+ * 高亮指定扇区
+ */
+function highlightPieSector(pieId, symbolKey) {
+  // 清除所有高亮
+  document.querySelectorAll('.pie-sector.highlighted').forEach((el) => {
+    el.classList.remove('highlighted');
+  });
+  document.querySelectorAll('.pie-svg').forEach((svg) => {
+    svg.classList.remove('has-highlight');
+  });
+  document.querySelectorAll('.symbol-row.highlighted').forEach((el) => {
+    el.classList.remove('highlighted');
+  });
+
+  if (!symbolKey) return;
+
+  // 高亮目标扇区
+  const sector = document.querySelector(
+    `.pie-sector[data-pie-id="${pieId}"][data-symbol-key="${symbolKey}"]`
+  );
+  if (sector) {
+    sector.classList.add('highlighted');
+    sector.closest('.pie-svg').classList.add('has-highlight');
+
+    // 显示tooltip
+    const tooltip = document.querySelector(`.pie-tooltip[data-pie-id="${pieId}"]`);
+    if (tooltip) {
+      const label = sector.dataset.label || '';
+      const value = Number(sector.dataset.value || 0);
+      const percent = Number(sector.dataset.percent || 0);
+      tooltip.innerHTML = `
+        <div class="tooltip-name">${escapeHtml(label)}</div>
+        <div class="tooltip-row">
+          <span>Value</span>
+          <span data-sensitive>${formatMoneyPlain(value)}</span>
+        </div>
+        <div class="tooltip-row">
+          <span>Percent</span>
+          <span>${formatPercent(percent)}</span>
+        </div>
+      `;
+      tooltip.style.display = 'block';
+    }
+  }
+
+  // 高亮对应行
+  const row = document.querySelector(
+    `.symbol-row[data-pie-id="${pieId}"][data-symbol-key="${symbolKey}"]`
+  );
+  if (row) {
+    row.classList.add('highlighted');
+  }
+}
+
+/**
+ * 绑定Charts页面交互事件
+ */
+function bindChartsInteractions() {
+  // 标的行点击
+  view.querySelectorAll('.symbol-row[data-symbol-key]').forEach((row) => {
+    row.addEventListener('click', () => {
+      const pieId = row.dataset.pieId;
+      const symbolKey = row.dataset.symbolKey;
+      const isHighlighted = row.classList.contains('highlighted');
+
+      if (isHighlighted) {
+        highlightPieSector(pieId, null);
+        const tooltip = document.querySelector(`.pie-tooltip[data-pie-id="${pieId}"]`);
+        if (tooltip) tooltip.style.display = 'none';
+      } else {
+        highlightPieSector(pieId, symbolKey);
+      }
+    });
+  });
+
+  // 点击空白处取消高亮
+  view.querySelectorAll('.currency-block').forEach((block) => {
+    block.addEventListener('click', (e) => {
+      if (e.target.closest('.symbol-row') || e.target.closest('.pie-sector')) return;
+      const pieId = block.dataset.pieId;
+      highlightPieSector(pieId, null);
+      const tooltip = document.querySelector(`.pie-tooltip[data-pie-id="${pieId}"]`);
+      if (tooltip) tooltip.style.display = 'none';
+    });
+  });
+}
+
 async function renderCharts() {
   view.innerHTML = `
     <div class="section-title">Charts</div>
@@ -1276,68 +1505,66 @@ async function renderCharts() {
 
   try {
     const bySymbol = await fetchJSON('/api/holdings-by-symbol');
+    const currencies = Object.keys(bySymbol || {});
 
-    const symbolBlocks = Object.entries(bySymbol || {}).map(([currency, data]) => {
+    if (!currencies.length) {
+      view.innerHTML = renderEmptyState('No holdings data yet. Add your first transaction.', '<a class="primary" href="#/add">Add transaction</a>');
+      return;
+    }
+
+    const currencyBlocks = currencies.map((currency) => {
+      const data = bySymbol[currency] || {};
       const symbols = data.symbols || [];
       const totalMarketValue = data.total_market_value !== undefined && data.total_market_value !== null
         ? data.total_market_value
         : symbols.reduce((sum, s) => sum + (s.market_value || 0), 0);
-      const accountEntries = Object.entries(data.by_account || {}).map(([accountId, account]) => {
-        const total = (account.symbols || []).reduce((sum, s) => sum + (s.market_value || 0), 0);
+
+      const pieId = `pie-${currency}`;
+
+      // 构建环图数据项，添加 key 用于高亮关联
+      const pieItems = buildSymbolPieItems(symbols, 8).map((item) => {
+        const matchingSymbol = symbols.find((s) => s.display_name === item.label || s.symbol === item.label);
         return {
-          id: accountId,
-          name: account.account_name || accountId,
-          total
+          ...item,
+          key: matchingSymbol ? `${matchingSymbol.symbol}-${matchingSymbol.account_id}` : item.label,
         };
-      }).sort((a, b) => b.total - a.total);
-      const accountItems = accountEntries
-        .filter((acc) => acc.total > 0)
-        .map((acc) => ({
-          label: acc.name,
-          value: acc.total,
-        }));
-      const pieChart = renderPieChart({
-        items: buildSymbolPieItems(symbols, 8),
+      });
+
+      // 渲染 SVG 环图
+      const pieChart = renderInteractivePieChart({
+        items: pieItems,
         totalLabel: 'Total',
         totalValue: totalMarketValue,
+        currency,
+        pieId,
       });
-      const accountPie = accountItems.length
-        ? renderAccountPieChart({ items: accountItems })
-        : '';
-      const rows = symbols.slice(0, 12).map((s) => `
-        <div class="chart-row">
-          <div>
-            <strong>${escapeHtml(s.display_name)}</strong>
-            <div class="section-sub">${escapeHtml(s.symbol)}</div>
-          </div>
-          <div class="bar"><span style="width:${s.percent}%;"></span></div>
-          <div class="num">${formatPercent(s.percent)}</div>
-          <div class="num" data-sensitive>${formatMoneyPlain(s.market_value)}</div>
-        </div>
-      `).join('');
-      const listMarkup = rows ? `<div class="list">${rows}</div>` : '';
-      const accountMarkup = accountPie ? `
-        <div class="section-sub account-title">By account</div>
-        ${accountPie}
-      ` : '';
+
+      // 按账户分组
+      const accountGroups = groupSymbolsByAccount(symbols, totalMarketValue);
+      const groupList = renderAccountGroupList(accountGroups, currency, pieId);
 
       return `
-        <div class="card">
-          <h3>${currency} Symbols</h3>
-          ${pieChart}
-          ${accountMarkup}
-          ${listMarkup}
+        <div class="currency-block card" data-pie-id="${pieId}">
+          <h3>${currency}</h3>
+          <div class="chart-content">
+            ${pieChart}
+            <div class="account-groups-list">
+              ${groupList}
+            </div>
+          </div>
         </div>
       `;
     }).join('');
 
     view.innerHTML = `
       <div class="section-title">Charts</div>
-    <div class="section-sub">Symbol composition snapshots by currency.</div>
-      <div class="grid two">
-        ${symbolBlocks || renderEmptyState('No symbol data yet.')}
+      <div class="section-sub">Asset allocation by currency and account.</div>
+      <div class="charts-horizontal">
+        ${currencyBlocks}
       </div>
     `;
+
+    bindChartsInteractions();
   } catch (err) {
     view.innerHTML = renderEmptyState('Unable to load charts. Check API connection.');
   }
