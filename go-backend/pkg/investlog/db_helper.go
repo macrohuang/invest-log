@@ -16,7 +16,9 @@ func (c *Core) WithTx(ctx context.Context, fn func(*sql.Tx) error) error {
 
 	defer func() {
 		if p := recover(); p != nil {
-			_ = tx.Rollback()
+			if rbErr := tx.Rollback(); rbErr != nil {
+				c.logger.Error("transaction rollback failed on panic", "error", rbErr, "panic_value", p)
+			}
 			panic(p)
 		}
 	}()

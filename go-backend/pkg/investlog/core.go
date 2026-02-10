@@ -74,7 +74,9 @@ func OpenWithOptions(opts Options) (*Core, error) {
 	}
 
 	if err := initDatabase(db); err != nil {
-		_ = db.Close()
+		if closeErr := db.Close(); closeErr != nil {
+			logger.Warn("failed to close database after initialization failure", "err", closeErr)
+		}
 		return nil, fmt.Errorf("init database: %w", err)
 	}
 

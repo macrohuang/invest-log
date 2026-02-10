@@ -151,7 +151,9 @@ func (h *handler) switchStorage(w http.ResponseWriter, r *http.Request) {
 	cfg.DBName = dbName
 	cfg.SetupComplete = true
 	if err := config.SaveUserConfig(cfg, true); err != nil {
-		_ = newCore.Close()
+		if closeErr := newCore.Close(); closeErr != nil {
+			logger.Error("failed to close new core after config save error", "err", closeErr)
+		}
 		writeError(w, http.StatusInternalServerError, fmt.Errorf("save config: %w", err).Error())
 		return
 	}
@@ -162,7 +164,9 @@ func (h *handler) switchStorage(w http.ResponseWriter, r *http.Request) {
 	h.coreMu.Unlock()
 
 	if oldCore != nil {
-		_ = oldCore.Close()
+		if closeErr := oldCore.Close(); closeErr != nil {
+			logger.Error("failed to close old core after storage switch", "err", closeErr)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "switched", "db_name": dbName})

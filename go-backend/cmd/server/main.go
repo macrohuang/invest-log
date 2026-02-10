@@ -43,15 +43,19 @@ func main() {
 
 	resolvedDataDir, err := config.GetDataDir()
 	if err != nil {
-		panic(err)
+		slog.Error("failed to resolve data directory", "err", err)
+		os.Exit(1)
 	}
 	logDir := filepath.Join(resolvedDataDir, "logs")
 	logger, writer, err := logging.NewLogger(logDir)
 	if err != nil {
-		panic(err)
+		slog.Error("failed to initialize logger", "err", err)
+		os.Exit(1)
 	}
 	defer func() {
-		_ = writer.Close()
+		if err := writer.Close(); err != nil {
+			logger.Error("failed to close log writer", "err", err)
+		}
 	}()
 
 	dbPath, err := config.GetDBPath()
@@ -66,7 +70,9 @@ func main() {
 		os.Exit(1)
 	}
 	defer func() {
-		_ = core.Close()
+		if err := core.Close(); err != nil {
+			logger.Error("failed to close core", "err", err)
+		}
 	}()
 
 	if os.Getenv("INVEST_LOG_PARENT_WATCH") == "1" {
