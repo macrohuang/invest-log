@@ -2956,7 +2956,7 @@ function bindSettingsActions() {
     });
   }
 
-  view.querySelectorAll('button[data-asset]').forEach((btn) => {
+  view.querySelectorAll('button[data-asset]:not([data-alloc-save])').forEach((btn) => {
     btn.addEventListener('click', async () => {
       if (btn.disabled) return;
       const code = btn.dataset.asset;
