@@ -3,6 +3,7 @@ package investlog
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -84,6 +85,7 @@ func TestBuildAttemptsInvoke(t *testing.T) {
 		{"a_share", "600000", "CNY"},
 		{"fund", "110001", "CNY"},
 		{"etf", "510300", "CNY"},
+		{"hk_connect", "H00700", "CNY"},
 		{"hk_stock", "00001", "HKD"},
 		{"us_stock", "AAPL", "USD"},
 		{"gold", "AU9999", "CNY"},
@@ -158,6 +160,9 @@ func TestBuildAttemptsAndDetectSymbolType(t *testing.T) {
 	if attempts := pf.buildAttempts("fund", "110001", "CNY", ""); len(attempts) == 0 {
 		t.Fatalf("expected attempts for fund")
 	}
+	if attempts := pf.buildAttempts("hk_connect", "H00700", "CNY", ""); len(attempts) == 0 {
+		t.Fatalf("expected attempts for hk_connect")
+	}
 	if attempts := pf.buildAttempts("hk_stock", "00001", "HKD", ""); len(attempts) == 0 {
 		t.Fatalf("expected attempts for hk_stock")
 	}
@@ -179,6 +184,7 @@ func TestBuildAttemptsAndDetectSymbolType(t *testing.T) {
 		{"SH600000", "CNY", "a_share"},
 		{"600000", "CNY", "a_share"},
 		{"110001", "CNY", "etf"},
+		{"H00700", "CNY", "hk_connect"},
 		{"00001", "HKD", "hk_stock"},
 		{"AAPL", "USD", "us_stock"},
 		{"AU9999", "CNY", "gold"},
@@ -379,6 +385,88 @@ func TestHTTPGetNon2xx(t *testing.T) {
 	}
 	if _, err := pf.httpGet(context.Background(), "://bad-url", nil); err == nil {
 		t.Fatalf("expected error for bad url")
+	}
+}
+
+func TestHKConnectToHKCode(t *testing.T) {
+	cases := []struct {
+		input string
+		want  string
+	}{
+		{"H00700", "00700"},
+		{"H09988", "09988"},
+		{"h00700", "00700"},
+		{"00700", "00700"},
+		{"H", "H"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		got := hkConnectToHKCode(c.input)
+		if got != c.want {
+			t.Errorf("hkConnectToHKCode(%q) = %q, want %q", c.input, got, c.want)
+		}
+	}
+}
+
+func TestEastmoneyFetchHKConnect(t *testing.T) {
+	// f43=565000 means 565.000 HKD (divided by 1000)
+	pf := newFetcherWithBody(http.StatusOK, `{"data":{"f43":565000}}`)
+	price, err := pf.eastmoneyFetchHKConnect("00700")
+	if err != nil || price == nil || *price != 565.0 {
+		t.Fatalf("eastmoneyFetchHKConnect: got %v %v, want 565.0", price, err)
+	}
+
+	// Missing f43
+	pf = newFetcherWithBody(http.StatusOK, `{"data":{}}`)
+	price, err = pf.eastmoneyFetchHKConnect("00700")
+	if err != nil || price != nil {
+		t.Fatalf("eastmoneyFetchHKConnect missing f43: got %v %v", price, err)
+	}
+
+	// Parse error
+	pf = newFetcherWithBody(http.StatusOK, `{"data":{"f43":"bad"}}`)
+	price, err = pf.eastmoneyFetchHKConnect("00700")
+	if err == nil || price != nil {
+		t.Fatalf("eastmoneyFetchHKConnect bad value: expected error")
+	}
+}
+
+func TestConvertHKDToCNY(t *testing.T) {
+	// Without resolver: uses default rate (0.92)
+	pf := newFetcherWithBody(http.StatusOK, "")
+	hkdPrice := 100.0
+	cnyPrice, err := pf.convertHKDToCNY(func() (*float64, error) {
+		return &hkdPrice, nil
+	})
+	if err != nil || cnyPrice == nil || *cnyPrice != 92.0 {
+		t.Fatalf("convertHKDToCNY without resolver: got %v %v, want 92.0", cnyPrice, err)
+	}
+
+	// With resolver returning custom rate
+	pf.rateResolver = func(fromCurrency string) (float64, error) {
+		return 0.90, nil
+	}
+	cnyPrice, err = pf.convertHKDToCNY(func() (*float64, error) {
+		return &hkdPrice, nil
+	})
+	if err != nil || cnyPrice == nil || *cnyPrice != 90.0 {
+		t.Fatalf("convertHKDToCNY with resolver: got %v %v, want 90.0", cnyPrice, err)
+	}
+
+	// Nil price pass-through
+	cnyPrice, err = pf.convertHKDToCNY(func() (*float64, error) {
+		return nil, nil
+	})
+	if err != nil || cnyPrice != nil {
+		t.Fatalf("convertHKDToCNY nil: got %v %v", cnyPrice, err)
+	}
+
+	// Error pass-through
+	_, err = pf.convertHKDToCNY(func() (*float64, error) {
+		return nil, fmt.Errorf("fetch error")
+	})
+	if err == nil {
+		t.Fatalf("convertHKDToCNY error: expected error")
 	}
 }
 

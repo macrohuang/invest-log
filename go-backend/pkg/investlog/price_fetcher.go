@@ -33,6 +33,7 @@ const (
 var (
 	reSixDigit   = regexp.MustCompile(`^\d{6}$`)       // Chinese stock/fund codes
 	reHKStock    = regexp.MustCompile(`^0\d{4}$`)      // Hong Kong stock codes (e.g., 00001)
+	reHKConnect  = regexp.MustCompile(`^H\d{5}$`)      // Stock Connect (港股通) codes (e.g., H00700)
 	reUSStock    = regexp.MustCompile(`^[A-Z]+$`)      // US stock tickers (e.g., AAPL)
 	reFundLsjzTD = regexp.MustCompile(`<td[^>]*>\d{4}-\d{2}-\d{2}</td>\s*<td[^>]*>([\d.]+)</td>`)
 )
@@ -90,8 +91,9 @@ type priceFetcherOptions struct {
 	FailWindow    time.Duration
 	Cooldown      time.Duration
 	HTTPTimeout   time.Duration
-	HTTPClient    HTTPDoer // Optional: inject custom client for testing
-	USDToCNYRate  float64  // Optional: USD/CNY exchange rate for gold price conversion
+	HTTPClient    HTTPDoer                                // Optional: inject custom client for testing
+	USDToCNYRate  float64                                 // Optional: USD/CNY exchange rate for gold price conversion
+	RateResolver  func(fromCurrency string) (float64, error) // Optional: resolve FX rates at runtime (e.g. HKD→CNY)
 }
 
 type priceFetcher struct {
@@ -102,6 +104,7 @@ type priceFetcher struct {
 	cooldown      time.Duration
 	client        HTTPDoer
 	usdToCNYRate  float64
+	rateResolver  func(fromCurrency string) (float64, error)
 
 	// Separate locks for cache and circuit breaker to reduce contention.
 	// Cache operations are frequent reads; circuit breaker updates are less frequent.
@@ -146,6 +149,7 @@ func newPriceFetcher(opts priceFetcherOptions) *priceFetcher {
 		cooldown:      opts.Cooldown,
 		client:        client,
 		usdToCNYRate:  usdToCNYRate,
+		rateResolver:  opts.RateResolver,
 		cache:        map[string]cacheEntry{},
 		serviceState: map[string]*serviceState{},
 	}
@@ -247,6 +251,30 @@ func (pf *priceFetcher) buildAttempts(symbolType, symbol, currency, assetType st
 			{"Eastmoney Fund PZ", func() (*float64, error) { return pf.eastmoneyFetchFundPingzhong(symbol) }},
 			{"Eastmoney Fund LSJZ", func() (*float64, error) { return pf.eastmoneyFetchFundLsjz(symbol) }},
 			{"Eastmoney", func() (*float64, error) { return pf.eastmoneyFetchAShare(symbol) }},
+		}
+	case "hk_connect":
+		hkCode := hkConnectToHKCode(symbol)
+		return []fetchAttempt{
+			{"Eastmoney HK Connect", func() (*float64, error) {
+				return pf.convertHKDToCNY(func() (*float64, error) {
+					return pf.eastmoneyFetchHKConnect(hkCode)
+				})
+			}},
+			{"Yahoo Finance (HK Connect)", func() (*float64, error) {
+				return pf.convertHKDToCNY(func() (*float64, error) {
+					return pf.yahooFetchStock(hkCode, "HKD")
+				})
+			}},
+			{"Sina Finance (HK Connect)", func() (*float64, error) {
+				return pf.convertHKDToCNY(func() (*float64, error) {
+					return pf.sinaFetchHKStock(hkCode)
+				})
+			}},
+			{"Tencent Finance (HK Connect)", func() (*float64, error) {
+				return pf.convertHKDToCNY(func() (*float64, error) {
+					return pf.tencentFetchHKStock(hkCode)
+				})
+			}},
 		}
 	case "hk_stock":
 		return []fetchAttempt{
@@ -357,6 +385,11 @@ func detectSymbolType(symbol, currency, assetType string) string {
 		}
 		// Default unknown 6-digit CNY codes to ETF (likely OTC funds)
 		return "etf"
+	}
+
+	// Hong Kong Stock Connect (港股通) - H prefix + 5-digit HK code
+	if reHKConnect.MatchString(symbol) {
+		return "hk_connect"
 	}
 
 	// Hong Kong stocks
@@ -755,6 +788,68 @@ func (pf *priceFetcher) tencentFetchUSStock(symbol string) (*float64, error) {
 		}
 	}
 	return nil, nil
+}
+
+// hkConnectToHKCode strips the H prefix from a Stock Connect symbol to get the HK code.
+// e.g. "H00700" -> "00700"
+func hkConnectToHKCode(symbol string) string {
+	if len(symbol) > 1 && (symbol[0] == 'H' || symbol[0] == 'h') {
+		return symbol[1:]
+	}
+	return symbol
+}
+
+// convertHKDToCNY wraps a fetch function that returns HKD prices, converting to CNY.
+func (pf *priceFetcher) convertHKDToCNY(fetchFn func() (*float64, error)) (*float64, error) {
+	hkdPrice, err := fetchFn()
+	if err != nil {
+		return nil, err
+	}
+	if hkdPrice == nil {
+		return nil, nil
+	}
+
+	rate := defaultHKDToCNYRate
+	if pf.rateResolver != nil {
+		if r, err := pf.rateResolver("HKD"); err == nil {
+			rate = r
+		}
+	}
+	cnyPrice := *hkdPrice * rate
+	return &cnyPrice, nil
+}
+
+// eastmoneyFetchHKConnect fetches HK stock price via Eastmoney's Stock Connect endpoint.
+// Returns price in HKD (caller must convert to CNY).
+func (pf *priceFetcher) eastmoneyFetchHKConnect(hkCode string) (*float64, error) {
+	url := fmt.Sprintf(
+		"http://push2.eastmoney.com/api/qt/stock/get?secid=128.%s&fields=f43&ut=fa5fd1943c7b386f172d6893dbfba10b",
+		hkCode,
+	)
+	body, err := pf.httpGet(context.Background(), url, map[string]string{
+		"User-Agent": "Mozilla/5.0",
+		"Referer":    "http://quote.eastmoney.com/",
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return nil, err
+	}
+	data, _ := payload["data"].(map[string]any)
+	value, ok := data["f43"]
+	if !ok {
+		return nil, nil
+	}
+	price, err := parseFloat(value)
+	if err != nil {
+		return nil, err
+	}
+	// Eastmoney HK Connect f43 returns price * 1000 (e.g. 565000 = 565.000 HKD)
+	price = price / 1000.0
+	return &price, nil
 }
 
 // maxResponseSize limits external API responses to 1MB to prevent memory exhaustion.

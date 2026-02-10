@@ -57,6 +57,7 @@ func initDatabase(db *sql.DB) error {
 			return err
 		}
 	}
+
 	if err := exec(tx, "DROP TRIGGER IF EXISTS trg_symbols_symbol_update"); err != nil {
 		return err
 	}
@@ -90,6 +91,15 @@ func initDatabase(db *sql.DB) error {
 			if err := rebuildTransactionsWithForeignKeys(tx); err != nil {
 				return err
 			}
+		}
+	}
+
+	// Migrate: add linked_transaction_id for paired transfers
+	if hasLinkedTxnID, err := tableHasColumn(tx, "transactions", "linked_transaction_id"); err != nil {
+		return err
+	} else if !hasLinkedTxnID {
+		if err := exec(tx, "ALTER TABLE transactions ADD COLUMN linked_transaction_id INTEGER"); err != nil {
+			return err
 		}
 	}
 
@@ -224,6 +234,7 @@ func initDatabase(db *sql.DB) error {
 		"CREATE INDEX IF NOT EXISTS idx_type ON transactions(transaction_type)",
 		"CREATE INDEX IF NOT EXISTS idx_currency ON transactions(currency)",
 		"CREATE INDEX IF NOT EXISTS idx_symbols_asset_type ON symbols(asset_type)",
+		"CREATE INDEX IF NOT EXISTS idx_linked_txn ON transactions(linked_transaction_id)",
 	}
 	for _, idx := range indexes {
 		if err := exec(tx, idx); err != nil {

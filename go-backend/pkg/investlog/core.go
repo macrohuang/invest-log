@@ -87,13 +87,21 @@ func OpenWithOptions(opts Options) (*Core, error) {
 		HTTPTimeout:   defaultDuration(opts.HTTPTimeout, 10*time.Second),
 	})
 
-	return &Core{
+	c := &Core{
 		db:     db,
 		logger: logger,
 		price:  pf,
 		dbPath: cleanPath,
 		cache:  newHoldingsCache(),
-	}, nil
+	}
+
+	// Inject rate resolver so priceFetcher can look up FX rates (e.g. HKD→CNY)
+	// from the database at runtime.
+	pf.rateResolver = func(fromCurrency string) (float64, error) {
+		return c.GetRateToCNY(fromCurrency)
+	}
+
+	return c, nil
 }
 
 // Close releases database resources.

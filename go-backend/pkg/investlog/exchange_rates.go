@@ -135,6 +135,25 @@ func (c *Core) RefreshExchangeRates() (int, []string, error) {
 	return updated, errors, nil
 }
 
+// GetExchangeRate returns the exchange rate between any two supported currencies.
+// It derives cross rates through CNY: rate(A→B) = rate(A→CNY) / rate(B→CNY).
+func (c *Core) GetExchangeRate(fromCurrency, toCurrency string) (float64, error) {
+	fromCurrency = normalizeCurrency(fromCurrency)
+	toCurrency = normalizeCurrency(toCurrency)
+	if fromCurrency == toCurrency {
+		return 1, nil
+	}
+	fromRate, err := c.GetRateToCNY(fromCurrency)
+	if err != nil {
+		return 0, fmt.Errorf("get %s rate: %w", fromCurrency, err)
+	}
+	toRate, err := c.GetRateToCNY(toCurrency)
+	if err != nil {
+		return 0, fmt.Errorf("get %s rate: %w", toCurrency, err)
+	}
+	return fromRate / toRate, nil
+}
+
 func validateExchangeRatePair(fromCurrency, toCurrency string) error {
 	fromCurrency = normalizeCurrency(fromCurrency)
 	toCurrency = normalizeCurrency(toCurrency)

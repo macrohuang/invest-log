@@ -155,12 +155,16 @@ func (c *Core) AddTransaction(req AddTransactionRequest) (int64, error) {
 }
 
 func (c *Core) insertTransactionTx(tx *sql.Tx, req AddTransactionRequest, symbolID int64, totalAmount float64) (int64, error) {
+	return c.insertTransactionWithLinkTx(tx, req, symbolID, totalAmount, nil)
+}
+
+func (c *Core) insertTransactionWithLinkTx(tx *sql.Tx, req AddTransactionRequest, symbolID int64, totalAmount float64, linkedTxnID *int64) (int64, error) {
 	result, err := tx.Exec(`
 		INSERT INTO transactions (
 			transaction_date, transaction_time, symbol_id, transaction_type,
 			quantity, price, total_amount, commission, currency,
-			account_id, account_name, notes, tags
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			account_id, account_name, notes, tags, linked_transaction_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		req.TransactionDate,
 		nullString(req.TransactionTime),
@@ -175,6 +179,7 @@ func (c *Core) insertTransactionTx(tx *sql.Tx, req AddTransactionRequest, symbol
 		nullString(req.AccountName),
 		nullString(req.Notes),
 		nullString(req.Tags),
+		linkedTxnID,
 	)
 	if err != nil {
 		return 0, err
@@ -188,7 +193,8 @@ func (c *Core) GetTransaction(id int64) (*Transaction, error) {
 		SELECT
 			t.id, t.transaction_date, t.transaction_time, t.symbol_id, t.transaction_type,
 			t.quantity, t.price, t.total_amount, t.commission, t.currency,
-			t.account_id, t.account_name, t.notes, t.tags, t.created_at, t.updated_at,
+			t.account_id, t.account_name, t.notes, t.tags,
+			t.linked_transaction_id, t.created_at, t.updated_at,
 			s.symbol, s.name, s.asset_type
 		FROM transactions t
 		JOIN symbols s ON s.id = t.symbol_id
@@ -197,10 +203,12 @@ func (c *Core) GetTransaction(id int64) (*Transaction, error) {
 
 	var t Transaction
 	var transactionTime, accountName, notes, tags, createdAt, updatedAt, name sql.NullString
+	var linkedTxnID sql.NullInt64
 	if err := row.Scan(
 		&t.ID, &t.TransactionDate, &transactionTime, &t.SymbolID, &t.TransactionType,
 		&t.Quantity, &t.Price, &t.TotalAmount, &t.Commission, &t.Currency,
-		&t.AccountID, &accountName, &notes, &tags, &createdAt, &updatedAt,
+		&t.AccountID, &accountName, &notes, &tags,
+		&linkedTxnID, &createdAt, &updatedAt,
 		&t.Symbol, &name, &t.AssetType,
 	); err != nil {
 		if err == sql.ErrNoRows {
@@ -219,6 +227,9 @@ func (c *Core) GetTransaction(id int64) (*Transaction, error) {
 	}
 	if tags.Valid {
 		t.Tags = &tags.String
+	}
+	if linkedTxnID.Valid {
+		t.LinkedTransactionID = &linkedTxnID.Int64
 	}
 	if createdAt.Valid {
 		t.CreatedAt = &createdAt.String
@@ -248,7 +259,8 @@ func (c *Core) GetTransactions(filter TransactionFilter) ([]Transaction, error) 
 		SELECT
 			t.id, t.transaction_date, t.transaction_time, t.symbol_id, t.transaction_type,
 			t.quantity, t.price, t.total_amount, t.commission, t.currency,
-			t.account_id, t.account_name, t.notes, t.tags, t.created_at, t.updated_at,
+			t.account_id, t.account_name, t.notes, t.tags,
+			t.linked_transaction_id, t.created_at, t.updated_at,
 			s.symbol, s.name, s.asset_type
 		FROM transactions t
 		JOIN symbols s ON s.id = t.symbol_id
@@ -284,14 +296,6 @@ func (c *Core) GetTransactions(filter TransactionFilter) ([]Transaction, error) 
 		query.WriteString(" AND t.transaction_date <= ?")
 		params = append(params, filter.EndDate)
 	}
-	if filter.StartDate != "" {
-		query.WriteString(" AND t.transaction_date >= ?")
-		params = append(params, filter.StartDate)
-	}
-	if filter.EndDate != "" {
-		query.WriteString(" AND t.transaction_date <= ?")
-		params = append(params, filter.EndDate)
-	}
 
 	query.WriteString(" ORDER BY t.transaction_date DESC, t.id DESC LIMIT ? OFFSET ?")
 	params = append(params, limit, offset)
@@ -306,10 +310,12 @@ func (c *Core) GetTransactions(filter TransactionFilter) ([]Transaction, error) 
 	for rows.Next() {
 		var t Transaction
 		var transactionTime, accountName, notes, tags, createdAt, updatedAt, name sql.NullString
+		var linkedTxnID sql.NullInt64
 		if err := rows.Scan(
 			&t.ID, &t.TransactionDate, &transactionTime, &t.SymbolID, &t.TransactionType,
 			&t.Quantity, &t.Price, &t.TotalAmount, &t.Commission, &t.Currency,
-			&t.AccountID, &accountName, &notes, &tags, &createdAt, &updatedAt,
+			&t.AccountID, &accountName, &notes, &tags,
+			&linkedTxnID, &createdAt, &updatedAt,
 			&t.Symbol, &name, &t.AssetType,
 		); err != nil {
 			return nil, err
@@ -325,6 +331,9 @@ func (c *Core) GetTransactions(filter TransactionFilter) ([]Transaction, error) 
 		}
 		if tags.Valid {
 			t.Tags = &tags.String
+		}
+		if linkedTxnID.Valid {
+			t.LinkedTransactionID = &linkedTxnID.Int64
 		}
 		if createdAt.Valid {
 			t.CreatedAt = &createdAt.String
@@ -380,19 +389,35 @@ func (c *Core) GetTransactionCount(filter TransactionFilter) (int, error) {
 }
 
 // DeleteTransaction deletes a transaction by ID.
+// If the transaction has a linked_transaction_id (paired transfer), the linked record is also deleted.
 func (c *Core) DeleteTransaction(id int64) (bool, error) {
-	result, err := c.db.Exec("DELETE FROM transactions WHERE id = ?", id)
+	tx, err := c.db.Begin()
 	if err != nil {
 		return false, err
 	}
-	affected, err := result.RowsAffected()
+	defer func() { _ = tx.Rollback() }()
+
+	var linkedID sql.NullInt64
+	err = tx.QueryRow("SELECT linked_transaction_id FROM transactions WHERE id = ?", id).Scan(&linkedID)
 	if err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
 		return false, err
 	}
-	if affected > 0 {
-		c.invalidateHoldingsCache()
+
+	if _, err := tx.Exec("DELETE FROM transactions WHERE id = ?", id); err != nil {
+		return false, err
 	}
-	return affected > 0, nil
+	if linkedID.Valid {
+		_, _ = tx.Exec("DELETE FROM transactions WHERE id = ?", linkedID.Int64)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, err
+	}
+	c.invalidateHoldingsCache()
+	return true, nil
 }
 
 func nullString(value *string) sql.NullString {

@@ -26,25 +26,26 @@ var TransactionTypes = []string{
 
 // Transaction represents a transaction record with symbol metadata.
 type Transaction struct {
-	ID              int64   `json:"id"`
-	TransactionDate string  `json:"transaction_date"`
-	TransactionTime *string `json:"transaction_time"`
-	SymbolID        int64   `json:"symbol_id"`
-	Symbol          string  `json:"symbol"`
-	Name            *string `json:"name"`
-	AssetType       string  `json:"asset_type"`
-	TransactionType string  `json:"transaction_type"`
-	Quantity        float64 `json:"quantity"`
-	Price           float64 `json:"price"`
-	TotalAmount     float64 `json:"total_amount"`
-	Commission      float64 `json:"commission"`
-	Currency        string  `json:"currency"`
-	AccountID       string  `json:"account_id"`
-	AccountName     *string `json:"account_name"`
-	Notes           *string `json:"notes"`
-	Tags            *string `json:"tags"`
-	CreatedAt       *string `json:"created_at"`
-	UpdatedAt       *string `json:"updated_at"`
+	ID                  int64   `json:"id"`
+	TransactionDate     string  `json:"transaction_date"`
+	TransactionTime     *string `json:"transaction_time"`
+	SymbolID            int64   `json:"symbol_id"`
+	Symbol              string  `json:"symbol"`
+	Name                *string `json:"name"`
+	AssetType           string  `json:"asset_type"`
+	TransactionType     string  `json:"transaction_type"`
+	Quantity            float64 `json:"quantity"`
+	Price               float64 `json:"price"`
+	TotalAmount         float64 `json:"total_amount"`
+	Commission          float64 `json:"commission"`
+	Currency            string  `json:"currency"`
+	AccountID           string  `json:"account_id"`
+	AccountName         *string `json:"account_name"`
+	Notes               *string `json:"notes"`
+	Tags                *string `json:"tags"`
+	LinkedTransactionID *int64  `json:"linked_transaction_id"`
+	CreatedAt           *string `json:"created_at"`
+	UpdatedAt           *string `json:"updated_at"`
 }
 
 // AddTransactionRequest defines inputs to add a transaction.
@@ -64,6 +65,27 @@ type AddTransactionRequest struct {
 	Tags            *string
 	TotalAmount     *float64
 	LinkCash        bool
+}
+
+// TransferRequest defines inputs for a cross-account transfer.
+type TransferRequest struct {
+	TransactionDate string
+	Symbol          string
+	Quantity        float64
+	FromAccountID   string
+	ToAccountID     string
+	FromCurrency    string
+	ToCurrency      string
+	Commission      float64
+	AssetType       string
+	Notes           *string
+}
+
+// TransferResult returns the IDs of the paired transactions.
+type TransferResult struct {
+	TransferOutID int64   `json:"transfer_out_id"`
+	TransferInID  int64   `json:"transfer_in_id"`
+	ExchangeRate  float64 `json:"exchange_rate,omitempty"`
 }
 
 // Holding represents a current holding snapshot.

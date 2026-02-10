@@ -72,6 +72,9 @@ func NewRouter(core *investlog.Core) http.Handler {
 	r.Post("/api/transactions", h.addTransaction)
 	r.Delete("/api/transactions/{id}", h.deleteTransaction)
 
+	// Transfers
+	r.Post("/api/transfers", h.addTransfer)
+
 	// Portfolio history
 	r.Get("/api/portfolio-history", h.getPortfolioHistory)
 

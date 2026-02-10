@@ -31,6 +31,10 @@ func (c *Core) GetHoldings(accountID string) ([]Holding, error) {
 				WHEN t.transaction_type IN ('BUY', 'INCOME') THEN t.total_amount + t.commission
 				WHEN t.transaction_type = 'SELL' THEN -(t.total_amount - t.commission)
 				WHEN t.transaction_type = 'ADJUST' THEN t.total_amount
+				WHEN t.transaction_type = 'TRANSFER_IN' AND t.linked_transaction_id IS NOT NULL
+					THEN t.total_amount
+				WHEN t.transaction_type = 'TRANSFER_OUT' AND t.linked_transaction_id IS NOT NULL
+					THEN -t.total_amount
 				ELSE 0
 			END) as total_cost
 		FROM transactions t

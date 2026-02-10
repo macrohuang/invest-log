@@ -139,6 +139,31 @@ func (h *handler) deleteTransaction(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
+func (h *handler) addTransfer(w http.ResponseWriter, r *http.Request) {
+	var payload transferPayload
+	if err := decodeJSON(r, &payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	result, err := h.core.Transfer(investlog.TransferRequest{
+		TransactionDate: payload.TransactionDate,
+		Symbol:          payload.Symbol,
+		Quantity:        payload.Quantity,
+		FromAccountID:   payload.FromAccountID,
+		ToAccountID:     payload.ToAccountID,
+		FromCurrency:    payload.FromCurrency,
+		ToCurrency:      payload.ToCurrency,
+		Commission:      payload.Commission,
+		AssetType:       payload.AssetType,
+		Notes:           payload.Notes,
+	})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (h *handler) getPortfolioHistory(w http.ResponseWriter, r *http.Request) {
 	limit := parseIntDefault(r.URL.Query().Get("limit"), 1000)
 	result, err := h.core.GetPortfolioHistory(limit)

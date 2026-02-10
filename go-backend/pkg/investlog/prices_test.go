@@ -158,6 +158,12 @@ func TestDetectSymbolType(t *testing.T) {
 		{"CASH", "CNY", "cash"},
 		{"CASH", "USD", "cash"},
 
+		// Stock Connect (港股通)
+		{"H00700", "CNY", "hk_connect"},
+		{"H09988", "CNY", "hk_connect"},
+		{"H00001", "CNY", "hk_connect"},
+		{"H02318", "CNY", "hk_connect"},
+
 		// Unknown
 		{"RANDOM123", "CNY", "unknown"},
 	}

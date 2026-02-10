@@ -89,6 +89,19 @@ type updateSymbolAutoUpdatePayload struct {
 	AutoUpdate int `json:"auto_update"`
 }
 
+type transferPayload struct {
+	TransactionDate string  `json:"transaction_date"`
+	Symbol          string  `json:"symbol"`
+	Quantity        float64 `json:"quantity"`
+	FromAccountID   string  `json:"from_account_id"`
+	ToAccountID     string  `json:"to_account_id"`
+	FromCurrency    string  `json:"from_currency"`
+	ToCurrency      string  `json:"to_currency"`
+	Commission      float64 `json:"commission"`
+	AssetType       string  `json:"asset_type"`
+	Notes           *string `json:"notes"`
+}
+
 type storageSwitchPayload struct {
 	DBName string `json:"db_name"`
 	Create bool   `json:"create"`
