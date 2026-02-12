@@ -43,6 +43,7 @@ type aiHoldingsAnalysisPayload struct {
 	Horizon         string `json:"horizon"`
 	AdviceStyle     string `json:"advice_style"`
 	AllowNewSymbols *bool  `json:"allow_new_symbols"`
+	StrategyPrompt  string `json:"strategy_prompt"`
 }
 
 type addAccountPayload struct {

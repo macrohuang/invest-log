@@ -127,6 +127,7 @@ function loadAIAnalysisSettings() {
         horizon: 'medium',
         adviceStyle: 'balanced',
         allowNewSymbols: true,
+        strategyPrompt: '',
       };
     }
     const parsed = JSON.parse(raw);
@@ -138,6 +139,7 @@ function loadAIAnalysisSettings() {
       horizon: parsed.horizon || 'medium',
       adviceStyle: parsed.adviceStyle || 'balanced',
       allowNewSymbols: parsed.allowNewSymbols !== false,
+      strategyPrompt: parsed.strategyPrompt || '',
     };
   } catch (err) {
     return {
@@ -148,6 +150,7 @@ function loadAIAnalysisSettings() {
       horizon: 'medium',
       adviceStyle: 'balanced',
       allowNewSymbols: true,
+      strategyPrompt: '',
     };
   }
 }
@@ -243,6 +246,10 @@ function renderRoute() {
     case 'add':
       setActiveRoute('transactions');
       renderAddTransaction();
+      break;
+    case 'transfer':
+      setActiveRoute('transactions');
+      renderTransfer();
       break;
     case 'settings':
       setActiveRoute('settings');
@@ -928,6 +935,7 @@ async function runAIHoldingsAnalysis(currency) {
     horizon: settings.horizon || 'medium',
     adviceStyle: settings.adviceStyle || 'balanced',
     allowNewSymbols: settings.allowNewSymbols !== false,
+    strategyPrompt: (settings.strategyPrompt || '').trim(),
   };
 
   if (!normalizedSettings.model || !normalizedSettings.apiKey) {
@@ -950,6 +958,7 @@ async function runAIHoldingsAnalysis(currency) {
       horizon: normalizedSettings.horizon,
       advice_style: normalizedSettings.adviceStyle,
       allow_new_symbols: normalizedSettings.allowNewSymbols,
+      strategy_prompt: normalizedSettings.strategyPrompt,
     }),
   });
 
@@ -1267,6 +1276,235 @@ async function renderTransactions() {
   }
 }
 
+/**
+ * 按账户分组标的并计算汇总
+ * @param {Array} symbols - 标的列表
+ * @param {number} totalMarketValue - 该币种总市值
+ * @returns {Array} - 排序后的账户分组
+ */
+function groupSymbolsByAccount(symbols, totalMarketValue) {
+  const accountMap = new Map();
+
+  (symbols || []).forEach((s) => {
+    const accountId = s.account_id || 'unknown';
+    if (!accountMap.has(accountId)) {
+      accountMap.set(accountId, {
+        accountId,
+        accountName: s.account_name || accountId,
+        totalMarketValue: 0,
+        symbols: [],
+      });
+    }
+    const group = accountMap.get(accountId);
+    group.totalMarketValue += s.market_value || 0;
+    group.symbols.push({
+      symbol: s.symbol,
+      displayName: s.display_name || s.symbol,
+      marketValue: s.market_value || 0,
+      percent: s.percent || 0,
+      pnl: s.unrealized_pnl || 0,
+      pieKey: `${s.symbol}-${accountId}`,
+    });
+  });
+
+  // 排序：账户按市值降序，标的按占比降序
+  const groups = Array.from(accountMap.values());
+  groups.sort((a, b) => b.totalMarketValue - a.totalMarketValue);
+  groups.forEach((g) => {
+    g.percent = totalMarketValue > 0 ? (g.totalMarketValue / totalMarketValue) * 100 : 0;
+    g.symbols.sort((a, b) => b.percent - a.percent);
+  });
+
+  return groups.filter((g) => g.totalMarketValue > 0);
+}
+
+/**
+ * 渲染支持高亮的SVG环图
+ */
+function renderInteractivePieChart({ items, totalLabel, totalValue, currency, pieId }) {
+  const data = buildPieData(items);
+  if (!data) {
+    return '<div class="section-sub">No data</div>';
+  }
+
+  const size = 160;
+  const cx = size / 2;
+  const cy = size / 2;
+  const outerRadius = 70;
+  const innerRadius = 45;
+
+  const paths = data.segments.map((seg) => {
+    const startAngle = (seg.start / 100) * 360 - 90;
+    const endAngle = (seg.end / 100) * 360 - 90;
+    const largeArc = seg.end - seg.start > 50 ? 1 : 0;
+
+    const startRad = (startAngle * Math.PI) / 180;
+    const endRad = (endAngle * Math.PI) / 180;
+
+    const x1 = cx + outerRadius * Math.cos(startRad);
+    const y1 = cy + outerRadius * Math.sin(startRad);
+    const x2 = cx + outerRadius * Math.cos(endRad);
+    const y2 = cy + outerRadius * Math.sin(endRad);
+    const x3 = cx + innerRadius * Math.cos(endRad);
+    const y3 = cy + innerRadius * Math.sin(endRad);
+    const x4 = cx + innerRadius * Math.cos(startRad);
+    const y4 = cy + innerRadius * Math.sin(startRad);
+
+    const d = `M ${x1} ${y1} A ${outerRadius} ${outerRadius} 0 ${largeArc} 1 ${x2} ${y2} L ${x3} ${y3} A ${innerRadius} ${innerRadius} 0 ${largeArc} 0 ${x4} ${y4} Z`;
+
+    const segKey = seg.key || seg.label || '';
+    return `<path d="${d}" fill="${seg.color}"
+                  data-pie-id="${pieId}"
+                  data-symbol-key="${escapeHtml(segKey)}"
+                  data-label="${escapeHtml(seg.label)}"
+                  data-value="${seg.value || 0}"
+                  data-percent="${seg.percent || 0}"
+                  class="pie-sector"/>`;
+  }).join('');
+
+  const centerValue = totalValue !== undefined && totalValue !== null
+    ? formatValue(totalValue, currency)
+    : '';
+
+  return `
+    <div class="pie-svg-container">
+      <svg class="pie-svg" viewBox="0 0 ${size} ${size}" data-pie-id="${pieId}">
+        ${paths}
+      </svg>
+      <div class="pie-center-label">
+        ${totalLabel ? `<div class="pie-label">${escapeHtml(totalLabel)}</div>` : ''}
+        ${centerValue ? `<div class="pie-value" data-sensitive>${centerValue}</div>` : ''}
+      </div>
+      <div class="pie-tooltip" data-pie-id="${pieId}" style="display:none;"></div>
+    </div>
+  `;
+}
+
+/**
+ * 渲染账户分组列表
+ */
+function renderAccountGroupList(accountGroups, currency, pieId) {
+  if (!accountGroups || !accountGroups.length) {
+    return '<div class="section-sub">No holdings</div>';
+  }
+
+  return accountGroups.map((group, index) => {
+    const rows = group.symbols.map((s) => {
+      const pnlClass = s.pnl >= 0 ? 'positive' : 'negative';
+      return `
+        <div class="symbol-row" data-pie-id="${pieId}" data-symbol-key="${escapeHtml(s.pieKey)}">
+          <div class="symbol-info">
+            <span class="symbol-name">${escapeHtml(s.displayName)}</span>
+            <span class="symbol-code">${escapeHtml(s.symbol)}</span>
+          </div>
+          <div class="symbol-value num" data-sensitive>${formatMoneyPlain(s.marketValue)}</div>
+          <div class="symbol-percent num">${formatPercent(s.percent)}</div>
+          <div class="symbol-pnl num ${pnlClass}" data-sensitive>${formatMoneyPlain(s.pnl)}</div>
+        </div>
+      `;
+    }).join('');
+
+    return `
+      <div class="account-group ${index % 2 === 1 ? 'alt' : ''}">
+        <div class="account-header">
+          <span class="account-name">${escapeHtml(group.accountName)}</span>
+          <span class="account-total" data-sensitive>${formatMoneyPlain(group.totalMarketValue)}</span>
+          <span class="account-percent">${formatPercent(group.percent)}</span>
+        </div>
+        <div class="account-symbols">${rows}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+/**
+ * 高亮指定扇区
+ */
+function highlightPieSector(pieId, symbolKey) {
+  // 清除所有高亮
+  document.querySelectorAll('.pie-sector.highlighted').forEach((el) => {
+    el.classList.remove('highlighted');
+  });
+  document.querySelectorAll('.pie-svg').forEach((svg) => {
+    svg.classList.remove('has-highlight');
+  });
+  document.querySelectorAll('.symbol-row.highlighted').forEach((el) => {
+    el.classList.remove('highlighted');
+  });
+
+  if (!symbolKey) return;
+
+  // 高亮目标扇区
+  const sector = document.querySelector(
+    `.pie-sector[data-pie-id="${pieId}"][data-symbol-key="${symbolKey}"]`
+  );
+  if (sector) {
+    sector.classList.add('highlighted');
+    sector.closest('.pie-svg').classList.add('has-highlight');
+
+    // 显示tooltip
+    const tooltip = document.querySelector(`.pie-tooltip[data-pie-id="${pieId}"]`);
+    if (tooltip) {
+      const label = sector.dataset.label || '';
+      const value = Number(sector.dataset.value || 0);
+      const percent = Number(sector.dataset.percent || 0);
+      tooltip.innerHTML = `
+        <div class="tooltip-name">${escapeHtml(label)}</div>
+        <div class="tooltip-row">
+          <span>Value</span>
+          <span data-sensitive>${formatMoneyPlain(value)}</span>
+        </div>
+        <div class="tooltip-row">
+          <span>Percent</span>
+          <span>${formatPercent(percent)}</span>
+        </div>
+      `;
+      tooltip.style.display = 'block';
+    }
+  }
+
+  // 高亮对应行
+  const row = document.querySelector(
+    `.symbol-row[data-pie-id="${pieId}"][data-symbol-key="${symbolKey}"]`
+  );
+  if (row) {
+    row.classList.add('highlighted');
+  }
+}
+
+/**
+ * 绑定Charts页面交互事件
+ */
+function bindChartsInteractions() {
+  // 标的行点击
+  view.querySelectorAll('.symbol-row[data-symbol-key]').forEach((row) => {
+    row.addEventListener('click', () => {
+      const pieId = row.dataset.pieId;
+      const symbolKey = row.dataset.symbolKey;
+      const isHighlighted = row.classList.contains('highlighted');
+
+      if (isHighlighted) {
+        highlightPieSector(pieId, null);
+        const tooltip = document.querySelector(`.pie-tooltip[data-pie-id="${pieId}"]`);
+        if (tooltip) tooltip.style.display = 'none';
+      } else {
+        highlightPieSector(pieId, symbolKey);
+      }
+    });
+  });
+
+  // 点击空白处取消高亮
+  view.querySelectorAll('.currency-block').forEach((block) => {
+    block.addEventListener('click', (e) => {
+      if (e.target.closest('.symbol-row') || e.target.closest('.pie-sector')) return;
+      const pieId = block.dataset.pieId;
+      highlightPieSector(pieId, null);
+      const tooltip = document.querySelector(`.pie-tooltip[data-pie-id="${pieId}"]`);
+      if (tooltip) tooltip.style.display = 'none';
+    });
+  });
+}
+
 async function renderCharts() {
   view.innerHTML = `
     <div class="section-title">Charts</div>
@@ -1276,68 +1514,66 @@ async function renderCharts() {
 
   try {
     const bySymbol = await fetchJSON('/api/holdings-by-symbol');
+    const currencies = Object.keys(bySymbol || {});
 
-    const symbolBlocks = Object.entries(bySymbol || {}).map(([currency, data]) => {
+    if (!currencies.length) {
+      view.innerHTML = renderEmptyState('No holdings data yet. Add your first transaction.', '<a class="primary" href="#/add">Add transaction</a>');
+      return;
+    }
+
+    const currencyBlocks = currencies.map((currency) => {
+      const data = bySymbol[currency] || {};
       const symbols = data.symbols || [];
       const totalMarketValue = data.total_market_value !== undefined && data.total_market_value !== null
         ? data.total_market_value
         : symbols.reduce((sum, s) => sum + (s.market_value || 0), 0);
-      const accountEntries = Object.entries(data.by_account || {}).map(([accountId, account]) => {
-        const total = (account.symbols || []).reduce((sum, s) => sum + (s.market_value || 0), 0);
+
+      const pieId = `pie-${currency}`;
+
+      // 构建环图数据项，添加 key 用于高亮关联
+      const pieItems = buildSymbolPieItems(symbols, 8).map((item) => {
+        const matchingSymbol = symbols.find((s) => s.display_name === item.label || s.symbol === item.label);
         return {
-          id: accountId,
-          name: account.account_name || accountId,
-          total
+          ...item,
+          key: matchingSymbol ? `${matchingSymbol.symbol}-${matchingSymbol.account_id}` : item.label,
         };
-      }).sort((a, b) => b.total - a.total);
-      const accountItems = accountEntries
-        .filter((acc) => acc.total > 0)
-        .map((acc) => ({
-          label: acc.name,
-          value: acc.total,
-        }));
-      const pieChart = renderPieChart({
-        items: buildSymbolPieItems(symbols, 8),
+      });
+
+      // 渲染 SVG 环图
+      const pieChart = renderInteractivePieChart({
+        items: pieItems,
         totalLabel: 'Total',
         totalValue: totalMarketValue,
+        currency,
+        pieId,
       });
-      const accountPie = accountItems.length
-        ? renderAccountPieChart({ items: accountItems })
-        : '';
-      const rows = symbols.slice(0, 12).map((s) => `
-        <div class="chart-row">
-          <div>
-            <strong>${escapeHtml(s.display_name)}</strong>
-            <div class="section-sub">${escapeHtml(s.symbol)}</div>
-          </div>
-          <div class="bar"><span style="width:${s.percent}%;"></span></div>
-          <div class="num">${formatPercent(s.percent)}</div>
-          <div class="num" data-sensitive>${formatMoneyPlain(s.market_value)}</div>
-        </div>
-      `).join('');
-      const listMarkup = rows ? `<div class="list">${rows}</div>` : '';
-      const accountMarkup = accountPie ? `
-        <div class="section-sub account-title">By account</div>
-        ${accountPie}
-      ` : '';
+
+      // 按账户分组
+      const accountGroups = groupSymbolsByAccount(symbols, totalMarketValue);
+      const groupList = renderAccountGroupList(accountGroups, currency, pieId);
 
       return `
-        <div class="card">
-          <h3>${currency} Symbols</h3>
-          ${pieChart}
-          ${accountMarkup}
-          ${listMarkup}
+        <div class="currency-block card" data-pie-id="${pieId}">
+          <h3>${currency}</h3>
+          <div class="chart-content">
+            ${pieChart}
+            <div class="account-groups-list">
+              ${groupList}
+            </div>
+          </div>
         </div>
       `;
     }).join('');
 
     view.innerHTML = `
       <div class="section-title">Charts</div>
-    <div class="section-sub">Symbol composition snapshots by currency.</div>
-      <div class="grid two">
-        ${symbolBlocks || renderEmptyState('No symbol data yet.')}
+      <div class="section-sub">Asset allocation by currency and account.</div>
+      <div class="charts-horizontal">
+        ${currencyBlocks}
       </div>
     `;
+
+    bindChartsInteractions();
   } catch (err) {
     view.innerHTML = renderEmptyState('Unable to load charts. Check API connection.');
   }
@@ -1700,6 +1936,308 @@ async function renderAddTransaction() {
   }
 }
 
+async function renderTransfer() {
+  view.innerHTML = `
+    <div class="section-title">Transfer</div>
+    <div class="section-sub">Transfer cash or securities between accounts.</div>
+    <div class="card">Loading form...</div>
+  `;
+
+  try {
+    const [accounts, assetTypes, holdingsBySymbol] = await Promise.all([
+      fetchJSON('/api/accounts'),
+      fetchJSON('/api/asset-types'),
+      fetchJSON('/api/holdings-by-symbol')
+    ]);
+
+    if (!accounts.length || accounts.length < 2) {
+      view.innerHTML = renderEmptyState(
+        accounts.length < 2
+          ? 'You need at least two accounts for transfers.'
+          : 'Create accounts first in Settings.',
+        '<a class="primary" href="#/settings">Open Settings</a>'
+      );
+      return;
+    }
+
+    const accountMap = new Map(accounts.map((a) => [a.account_id, a.account_name || a.account_id]));
+    const holdings = [];
+    Object.entries(holdingsBySymbol || {}).forEach(([currency, data]) => {
+      (data.symbols || []).forEach((h) => {
+        holdings.push({
+          currency,
+          symbol: h.symbol,
+          displayName: h.display_name || h.symbol,
+          accountId: h.account_id,
+          assetType: (h.asset_type || '').toLowerCase(),
+          totalShares: h.total_shares || 0,
+          avgCost: h.avg_cost || 0,
+        });
+      });
+    });
+    const today = new Date().toISOString().slice(0, 10);
+
+    const buildAccountOptions = (items) => items.map((a) => `
+      <option value="${escapeHtml(a.account_id)}">${escapeHtml(a.account_name || a.account_id)}</option>
+    `).join('');
+
+    const buildAssetOptions = (items) => items.map((a) => `
+      <option value="${escapeHtml(a.code)}">${escapeHtml(a.label)}</option>
+    `).join('');
+
+    view.innerHTML = `
+      <div class="section-title">Transfer</div>
+      <div class="section-sub">Transfer cash or securities between accounts.</div>
+      <div class="card">
+        <form id="transfer-form" class="form">
+          <div class="form-row">
+            <div class="field">
+              <label>Date</label>
+              <input type="date" name="transaction_date" value="${today}" required>
+            </div>
+            <div class="field">
+              <label>From Currency</label>
+              <select name="from_currency" id="tf-from-currency">
+                <option value="CNY">CNY</option>
+                <option value="USD">USD</option>
+                <option value="HKD">HKD</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>To Currency</label>
+              <select name="to_currency" id="tf-to-currency">
+                <option value="">(Same)</option>
+                <option value="CNY">CNY</option>
+                <option value="USD">USD</option>
+                <option value="HKD">HKD</option>
+              </select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="field">
+              <label>From Account</label>
+              <select name="from_account_id" id="tf-from-account" required></select>
+            </div>
+            <div class="field">
+              <label>To Account</label>
+              <select name="to_account_id" id="tf-to-account" required></select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="field">
+              <label>Asset Type</label>
+              <select name="asset_type" id="tf-asset-type"></select>
+            </div>
+            <div class="field">
+              <label>Symbol</label>
+              <select name="symbol" id="tf-symbol" required></select>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="field">
+              <label>Quantity</label>
+              <input type="number" step="0.0001" name="quantity" id="tf-quantity" required>
+              <small id="tf-quantity-hint" class="section-sub"></small>
+            </div>
+            <div class="field">
+              <label>Commission</label>
+              <input type="number" step="0.0001" name="commission" value="0">
+            </div>
+          </div>
+          <div class="field">
+            <label>Notes</label>
+            <textarea name="notes" rows="2"></textarea>
+          </div>
+          <div class="actions">
+            <button class="btn" type="submit">Execute Transfer</button>
+          </div>
+        </form>
+      </div>
+    `;
+
+    const fromCurrency = document.getElementById('tf-from-currency');
+    const toCurrency = document.getElementById('tf-to-currency');
+    const fromAccount = document.getElementById('tf-from-account');
+    const toAccount = document.getElementById('tf-to-account');
+    const assetType = document.getElementById('tf-asset-type');
+    const symbolSelect = document.getElementById('tf-symbol');
+    const quantityInput = document.getElementById('tf-quantity');
+    const quantityHint = document.getElementById('tf-quantity-hint');
+
+    function getSourceHoldings() {
+      const currency = fromCurrency.value;
+      const accountId = fromAccount.value;
+      const asset = String(assetType.value || '').toLowerCase();
+      return holdings.filter((h) =>
+        h.currency === currency &&
+        h.accountId === accountId &&
+        h.assetType === asset &&
+        h.totalShares > 0
+      );
+    }
+
+    function updateFromAccountOptions() {
+      const currency = fromCurrency.value;
+      const accountIds = new Set(holdings.filter((h) => h.currency === currency).map((h) => h.accountId));
+      let candidates = accountIds.size
+        ? accounts.filter((a) => accountIds.has(a.account_id))
+        : accounts;
+      if (!candidates.length) candidates = accounts;
+      const current = fromAccount.value;
+      fromAccount.innerHTML = buildAccountOptions(candidates);
+      if (current && candidates.some((a) => a.account_id === current)) {
+        fromAccount.value = current;
+      }
+    }
+
+    function updateToAccountOptions() {
+      const fromId = fromAccount.value;
+      const candidates = accounts.filter((a) => a.account_id !== fromId);
+      const current = toAccount.value;
+      toAccount.innerHTML = buildAccountOptions(candidates);
+      if (current && candidates.some((a) => a.account_id === current)) {
+        toAccount.value = current;
+      }
+    }
+
+    function updateAssetTypeOptions() {
+      const currency = fromCurrency.value;
+      const accountId = fromAccount.value;
+      const typesInHoldings = new Set(
+        holdings
+          .filter((h) => h.currency === currency && h.accountId === accountId && h.totalShares > 0)
+          .map((h) => h.assetType)
+          .filter(Boolean)
+      );
+      let options = [];
+      if (typesInHoldings.size) {
+        options = assetTypes
+          .filter((a) => typesInHoldings.has(String(a.code).toLowerCase()))
+          .map((a) => ({ code: a.code, label: a.label }));
+      }
+      if (!options.length) {
+        options = assetTypes.map((a) => ({ code: a.code, label: a.label }));
+      }
+      const current = assetType.value;
+      assetType.innerHTML = buildAssetOptions(options);
+      if (current && options.some((opt) => String(opt.code).toLowerCase() === String(current).toLowerCase())) {
+        assetType.value = current;
+      }
+    }
+
+    function updateSymbolOptions() {
+      const srcHoldings = getSourceHoldings();
+      if (srcHoldings.length) {
+        symbolSelect.disabled = false;
+        symbolSelect.innerHTML = srcHoldings.map((h) => `
+          <option value="${escapeHtml(h.symbol)}">${escapeHtml(h.displayName)} (${escapeHtml(h.symbol)})</option>
+        `).join('');
+      } else {
+        symbolSelect.innerHTML = '<option value="">No holdings</option>';
+        symbolSelect.disabled = true;
+      }
+      updateQuantityHint();
+    }
+
+    function updateQuantityHint() {
+      const srcHoldings = getSourceHoldings();
+      const selected = srcHoldings.find((h) => h.symbol === symbolSelect.value);
+      if (selected) {
+        quantityInput.max = selected.totalShares;
+        quantityInput.disabled = false;
+        quantityHint.textContent = `Available: ${formatNumber(selected.totalShares)}`;
+      } else {
+        quantityInput.removeAttribute('max');
+        quantityHint.textContent = '';
+        quantityInput.disabled = true;
+      }
+    }
+
+    function refreshAll() {
+      updateFromAccountOptions();
+      updateToAccountOptions();
+      updateAssetTypeOptions();
+      updateSymbolOptions();
+    }
+
+    fromCurrency.addEventListener('change', refreshAll);
+    toCurrency.addEventListener('change', () => {}); // no cascading needed
+    fromAccount.addEventListener('change', () => {
+      updateToAccountOptions();
+      updateAssetTypeOptions();
+      updateSymbolOptions();
+    });
+    toAccount.addEventListener('change', () => {});
+    assetType.addEventListener('change', updateSymbolOptions);
+    symbolSelect.addEventListener('change', updateQuantityHint);
+
+    refreshAll();
+
+    const form = document.getElementById('transfer-form');
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const formData = new FormData(form);
+      const payload = {};
+      payload.transaction_date = formData.get('transaction_date');
+      payload.symbol = formData.get('symbol');
+      payload.quantity = Number(formData.get('quantity'));
+      payload.from_account_id = formData.get('from_account_id');
+      payload.to_account_id = formData.get('to_account_id');
+      payload.from_currency = formData.get('from_currency');
+      payload.to_currency = formData.get('to_currency') || formData.get('from_currency');
+      payload.commission = Number(formData.get('commission') || 0);
+      payload.asset_type = formData.get('asset_type');
+      const notes = formData.get('notes');
+      if (notes && notes.trim()) {
+        payload.notes = notes.trim();
+      }
+
+      if (!payload.symbol) {
+        showToast('Please select a symbol');
+        return;
+      }
+      if (payload.quantity <= 0) {
+        showToast('Quantity must be positive');
+        return;
+      }
+      if (payload.from_account_id === payload.to_account_id) {
+        showToast('From and To accounts must be different');
+        return;
+      }
+
+      const srcHoldings = getSourceHoldings();
+      const selected = srcHoldings.find((h) => h.symbol === payload.symbol);
+      if (selected && payload.quantity > selected.totalShares) {
+        showToast('Quantity exceeds available holdings');
+        return;
+      }
+
+      try {
+        const result = await fetchJSON('/api/transfers', {
+          method: 'POST',
+          body: JSON.stringify(payload),
+        });
+        let msg = 'Transfer completed';
+        if (result.exchange_rate) {
+          msg += ` (rate: ${result.exchange_rate.toFixed(4)})`;
+        }
+        showToast(msg);
+        window.location.hash = '#/transactions';
+      } catch (err) {
+        const errorText = err.message || 'Transfer failed';
+        try {
+          const parsed = JSON.parse(errorText);
+          showToast(parsed.error || errorText);
+        } catch {
+          showToast(errorText);
+        }
+      }
+    });
+  } catch (err) {
+    view.innerHTML = renderEmptyState('Unable to load transfer form.');
+  }
+}
+
 async function fetchAllTransactionsForExport() {
   const pageSize = 500;
   let offset = 0;
@@ -1860,6 +2398,13 @@ async function renderSettings() {
                 <input id="ai-allow-new-symbols" type="checkbox" ${aiSettings.allowNewSymbols !== false ? 'checked' : ''}>
                 Allow new symbols in suggestions
               </label>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="field">
+              <label>Strategy Prompt</label>
+              <textarea id="ai-strategy-prompt" rows="4" placeholder="例如：优先控制回撤，新增标的仅考虑高现金流蓝筹。">${escapeHtml(aiSettings.strategyPrompt || '')}</textarea>
+              <div class="section-sub">Optional. Used as your personal strategy preference in AI analysis.</div>
             </div>
             <div class="actions">
               <button class="btn" id="save-ai-analysis" type="button">Save AI Settings</button>
@@ -2286,6 +2831,7 @@ function bindSettingsActions() {
       const horizonInput = document.getElementById('ai-horizon');
       const adviceStyleInput = document.getElementById('ai-advice-style');
       const allowNewSymbolsInput = document.getElementById('ai-allow-new-symbols');
+      const strategyPromptInput = document.getElementById('ai-strategy-prompt');
 
       const settings = {
         baseUrl: trimTrailingSlash(baseUrlInput && baseUrlInput.value ? baseUrlInput.value.trim() : '') || 'https://api.openai.com/v1',
@@ -2295,6 +2841,7 @@ function bindSettingsActions() {
         horizon: horizonInput && horizonInput.value ? horizonInput.value : 'medium',
         adviceStyle: adviceStyleInput && adviceStyleInput.value ? adviceStyleInput.value : 'balanced',
         allowNewSymbols: allowNewSymbolsInput ? !!allowNewSymbolsInput.checked : true,
+        strategyPrompt: strategyPromptInput && strategyPromptInput.value ? strategyPromptInput.value.trim() : '',
       };
 
       saveAIAnalysisSettings(settings);
@@ -2423,7 +2970,7 @@ function bindSettingsActions() {
     });
   }
 
-  view.querySelectorAll('button[data-asset]').forEach((btn) => {
+  view.querySelectorAll('button[data-asset]:not([data-alloc-save])').forEach((btn) => {
     btn.addEventListener('click', async () => {
       if (btn.disabled) return;
       const code = btn.dataset.asset;

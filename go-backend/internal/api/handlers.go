@@ -236,6 +236,7 @@ func (h *handler) analyzeHoldingsWithAI(w http.ResponseWriter, r *http.Request) 
 		Horizon:         payload.Horizon,
 		AdviceStyle:     payload.AdviceStyle,
 		AllowNewSymbols: allowNewSymbols,
+		StrategyPrompt:  payload.StrategyPrompt,
 	})
 	if err != nil {
 		h.logger.Error("ai holdings analysis failed",

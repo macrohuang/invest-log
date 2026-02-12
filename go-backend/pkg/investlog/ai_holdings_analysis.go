@@ -54,6 +54,7 @@ type HoldingsAnalysisRequest struct {
 	Horizon         string
 	AdviceStyle     string
 	AllowNewSymbols bool
+	StrategyPrompt  string
 }
 
 // HoldingsAnalysisRecommendation contains one actionable recommendation.
@@ -99,6 +100,7 @@ type holdingsAnalysisPromptInput struct {
 	Horizon         string                             `json:"horizon"`
 	AdviceStyle     string                             `json:"advice_style"`
 	AllowNewSymbols bool                               `json:"allow_new_symbols"`
+	StrategyPrompt  string                             `json:"strategy_prompt,omitempty"`
 	Holdings        []holdingsAnalysisCurrencySnapshot `json:"holdings"`
 }
 
@@ -244,6 +246,7 @@ func normalizeHoldingsAnalysisRequest(req HoldingsAnalysisRequest) (HoldingsAnal
 		return HoldingsAnalysisRequest{}, fmt.Errorf("invalid advice_style: %w", err)
 	}
 	normalized.AdviceStyle = adviceStyle
+	normalized.StrategyPrompt = strings.TrimSpace(req.StrategyPrompt)
 
 	return normalized, nil
 }
@@ -316,6 +319,7 @@ func buildHoldingsAnalysisUserPrompt(input *holdingsAnalysisPromptInput, req Hol
 		Horizon:         req.Horizon,
 		AdviceStyle:     req.AdviceStyle,
 		AllowNewSymbols: req.AllowNewSymbols,
+		StrategyPrompt:  req.StrategyPrompt,
 		Holdings:        input.Holdings,
 	}
 	payload, err := json.Marshal(promptInput)
@@ -330,7 +334,8 @@ func buildHoldingsAnalysisUserPrompt(input *holdingsAnalysisPromptInput, req Hol
 1) 必须是 JSON 对象。
 2) recommendations 中建议尽量覆盖：仓位集中风险、资产分散、回撤防御、长期价值。
 3) 允许新增标的时，可给出 add 建议并点名标的。
-4) 每条建议必须给出 theory_tag 和 rationale。`, string(payload))
+4) 每条建议必须给出 theory_tag 和 rationale。
+5) 若 strategy_prompt 非空，需优先吸收为策略偏好，但不得违反风险提示原则。`, string(payload))
 	return prompt, nil
 }
 

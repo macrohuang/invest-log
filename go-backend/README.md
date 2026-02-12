@@ -62,7 +62,8 @@ If you open `static/index.html` directly (file or Capacitor), set the API base i
 
 The Holdings page includes an `AI Analyze` action that calls
 `/api/ai/holdings-analysis`. It accepts OpenAI-compatible `base_url`, `model`,
-and `api_key`, and returns structured analysis plus symbol-level suggestions.
+`api_key`, and optional `strategy_prompt`, and returns structured analysis plus
+symbol-level suggestions.
 
 ## macOS build
 

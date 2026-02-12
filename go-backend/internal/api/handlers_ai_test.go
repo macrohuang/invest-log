@@ -1,7 +1,9 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,6 +14,7 @@ import (
 func TestAIHoldingsAnalysisEndpoint(t *testing.T) {
 	router, cleanup := setupTestRouter(t)
 	defer cleanup()
+	strategyPrompt := "优先控制回撤，不新增中概股"
 
 	// Seed minimal holdings.
 	doRequest(router, http.MethodPost, "/api/accounts", map[string]any{
@@ -29,6 +32,13 @@ func TestAIHoldingsAnalysisEndpoint(t *testing.T) {
 	})
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read ai request body: %v", err)
+		}
+		if !bytes.Contains(body, []byte(strategyPrompt)) {
+			t.Fatalf("expected strategy prompt in ai request body, got: %s", string(body))
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"model":"mock-model","choices":[{"message":{"content":"{\"overall_summary\":\"ok\",\"risk_level\":\"balanced\",\"key_findings\":[\"f1\"],\"recommendations\":[{\"symbol\":\"AAPL\",\"action\":\"hold\",\"theory_tag\":\"Buffett\",\"rationale\":\"长期持有\"}],\"disclaimer\":\"仅供参考\"}"}}]}`))
 	}))
@@ -43,6 +53,7 @@ func TestAIHoldingsAnalysisEndpoint(t *testing.T) {
 		"horizon":           "medium",
 		"advice_style":      "balanced",
 		"allow_new_symbols": true,
+		"strategy_prompt":   strategyPrompt,
 	})
 	if rr.Code != http.StatusOK {
 		t.Fatalf("POST /api/ai/holdings-analysis: expected 200, got %d, body: %s", rr.Code, rr.Body.String())

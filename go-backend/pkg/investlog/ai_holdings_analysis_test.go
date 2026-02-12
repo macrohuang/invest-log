@@ -149,8 +149,9 @@ func TestNormalizeHoldingsAnalysisRequest(t *testing.T) {
 	}
 
 	result, err := normalizeHoldingsAnalysisRequest(HoldingsAnalysisRequest{
-		APIKey: " k ",
-		Model:  " m ",
+		APIKey:         " k ",
+		Model:          " m ",
+		StrategyPrompt: "  偏好低波动高分红  ",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -160,6 +161,34 @@ func TestNormalizeHoldingsAnalysisRequest(t *testing.T) {
 	}
 	if result.RiskProfile != "balanced" || result.Horizon != "medium" || result.AdviceStyle != "balanced" {
 		t.Fatalf("expected default enums, got %+v", result)
+	}
+	if result.StrategyPrompt != "偏好低波动高分红" {
+		t.Fatalf("expected trimmed strategy prompt, got %q", result.StrategyPrompt)
+	}
+}
+
+func TestBuildHoldingsAnalysisUserPrompt_ContainsStrategyPrompt(t *testing.T) {
+	t.Parallel()
+
+	prompt, err := buildHoldingsAnalysisUserPrompt(&holdingsAnalysisPromptInput{
+		Holdings: []holdingsAnalysisCurrencySnapshot{{
+			Currency: "USD",
+		}},
+	}, HoldingsAnalysisRequest{
+		RiskProfile:     "balanced",
+		Horizon:         "medium",
+		AdviceStyle:     "balanced",
+		AllowNewSymbols: true,
+		StrategyPrompt:  "优先控制回撤，不新增中概股",
+	})
+	if err != nil {
+		t.Fatalf("buildHoldingsAnalysisUserPrompt failed: %v", err)
+	}
+	if !strings.Contains(prompt, "strategy_prompt") {
+		t.Fatalf("expected strategy_prompt in prompt, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "优先控制回撤，不新增中概股") {
+		t.Fatalf("expected strategy prompt value in prompt, got: %s", prompt)
 	}
 }
 

@@ -127,6 +127,7 @@ function loadAIAnalysisSettings() {
         horizon: 'medium',
         adviceStyle: 'balanced',
         allowNewSymbols: true,
+        strategyPrompt: '',
       };
     }
     const parsed = JSON.parse(raw);
@@ -138,6 +139,7 @@ function loadAIAnalysisSettings() {
       horizon: parsed.horizon || 'medium',
       adviceStyle: parsed.adviceStyle || 'balanced',
       allowNewSymbols: parsed.allowNewSymbols !== false,
+      strategyPrompt: parsed.strategyPrompt || '',
     };
   } catch (err) {
     return {
@@ -148,6 +150,7 @@ function loadAIAnalysisSettings() {
       horizon: 'medium',
       adviceStyle: 'balanced',
       allowNewSymbols: true,
+      strategyPrompt: '',
     };
   }
 }
@@ -932,6 +935,7 @@ async function runAIHoldingsAnalysis(currency) {
     horizon: settings.horizon || 'medium',
     adviceStyle: settings.adviceStyle || 'balanced',
     allowNewSymbols: settings.allowNewSymbols !== false,
+    strategyPrompt: (settings.strategyPrompt || '').trim(),
   };
 
   if (!normalizedSettings.model || !normalizedSettings.apiKey) {
@@ -954,6 +958,7 @@ async function runAIHoldingsAnalysis(currency) {
       horizon: normalizedSettings.horizon,
       advice_style: normalizedSettings.adviceStyle,
       allow_new_symbols: normalizedSettings.allowNewSymbols,
+      strategy_prompt: normalizedSettings.strategyPrompt,
     }),
   });
 
@@ -2394,6 +2399,13 @@ async function renderSettings() {
                 Allow new symbols in suggestions
               </label>
             </div>
+          </div>
+          <div class="form-row">
+            <div class="field">
+              <label>Strategy Prompt</label>
+              <textarea id="ai-strategy-prompt" rows="4" placeholder="例如：优先控制回撤，新增标的仅考虑高现金流蓝筹。">${escapeHtml(aiSettings.strategyPrompt || '')}</textarea>
+              <div class="section-sub">Optional. Used as your personal strategy preference in AI analysis.</div>
+            </div>
             <div class="actions">
               <button class="btn" id="save-ai-analysis" type="button">Save AI Settings</button>
             </div>
@@ -2819,6 +2831,7 @@ function bindSettingsActions() {
       const horizonInput = document.getElementById('ai-horizon');
       const adviceStyleInput = document.getElementById('ai-advice-style');
       const allowNewSymbolsInput = document.getElementById('ai-allow-new-symbols');
+      const strategyPromptInput = document.getElementById('ai-strategy-prompt');
 
       const settings = {
         baseUrl: trimTrailingSlash(baseUrlInput && baseUrlInput.value ? baseUrlInput.value.trim() : '') || 'https://api.openai.com/v1',
@@ -2828,6 +2841,7 @@ function bindSettingsActions() {
         horizon: horizonInput && horizonInput.value ? horizonInput.value : 'medium',
         adviceStyle: adviceStyleInput && adviceStyleInput.value ? adviceStyleInput.value : 'balanced',
         allowNewSymbols: allowNewSymbolsInput ? !!allowNewSymbolsInput.checked : true,
+        strategyPrompt: strategyPromptInput && strategyPromptInput.value ? strategyPromptInput.value.trim() : '',
       };
 
       saveAIAnalysisSettings(settings);
