@@ -255,6 +255,10 @@ function renderRoute() {
       setActiveRoute('settings');
       renderSettings();
       break;
+    case 'symbol-analysis':
+      setActiveRoute('holdings');
+      renderSymbolAnalysis();
+      break;
     default:
       setActiveRoute('overview');
       renderOverview();
@@ -677,7 +681,7 @@ async function renderHoldings() {
             <td class="num" data-sensitive>${formatMoneyPlain(s.avg_cost)}</td>
             <td class="num" data-sensitive>${s.latest_price !== null ? formatMoneyPlain(s.latest_price) : '—'}</td>
             <td class="num" data-sensitive>${formatMoneyPlain(s.market_value)}</td>
-            <td class="num">${pnlMarkup}</td>
+            <td class="num pnl-column">${pnlMarkup}</td>
             <td class="actions-column">
               <div class="actions holdings-actions">
                 <select class="btn trade-select" data-symbol="${escapeHtml(s.symbol)}" data-currency="${currency}" data-account="${escapeHtml(s.account_id || '')}" data-asset-type="${escapeHtml(s.asset_type || '')}">
@@ -690,6 +694,7 @@ async function renderHoldings() {
                 </select>
                 <button class="btn secondary" data-action="update" data-symbol="${escapeHtml(s.symbol)}" data-currency="${currency}" data-asset-type="${escapeHtml(s.asset_type || '')}" ${updateDisabled}>Update</button>
                 <button class="btn tertiary" data-action="manual" data-symbol="${escapeHtml(s.symbol)}" data-currency="${currency}">Manual</button>
+                <button class="btn tertiary" data-action="symbol-ai" data-symbol="${escapeHtml(s.symbol)}" data-currency="${currency}">AI</button>
               </div>
             </td>
           </tr>
@@ -730,8 +735,8 @@ async function renderHoldings() {
                   <th class="num">Avg Cost</th>
                   <th class="num">Price</th>
                   <th class="sortable num" data-sort="market">Market Value</th>
-                  <th class="sortable num" data-sort="pnl">PnL</th>
-                  <th>Actions</th>
+                  <th class="sortable num pnl-column" data-sort="pnl">PnL</th>
+                  <th class="actions-column">Actions</th>
                 </tr>
               </thead>
               <tbody>${rows}</tbody>
@@ -855,6 +860,12 @@ function bindHoldingsActions() {
       const symbol = btn.dataset.symbol;
       const currency = btn.dataset.currency;
       const assetType = btn.dataset.assetType || '';
+
+      if (action === 'symbol-ai') {
+        window.location.hash = `#/symbol-analysis?symbol=${encodeURIComponent(symbol)}&currency=${encodeURIComponent(currency)}`;
+        return;
+      }
+
       try {
         if (action === 'update-all') {
           await fetchJSON('/api/prices/update-all', {
@@ -964,6 +975,265 @@ async function runAIHoldingsAnalysis(currency) {
 
   state.aiAnalysisByCurrency[currency] = result;
   return true;
+}
+
+async function renderSymbolAnalysis() {
+  const query = getRouteQuery();
+  const symbol = (query.get('symbol') || '').trim();
+  const currency = (query.get('currency') || '').trim().toUpperCase();
+
+  if (!symbol || !currency) {
+    view.innerHTML = renderEmptyState('Missing symbol or currency parameter.');
+    return;
+  }
+
+  view.innerHTML = `
+    <div class="section-title">${escapeHtml(symbol)} Analysis</div>
+    <div class="section-sub">Multi-dimensional AI deep analysis · ${escapeHtml(currency)}</div>
+    <div class="symbol-analysis-actions">
+      <a href="#/holdings" class="btn secondary">Back to Holdings</a>
+      <button class="btn primary" id="run-symbol-analysis">Run Analysis</button>
+    </div>
+    <div id="symbol-analysis-content">
+      <div class="card">Loading latest analysis...</div>
+    </div>
+  `;
+
+  const runBtn = document.getElementById('run-symbol-analysis');
+  runBtn.addEventListener('click', async () => {
+    runBtn.disabled = true;
+    runBtn.textContent = 'Analyzing...';
+    try {
+      await runSymbolAnalysis(symbol, currency);
+      showToast('Analysis complete');
+      renderSymbolAnalysis();
+    } catch (err) {
+      let message = 'Analysis failed';
+      if (err && err.message) {
+        try {
+          const parsed = JSON.parse(err.message);
+          if (parsed && parsed.error) message = String(parsed.error);
+        } catch (e) {
+          message = err.message;
+        }
+        message = message.split('\n')[0];
+        if (message.length > 140) message = message.slice(0, 137) + '...';
+      }
+      showToast(message);
+    } finally {
+      runBtn.disabled = false;
+      runBtn.textContent = 'Run Analysis';
+    }
+  });
+
+  // Load latest analysis
+  try {
+    const latest = await fetchJSON(`/api/ai/symbol-analysis?symbol=${encodeURIComponent(symbol)}&currency=${encodeURIComponent(currency)}`);
+    const history = await fetchJSON(`/api/ai/symbol-analysis/history?symbol=${encodeURIComponent(symbol)}&currency=${encodeURIComponent(currency)}&limit=5`);
+
+    const contentEl = document.getElementById('symbol-analysis-content');
+    if (!latest) {
+      contentEl.innerHTML = '<div class="card"><div class="section-sub">No analysis yet. Click "Run Analysis" to start.</div></div>';
+      return;
+    }
+
+    contentEl.innerHTML = `
+      ${renderSynthesisCard(latest.synthesis, latest)}
+      <div class="symbol-analysis-grid">
+        ${renderDimensionCard('macro', '宏观经济政策', latest.dimensions?.macro)}
+        ${renderDimensionCard('industry', '行业竞争格局', latest.dimensions?.industry)}
+        ${renderDimensionCard('company', '公司基本面', latest.dimensions?.company)}
+        ${renderDimensionCard('international', '国际政治经济', latest.dimensions?.international)}
+      </div>
+      ${renderSymbolAnalysisHistory(history || [])}
+    `;
+  } catch (err) {
+    const contentEl = document.getElementById('symbol-analysis-content');
+    if (contentEl) {
+      contentEl.innerHTML = '<div class="card"><div class="section-sub">Failed to load analysis.</div></div>';
+    }
+  }
+}
+
+async function runSymbolAnalysis(symbol, currency) {
+  const settings = loadAIAnalysisSettings();
+  const normalizedSettings = {
+    baseUrl: (settings.baseUrl || 'https://api.openai.com/v1').trim(),
+    model: (settings.model || '').trim(),
+    apiKey: (settings.apiKey || '').trim(),
+    strategyPrompt: (settings.strategyPrompt || '').trim(),
+  };
+
+  if (!normalizedSettings.model || !normalizedSettings.apiKey) {
+    localStorage.setItem('activeSettingsTab', 'api');
+    window.location.hash = '#/settings';
+    showToast('Set AI model and API Key in Settings > API');
+    throw new Error('AI settings not configured');
+  }
+
+  return await fetchJSON('/api/ai/symbol-analysis', {
+    method: 'POST',
+    body: JSON.stringify({
+      base_url: normalizedSettings.baseUrl,
+      api_key: normalizedSettings.apiKey,
+      model: normalizedSettings.model,
+      symbol,
+      currency,
+      strategy_prompt: normalizedSettings.strategyPrompt,
+    }),
+  });
+}
+
+function renderSynthesisCard(synthesis, result) {
+  if (!synthesis) {
+    return '<div class="card synthesis-card"><div class="section-sub">No synthesis available.</div></div>';
+  }
+
+  const ratingLabels = {
+    strong_buy: 'Strong Buy',
+    buy: 'Buy',
+    hold: 'Hold',
+    reduce: 'Reduce',
+    strong_sell: 'Strong Sell',
+  };
+  const ratingColors = {
+    strong_buy: 'rating-strong-buy',
+    buy: 'rating-buy',
+    hold: 'rating-hold',
+    reduce: 'rating-reduce',
+    strong_sell: 'rating-strong-sell',
+  };
+
+  const ratingLabel = ratingLabels[synthesis.overall_rating] || synthesis.overall_rating || '—';
+  const ratingClass = ratingColors[synthesis.overall_rating] || 'rating-hold';
+  const model = result?.model ? escapeHtml(String(result.model)) : '—';
+  const createdAt = result?.created_at ? escapeHtml(String(result.created_at)) : '—';
+
+  const keyFactors = Array.isArray(synthesis.key_factors)
+    ? `<ul class="ai-findings">${synthesis.key_factors.map(f => `<li>${escapeHtml(f)}</li>`).join('')}</ul>`
+    : '';
+  const riskWarnings = Array.isArray(synthesis.risk_warnings)
+    ? `<ul class="ai-findings risk-list">${synthesis.risk_warnings.map(w => `<li>${escapeHtml(w)}</li>`).join('')}</ul>`
+    : '';
+  const actionItems = Array.isArray(synthesis.action_items)
+    ? `<div class="ai-recommendations">${synthesis.action_items.map(item => `
+        <div class="ai-rec-item">
+          <div class="ai-rec-head">
+            <strong>${escapeHtml(item.action || '')}</strong>
+            <span class="tag other">${escapeHtml(item.priority || '')}</span>
+          </div>
+          <div class="section-sub">${escapeHtml(item.rationale || '')}</div>
+        </div>
+      `).join('')}</div>`
+    : '';
+
+  return `
+    <div class="card synthesis-card">
+      <div class="synthesis-header">
+        <div class="synthesis-rating">
+          <span class="rating-badge ${ratingClass}">${escapeHtml(ratingLabel)}</span>
+          <span class="section-sub">Confidence: ${escapeHtml(synthesis.confidence || '—')}</span>
+        </div>
+        <div class="section-sub">Model: ${model} · ${createdAt}</div>
+      </div>
+      <div class="ai-summary">
+        <div>${escapeHtml(synthesis.overall_summary || '')}</div>
+      </div>
+      ${synthesis.position_suggestion ? `<div class="section-sub"><strong>Position:</strong> ${escapeHtml(synthesis.position_suggestion)}</div>` : ''}
+      <div class="ai-section">
+        <h5>Key Factors</h5>
+        ${keyFactors}
+      </div>
+      <div class="ai-section">
+        <h5>Risk Warnings</h5>
+        ${riskWarnings}
+      </div>
+      <div class="ai-section">
+        <h5>Action Items</h5>
+        ${actionItems}
+      </div>
+      ${synthesis.time_horizon_notes ? `<div class="section-sub"><strong>Time Horizon:</strong> ${escapeHtml(synthesis.time_horizon_notes)}</div>` : ''}
+      ${synthesis.disclaimer ? `<div class="section-sub disclaimer">${escapeHtml(synthesis.disclaimer)}</div>` : ''}
+    </div>
+  `;
+}
+
+function renderDimensionCard(dimension, label, data) {
+  if (!data) {
+    return `
+      <div class="card dimension-card dimension-empty">
+        <h4>${escapeHtml(label)}</h4>
+        <div class="section-sub">No data available</div>
+      </div>
+    `;
+  }
+
+  const ratingColors = {
+    positive: 'dimension-positive',
+    neutral: 'dimension-neutral',
+    negative: 'dimension-negative',
+  };
+  const ratingClass = ratingColors[data.rating] || 'dimension-neutral';
+
+  const keyPoints = Array.isArray(data.key_points)
+    ? `<ul class="ai-findings">${data.key_points.map(p => `<li>${escapeHtml(p)}</li>`).join('')}</ul>`
+    : '';
+  const risks = Array.isArray(data.risks)
+    ? `<ul class="ai-findings risk-list">${data.risks.map(r => `<li>${escapeHtml(r)}</li>`).join('')}</ul>`
+    : '';
+  const opportunities = Array.isArray(data.opportunities)
+    ? `<ul class="ai-findings opportunity-list">${data.opportunities.map(o => `<li>${escapeHtml(o)}</li>`).join('')}</ul>`
+    : '';
+
+  return `
+    <div class="card dimension-card ${ratingClass}">
+      <div class="dimension-header">
+        <h4>${escapeHtml(label)}</h4>
+        <span class="rating-badge rating-${escapeHtml(data.rating || 'neutral')}">${escapeHtml(data.rating || '—')}</span>
+      </div>
+      <div class="section-sub">Confidence: ${escapeHtml(data.confidence || '—')}</div>
+      <div class="section-sub">${escapeHtml(data.summary || '')}</div>
+      ${data.valuation_assessment ? `<div class="section-sub"><strong>Valuation:</strong> ${escapeHtml(data.valuation_assessment)}</div>` : ''}
+      <div class="ai-section"><h5>Key Points</h5>${keyPoints}</div>
+      <div class="ai-section"><h5>Risks</h5>${risks}</div>
+      <div class="ai-section"><h5>Opportunities</h5>${opportunities}</div>
+    </div>
+  `;
+}
+
+function renderSymbolAnalysisHistory(results) {
+  if (!Array.isArray(results) || results.length === 0) {
+    return '';
+  }
+
+  const ratingLabels = {
+    strong_buy: 'Strong Buy',
+    buy: 'Buy',
+    hold: 'Hold',
+    reduce: 'Reduce',
+    strong_sell: 'Strong Sell',
+  };
+
+  const items = results.map(r => {
+    const rating = r.synthesis?.overall_rating || '—';
+    const ratingLabel = ratingLabels[rating] || rating;
+    const date = r.created_at || '—';
+    const model = r.model || '—';
+    return `
+      <div class="analysis-history-item">
+        <span class="rating-badge rating-${escapeHtml(rating)}">${escapeHtml(ratingLabel)}</span>
+        <span class="section-sub">${escapeHtml(model)}</span>
+        <span class="section-sub">${escapeHtml(date)}</span>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="card analysis-history">
+      <h4>Analysis History</h4>
+      ${items}
+    </div>
+  `;
 }
 
 async function renderTransactions() {
@@ -1726,25 +1996,26 @@ async function renderAddTransaction() {
     }
 
     function updateAssetTypeOptions() {
+      const sellMode = typeSelect.value === 'SELL';
       const currency = currencySelect.value;
       const accountId = accountSelect.value;
-      const typesInHoldings = new Set(
-        holdings
-          .filter((h) => h.currency === currency && h.accountId === accountId)
-          .map((h) => h.assetType)
-          .filter(Boolean)
-      );
-      let options = [];
-      if (typesInHoldings.size) {
-        const ordered = assetTypes
-          .filter((a) => typesInHoldings.has(String(a.code).toLowerCase()))
-          .map((a) => ({ code: a.code, label: a.label }));
-        const extras = Array.from(typesInHoldings)
-          .filter((code) => !assetLabelMap.has(code))
-          .map((code) => ({ code, label: code }));
-        options = [...ordered, ...extras];
-      } else {
-        options = assetTypes.map((a) => ({ code: a.code, label: a.label }));
+      let options = assetTypes.map((a) => ({ code: a.code, label: a.label }));
+      if (sellMode) {
+        const typesInHoldings = new Set(
+          holdings
+            .filter((h) => h.currency === currency && h.accountId === accountId)
+            .map((h) => h.assetType)
+            .filter(Boolean)
+        );
+        if (typesInHoldings.size) {
+          const ordered = assetTypes
+            .filter((a) => typesInHoldings.has(String(a.code).toLowerCase()))
+            .map((a) => ({ code: a.code, label: a.label }));
+          const extras = Array.from(typesInHoldings)
+            .filter((code) => !assetLabelMap.has(code))
+            .map((code) => ({ code, label: code }));
+          options = [...ordered, ...extras];
+        }
       }
       const current = assetSelect.value;
       assetSelect.innerHTML = buildAssetOptions(options);
@@ -1845,7 +2116,11 @@ async function renderAddTransaction() {
       updateSymbolMode();
     });
 
-    typeSelect.addEventListener('change', updateSymbolMode);
+    typeSelect.addEventListener('change', () => {
+      updateAssetTypeOptions();
+      updatePriceLock();
+      updateSymbolMode();
+    });
     symbolSelect.addEventListener('change', updateSellConstraints);
 
     updateAccountOptions();
@@ -1879,6 +2154,8 @@ async function renderAddTransaction() {
     }
     if (prefillType && Array.from(typeSelect.options).some((o) => o.value === prefillType)) {
       typeSelect.value = prefillType;
+      updateAssetTypeOptions();
+      updatePriceLock();
       updateSymbolMode();
     }
     if (prefillSymbol) {

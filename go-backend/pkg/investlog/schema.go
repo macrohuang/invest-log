@@ -227,6 +227,27 @@ func initDatabase(db *sql.DB) error {
 		return err
 	}
 
+	if err := exec(tx, `
+		CREATE TABLE IF NOT EXISTS symbol_analyses (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			symbol TEXT NOT NULL,
+			currency TEXT NOT NULL CHECK(currency IN ('CNY', 'USD', 'HKD')),
+			model TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'running', 'completed', 'failed')),
+			macro_analysis TEXT,
+			industry_analysis TEXT,
+			company_analysis TEXT,
+			international_analysis TEXT,
+			synthesis TEXT,
+			error_message TEXT,
+			strategy_prompt TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			completed_at DATETIME
+		)
+	`); err != nil {
+		return err
+	}
+
 	indexes := []string{
 		"CREATE INDEX IF NOT EXISTS idx_symbol_id ON transactions(symbol_id)",
 		"CREATE INDEX IF NOT EXISTS idx_date ON transactions(transaction_date)",
@@ -235,6 +256,7 @@ func initDatabase(db *sql.DB) error {
 		"CREATE INDEX IF NOT EXISTS idx_currency ON transactions(currency)",
 		"CREATE INDEX IF NOT EXISTS idx_symbols_asset_type ON symbols(asset_type)",
 		"CREATE INDEX IF NOT EXISTS idx_linked_txn ON transactions(linked_transaction_id)",
+		"CREATE INDEX IF NOT EXISTS idx_symbol_analyses_lookup ON symbol_analyses(symbol, currency, created_at DESC)",
 	}
 	for _, idx := range indexes {
 		if err := exec(tx, idx); err != nil {

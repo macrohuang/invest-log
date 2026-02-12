@@ -251,6 +251,65 @@ func (h *handler) analyzeHoldingsWithAI(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (h *handler) analyzeSymbolWithAI(w http.ResponseWriter, r *http.Request) {
+	var payload aiSymbolAnalysisPayload
+	if err := decodeJSON(r, &payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	result, err := h.core.AnalyzeSymbol(investlog.SymbolAnalysisRequest{
+		BaseURL:        payload.BaseURL,
+		APIKey:         payload.APIKey,
+		Model:          payload.Model,
+		Symbol:         payload.Symbol,
+		Currency:       payload.Currency,
+		StrategyPrompt: payload.StrategyPrompt,
+	})
+	if err != nil {
+		h.logger.Error("ai symbol analysis failed",
+			"symbol", payload.Symbol,
+			"currency", payload.Currency,
+			"model", payload.Model,
+			"err", err,
+		)
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *handler) getSymbolAnalysis(w http.ResponseWriter, r *http.Request) {
+	symbol := r.URL.Query().Get("symbol")
+	currency := r.URL.Query().Get("currency")
+	if symbol == "" || currency == "" {
+		writeError(w, http.StatusBadRequest, "symbol and currency are required")
+		return
+	}
+	result, err := h.core.GetSymbolAnalysis(symbol, currency)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *handler) getSymbolAnalysisHistory(w http.ResponseWriter, r *http.Request) {
+	symbol := r.URL.Query().Get("symbol")
+	currency := r.URL.Query().Get("currency")
+	if symbol == "" || currency == "" {
+		writeError(w, http.StatusBadRequest, "symbol and currency are required")
+		return
+	}
+	limit := parseIntDefault(r.URL.Query().Get("limit"), 10)
+	results, err := h.core.GetSymbolAnalysisHistory(symbol, currency, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, results)
+}
+
 func (h *handler) getAccounts(w http.ResponseWriter, r *http.Request) {
 	result, err := h.core.GetAccounts()
 	if err != nil {

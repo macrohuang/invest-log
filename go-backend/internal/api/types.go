@@ -46,6 +46,15 @@ type aiHoldingsAnalysisPayload struct {
 	StrategyPrompt  string `json:"strategy_prompt"`
 }
 
+type aiSymbolAnalysisPayload struct {
+	BaseURL        string `json:"base_url"`
+	APIKey         string `json:"api_key"`
+	Model          string `json:"model"`
+	Symbol         string `json:"symbol"`
+	Currency       string `json:"currency"`
+	StrategyPrompt string `json:"strategy_prompt"`
+}
+
 type addAccountPayload struct {
 	AccountID         string  `json:"account_id"`
 	AccountName       string  `json:"account_name"`
