@@ -24,17 +24,17 @@ const (
 	priceScaleFactor    = 100.0
 
 	// Gold price conversion constants.
-	ouncesToGrams         = 31.1035 // Troy ounces to grams
-	defaultUSDToCNYRate   = 7.2     // Default USD/CNY rate; should be overridden with real-time rate
+	ouncesToGrams       = 31.1035 // Troy ounces to grams
+	defaultUSDToCNYRate = 7.2     // Default USD/CNY rate; should be overridden with real-time rate
 )
 
 // Pre-compiled regexes for symbol detection and parsing.
 // These are compiled once at package init to avoid repeated compilation in hot paths.
 var (
-	reSixDigit   = regexp.MustCompile(`^\d{6}$`)       // Chinese stock/fund codes
-	reHKStock    = regexp.MustCompile(`^0\d{4}$`)      // Hong Kong stock codes (e.g., 00001)
-	reHKConnect  = regexp.MustCompile(`^H\d{5}$`)      // Stock Connect (港股通) codes (e.g., H00700)
-	reUSStock    = regexp.MustCompile(`^[A-Z]+$`)      // US stock tickers (e.g., AAPL)
+	reSixDigit   = regexp.MustCompile(`^\d{6}$`)  // Chinese stock/fund codes
+	reHKStock    = regexp.MustCompile(`^0\d{4}$`) // Hong Kong stock codes (e.g., 00001)
+	reHKConnect  = regexp.MustCompile(`^H\d{5}$`) // Stock Connect (港股通) codes (e.g., H00700)
+	reUSStock    = regexp.MustCompile(`^[A-Z]+$`) // US stock tickers (e.g., AAPL)
 	reFundLsjzTD = regexp.MustCompile(`<td[^>]*>\d{4}-\d{2}-\d{2}</td>\s*<td[^>]*>([\d.]+)</td>`)
 )
 
@@ -55,9 +55,9 @@ var (
 // ChiNext (300, 301), STAR market (688, 689).
 var aSharePrefixes = []string{
 	"000", "001", "002", "003", // Shenzhen main board & SME
-	"300", "301",               // ChiNext
+	"300", "301", // ChiNext
 	"600", "601", "603", "605", // Shanghai main board
-	"688", "689",               // STAR market
+	"688", "689", // STAR market
 }
 
 // ETF/LOF prefixes for Chinese markets.
@@ -91,8 +91,8 @@ type priceFetcherOptions struct {
 	FailWindow    time.Duration
 	Cooldown      time.Duration
 	HTTPTimeout   time.Duration
-	HTTPClient    HTTPDoer                                // Optional: inject custom client for testing
-	USDToCNYRate  float64                                 // Optional: USD/CNY exchange rate for gold price conversion
+	HTTPClient    HTTPDoer                                   // Optional: inject custom client for testing
+	USDToCNYRate  float64                                    // Optional: USD/CNY exchange rate for gold price conversion
 	RateResolver  func(fromCurrency string) (float64, error) // Optional: resolve FX rates at runtime (e.g. HKD→CNY)
 }
 
@@ -150,8 +150,8 @@ func newPriceFetcher(opts priceFetcherOptions) *priceFetcher {
 		client:        client,
 		usdToCNYRate:  usdToCNYRate,
 		rateResolver:  opts.RateResolver,
-		cache:        map[string]cacheEntry{},
-		serviceState: map[string]*serviceState{},
+		cache:         map[string]cacheEntry{},
+		serviceState:  map[string]*serviceState{},
 	}
 }
 
@@ -568,10 +568,31 @@ func (pf *priceFetcher) eastmoneyFetchFundLsjz(symbol string) (*float64, error) 
 }
 
 func (pf *priceFetcher) yahooFetchStock(symbol, currency string) (*float64, error) {
-	yahooSymbol := buildYahooSymbol(symbol, currency)
-	if yahooSymbol == "" {
+	yahooSymbols := buildYahooSymbolCandidates(symbol, currency)
+	if len(yahooSymbols) == 0 {
 		return nil, nil
 	}
+
+	var lastErr error
+	for _, yahooSymbol := range yahooSymbols {
+		price, err := pf.yahooFetchStockByYahooSymbol(yahooSymbol)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if price != nil {
+			return price, nil
+		}
+	}
+
+	if lastErr != nil {
+		return nil, lastErr
+	}
+
+	return nil, nil
+}
+
+func (pf *priceFetcher) yahooFetchStockByYahooSymbol(yahooSymbol string) (*float64, error) {
 	url := fmt.Sprintf("https://query1.finance.yahoo.com/v8/finance/chart/%s?interval=1d&range=1d", yahooSymbol)
 	body, err := pf.httpGet(context.Background(), url, map[string]string{"User-Agent": "Mozilla/5.0"})
 	if err != nil {
@@ -609,7 +630,46 @@ func (pf *priceFetcher) yahooFetchStock(symbol, currency string) (*float64, erro
 	if err != nil {
 		return nil, err
 	}
+	if price <= 0 {
+		return nil, nil
+	}
 	return &price, nil
+}
+
+func buildYahooSymbolCandidates(symbol, currency string) []string {
+	primary := buildYahooSymbol(symbol, currency)
+	if primary == "" {
+		return nil
+	}
+
+	candidates := []string{primary}
+	code := normalizeSymbol(symbol)
+	currency = normalizeCurrency(currency)
+
+	if currency == "USD" && shouldTryLSEYahooFallback(code, primary) {
+		candidates = append(candidates, code+".L")
+	}
+
+	return candidates
+}
+
+func shouldTryLSEYahooFallback(symbol, primaryYahooSymbol string) bool {
+	if symbol == "" || primaryYahooSymbol == "" {
+		return false
+	}
+	if strings.Contains(symbol, ".") || strings.Contains(symbol, "=") {
+		return false
+	}
+	if strings.HasSuffix(primaryYahooSymbol, ".L") {
+		return false
+	}
+	for _, ch := range symbol {
+		if (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func buildYahooSymbol(symbol, currency string) string {

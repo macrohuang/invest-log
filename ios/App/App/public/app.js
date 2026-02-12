@@ -2,6 +2,7 @@ const state = {
   apiBase: '',
   privacy: false,
   aiAnalysisByCurrency: {},
+  holdingsFilters: {}, // { currency: { accountIds: [], symbols: [] } }
 };
 
 const aiAnalysisSettingsKey = 'aiHoldingsAnalysisSettings';
@@ -165,6 +166,218 @@ function formatActionLabel(action) {
   if (normalized === 'reduce') return 'Reduce';
   if (normalized === 'add') return 'Add';
   return 'Hold';
+}
+
+function parsePositionSuggestionMeta(positionSuggestion) {
+  const text = String(positionSuggestion || '').trim();
+  if (!text) {
+    return null;
+  }
+
+  const currentMatch = text.match(/当前占比\s*([+-]?\d+(?:\.\d+)?)%/);
+  const targetMatch = text.match(/目标区间\s*([+-]?\d+(?:\.\d+)?)%\s*-\s*([+-]?\d+(?:\.\d+)?)%/);
+  const deltaMatch = text.match(/差值\s*([+-]?\d+(?:\.\d+)?)%(?:（([^）]+)）)?/);
+  const actionMatch = text.match(/动作[:：]\s*([^；。]+)/);
+  const executionMatch = text.match(/执行[:：]\s*([^；。]+)/);
+
+  if (!currentMatch || !targetMatch || !deltaMatch) {
+    return null;
+  }
+
+  return {
+    current: `${currentMatch[1]}%`,
+    target: `${targetMatch[1]}%-${targetMatch[2]}%`,
+    delta: `${deltaMatch[1]}%`,
+    status: (deltaMatch[2] || '').trim(),
+    action: (actionMatch && actionMatch[1] ? actionMatch[1].trim() : ''),
+    execution: (executionMatch && executionMatch[1] ? executionMatch[1].trim() : ''),
+  };
+}
+
+function parseAnalysisTimestamp(value) {
+  if (!value) {
+    return null;
+  }
+  const ts = Date.parse(value);
+  return Number.isFinite(ts) ? ts : null;
+}
+
+function parseReviewNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function normalizeRiskWarnings(synthesis) {
+  if (!synthesis || !Array.isArray(synthesis.risk_warnings)) {
+    return [];
+  }
+  return synthesis.risk_warnings
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
+}
+
+function pickBaselineAnalysis(sortedResults, latestTs, windowDays) {
+  if (!Array.isArray(sortedResults) || sortedResults.length < 2 || !Number.isFinite(latestTs)) {
+    return sortedResults && sortedResults.length > 1 ? sortedResults[1] : null;
+  }
+
+  const targetTs = latestTs - windowDays * 24 * 60 * 60 * 1000;
+  let candidate = null;
+
+  for (let i = 1; i < sortedResults.length; i += 1) {
+    const ts = parseAnalysisTimestamp(sortedResults[i].created_at);
+    if (ts === null) {
+      continue;
+    }
+    if (ts <= targetTs && (!candidate || ts > candidate.ts)) {
+      candidate = { ts, item: sortedResults[i] };
+    }
+  }
+
+  if (candidate) {
+    return candidate.item;
+  }
+  return sortedResults[1] || null;
+}
+
+function computeReviewSnapshot(results, windowDays) {
+  if (!Array.isArray(results) || results.length < 2) {
+    return null;
+  }
+
+  const sorted = [...results].sort((a, b) => {
+    const aTs = parseAnalysisTimestamp(a.created_at) || 0;
+    const bTs = parseAnalysisTimestamp(b.created_at) || 0;
+    return bTs - aTs;
+  });
+
+  const latest = sorted[0];
+  const latestTs = parseAnalysisTimestamp(latest.created_at);
+  const baseline = pickBaselineAnalysis(sorted, latestTs || 0, windowDays);
+  if (!baseline) {
+    return null;
+  }
+
+  const latestSynthesis = latest.synthesis || {};
+  const baselineSynthesis = baseline.synthesis || {};
+
+  const probabilityNow = parseReviewNumber(latestSynthesis.action_probability_percent);
+  const probabilityPrev = parseReviewNumber(baselineSynthesis.action_probability_percent);
+  const probabilityDelta = probabilityNow !== null && probabilityPrev !== null
+    ? Number((probabilityNow - probabilityPrev).toFixed(2))
+    : null;
+
+  const positionNow = parsePositionSuggestionMeta(latestSynthesis.position_suggestion);
+  const positionPrev = parsePositionSuggestionMeta(baselineSynthesis.position_suggestion);
+  const offsetNow = positionNow ? parseReviewNumber(positionNow.delta) : null;
+  const offsetPrev = positionPrev ? parseReviewNumber(positionPrev.delta) : null;
+  const offsetDelta = offsetNow !== null && offsetPrev !== null
+    ? Number((offsetNow - offsetPrev).toFixed(2))
+    : null;
+
+  const riskNow = normalizeRiskWarnings(latestSynthesis);
+  const riskPrev = normalizeRiskWarnings(baselineSynthesis);
+  const riskNowSet = new Set(riskNow.map((item) => item.toLowerCase()));
+  const riskPrevSet = new Set(riskPrev.map((item) => item.toLowerCase()));
+
+  const newRisks = riskNow.filter((item) => !riskPrevSet.has(item.toLowerCase()));
+  const clearedRisks = riskPrev.filter((item) => !riskNowSet.has(item.toLowerCase()));
+
+  return {
+    latest,
+    baseline,
+    probabilityNow,
+    probabilityPrev,
+    probabilityDelta,
+    actionNow: String(latestSynthesis.target_action || '').trim() || '—',
+    actionPrev: String(baselineSynthesis.target_action || '').trim() || '—',
+    offsetNow,
+    offsetPrev,
+    offsetDelta,
+    newRisks,
+    clearedRisks,
+  };
+}
+
+function formatReviewSigned(value, suffix, digits = 0) {
+  if (value === null || !Number.isFinite(value)) {
+    return '—';
+  }
+  const sign = value > 0 ? '+' : '';
+  return `${sign}${value.toFixed(digits)}${suffix}`;
+}
+
+function renderReviewCard(results, title, windowDays) {
+  const snapshot = computeReviewSnapshot(results, windowDays);
+  if (!snapshot) {
+    return `
+      <div class="card review-mode-card">
+        <div class="review-mode-header">
+          <h4>${escapeHtml(title)}</h4>
+          <span class="section-sub">Need 2+ analyses</span>
+        </div>
+        <div class="section-sub">Run another analysis to unlock trend comparison.</div>
+      </div>
+    `;
+  }
+
+  const probabilityTone = snapshot.probabilityDelta === null
+    ? ''
+    : (snapshot.probabilityDelta >= 0 ? 'review-up' : 'review-down');
+  const offsetTone = snapshot.offsetDelta === null
+    ? ''
+    : (snapshot.offsetDelta >= 0 ? 'review-up' : 'review-down');
+
+  const newRiskMarkup = snapshot.newRisks.length
+    ? `<ul class="review-risk-list">${snapshot.newRisks.slice(0, 3).map((item) => `<li>+ ${escapeHtml(item)}</li>`).join('')}</ul>`
+    : '<div class="section-sub">No new risk flag.</div>';
+
+  const clearedRiskMarkup = snapshot.clearedRisks.length
+    ? `<ul class="review-risk-list review-cleared">${snapshot.clearedRisks.slice(0, 3).map((item) => `<li>- ${escapeHtml(item)}</li>`).join('')}</ul>`
+    : '<div class="section-sub">No cleared risk.</div>';
+
+  return `
+    <div class="card review-mode-card">
+      <div class="review-mode-header">
+        <h4>${escapeHtml(title)}</h4>
+        <span class="section-sub">${escapeHtml(snapshot.baseline.created_at || '—')} → ${escapeHtml(snapshot.latest.created_at || '—')}</span>
+      </div>
+      <div class="review-row">
+        <span class="review-label">Probability</span>
+        <span class="review-value ${probabilityTone}">${escapeHtml(snapshot.probabilityNow !== null ? `${snapshot.probabilityNow.toFixed(0)}%` : '—')} (${escapeHtml(formatReviewSigned(snapshot.probabilityDelta, 'pp', 0))})</span>
+      </div>
+      <div class="review-row">
+        <span class="review-label">Action</span>
+        <span class="review-value">${escapeHtml(snapshot.actionNow)} (${escapeHtml(snapshot.actionPrev)} → ${escapeHtml(snapshot.actionNow)})</span>
+      </div>
+      <div class="review-row">
+        <span class="review-label">Position Offset</span>
+        <span class="review-value ${offsetTone}">${escapeHtml(snapshot.offsetNow !== null ? `${snapshot.offsetNow.toFixed(2)}%` : '—')} (${escapeHtml(formatReviewSigned(snapshot.offsetDelta, 'pp', 2))})</span>
+      </div>
+      <div class="review-split">
+        <div>
+          <div class="review-label">New Risks</div>
+          ${newRiskMarkup}
+        </div>
+        <div>
+          <div class="review-label">Cleared Risks</div>
+          ${clearedRiskMarkup}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderReviewModeSection(results) {
+  if (!Array.isArray(results) || results.length === 0) {
+    return '';
+  }
+  return `
+    <div class="review-mode-section">
+      ${renderReviewCard(results, 'Weekly Review', 7)}
+      ${renderReviewCard(results, 'Monthly Review', 30)}
+    </div>
+  `;
 }
 
 function renderAIAnalysisCard(result, currency) {
@@ -645,24 +858,46 @@ async function renderHoldings() {
     }
 
     const tabButtons = currencies.map((currency) => `
-      <button class="tab-button" data-holdings-tab="${currency}" type="button">${currency}</button>
+      <button class="tab-btn" type="button" data-holdings-tab="${currency}">${currency}</button>
     `).join('');
 
     const panels = currencies.map((currency) => {
       const currencyData = data[currency] || {};
-      const symbols = currencyData.symbols || [];
-      const canUpdateAll = symbols.some((s) => s.auto_update !== 0);
+      const allSymbols = currencyData.symbols || [];
+
+      // Initialize filter state safely
+      if (!state.holdingsFilters[currency]) {
+        state.holdingsFilters[currency] = { accountIds: [], symbols: [] };
+      }
+      const activeFilters = state.holdingsFilters[currency];
+
+      // Apply filtering
+      const filteredSymbols = allSymbols.filter(s => {
+        const matchesAccount = !activeFilters.accountIds.length || activeFilters.accountIds.includes(String(s.account_id || ''));
+        const matchesSymbol = !activeFilters.symbols.length || activeFilters.symbols.includes(String(s.symbol || ''));
+        return matchesAccount && matchesSymbol;
+      });
+
+      // Default Sort: Account ASC, Symbol Name ASC
+      filteredSymbols.sort((a, b) => {
+        const accA = String(a.account_name || a.account_id || '').toLowerCase();
+        const accB = String(b.account_name || b.account_id || '').toLowerCase();
+        if (accA !== accB) return accA.localeCompare(accB);
+        const nameA = String(a.display_name || a.symbol || '').toLowerCase();
+        const nameB = String(b.display_name || b.symbol || '').toLowerCase();
+        return nameA.localeCompare(nameB);
+      });
+
+      const canUpdateAll = allSymbols.some((s) => s.auto_update !== 0);
       const aiResult = state.aiAnalysisByCurrency[currency] || null;
       const totalMarketValue = Number(currencyData.total_market_value ?? 0);
       const totalCost = Number(currencyData.total_cost ?? 0);
       const totalPnL = Number(currencyData.total_pnl ?? (totalMarketValue - totalCost));
       const totalPnLPercent = totalCost > 0 ? (totalPnL / totalCost) * 100 : null;
       const pnlClass = totalPnL >= 0 ? 'pnl-positive' : 'pnl-negative';
-      const totalMarketLabel = formatMoney(totalMarketValue, currency);
-      const totalPnLLabel = formatMoney(totalPnL, currency);
-      const totalPnLPercentLabel = totalPnLPercent !== null ? `<span class="total-pnl-percent">${formatPercent(totalPnLPercent)}</span>` : '';
-      const rows = symbols.map((s) => {
-        const pnlClass = s.unrealized_pnl !== null && s.unrealized_pnl !== undefined ? (s.unrealized_pnl >= 0 ? 'pnl-positive' : 'pnl-negative') : '';
+      
+      const rows = filteredSymbols.map((s) => {
+        const pnlRowClass = s.unrealized_pnl !== null && s.unrealized_pnl !== undefined ? (s.unrealized_pnl >= 0 ? 'pnl-positive' : 'pnl-negative') : '';
         const autoUpdate = s.auto_update !== 0;
         const updateDisabled = autoUpdate ? '' : 'disabled title="Auto sync off"';
         const symbolLink = `#/transactions?symbol=${encodeURIComponent(s.symbol || '')}&account=${encodeURIComponent(s.account_id || '')}`;
@@ -670,7 +905,7 @@ async function renderHoldings() {
         const pnlPercent = symbolCost > 0 && s.unrealized_pnl !== null ? (s.unrealized_pnl / symbolCost) * 100 : null;
         const pnlPercentLabel = pnlPercent !== null ? `<span class="pnl-percent">${formatPercent(pnlPercent)}</span>` : '';
         const pnlMarkup = s.unrealized_pnl !== null && s.unrealized_pnl !== undefined
-          ? `<div class="pnl-cell"><span class="pnl-value ${pnlClass}" data-sensitive>${formatMoneyPlain(s.unrealized_pnl)}</span>${pnlPercentLabel}</div>`
+          ? `<div class="pnl-cell"><span class="pnl-value ${pnlRowClass}" data-sensitive>${formatMoneyPlain(s.unrealized_pnl)}</span>${pnlPercentLabel}</div>`
           : '<span class="section-sub">—</span>';
         const accountSort = (s.account_name || s.account_id || '').toString();
         return `
@@ -701,6 +936,24 @@ async function renderHoldings() {
         `;
       }).join('');
 
+      // Build unique filter options safely
+      const accountMap = new Map();
+      const symbolMap = new Map();
+      allSymbols.forEach(s => {
+        accountMap.set(String(s.account_id || ''), String(s.account_name || s.account_id || 'Unknown'));
+        symbolMap.set(String(s.symbol || ''), String(s.display_name || s.symbol || 'Unknown'));
+      });
+
+      const uniqueAccounts = Array.from(accountMap.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+      const uniqueSymbols = Array.from(symbolMap.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+
+      const getFilterIcon = (count) => `
+        <span class="filter-trigger ${count > 0 ? 'active' : ''}">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon></svg>
+          ${count > 0 ? `<small style="font-size:9px; margin-left:2px;">${count}</small>` : ''}
+        </span>
+      `;
+
       return `
         <div class="tab-panel" data-holdings-panel="${currency}">
           <div class="card holdings-card">
@@ -710,13 +963,13 @@ async function renderHoldings() {
                 <div class="panel-meta">
                   <div class="panel-metric">
                     <span class="section-sub">Market Value</span>
-                    <span class="metric-value" data-sensitive>${totalMarketLabel}</span>
+                    <span class="metric-value" data-sensitive>${formatMoney(totalMarketValue, currency)}</span>
                   </div>
                   <div class="panel-metric">
                     <span class="section-sub">Total P&amp;L</span>
                     <div class="metric-value-group">
-                      <span class="metric-value ${pnlClass}" data-sensitive>${totalPnLLabel}</span>
-                      ${totalPnLPercentLabel}
+                      <span class="metric-value ${pnlClass}" data-sensitive>${formatMoney(totalPnL, currency)}</span>
+                      ${totalPnLPercent !== null ? `<span class="total-pnl-percent">${formatPercent(totalPnLPercent)}</span>` : ''}
                     </div>
                   </div>
                 </div>
@@ -729,8 +982,40 @@ async function renderHoldings() {
             <table class="table" data-holdings-table>
               <thead>
                 <tr>
-                  <th>Symbol</th>
-                  <th class="sortable" data-sort="account">Account</th>
+                  <th style="position:relative;">
+                    Symbol ${getFilterIcon(activeFilters.symbols.length)}
+                    <div class="filter-popover" data-filter-type="symbol" data-currency="${currency}">
+                      <div class="filter-list">
+                        ${uniqueSymbols.map(([id, name]) => `
+                          <label class="filter-item">
+                            <input type="checkbox" value="${escapeHtml(id)}" ${activeFilters.symbols.includes(id) ? 'checked' : ''}>
+                            <span>${escapeHtml(name)}</span>
+                          </label>
+                        `).join('')}
+                      </div>
+                      <div class="filter-actions">
+                        <button class="btn" data-filter-action="apply">Apply</button>
+                        <button class="btn secondary" data-filter-action="clear">Reset</button>
+                      </div>
+                    </div>
+                  </th>
+                  <th class="sortable" data-sort="account" style="position:relative;">
+                    Account ${getFilterIcon(activeFilters.accountIds.length)}
+                    <div class="filter-popover" data-filter-type="account" data-currency="${currency}">
+                      <div class="filter-list">
+                        ${uniqueAccounts.map(([id, name]) => `
+                          <label class="filter-item">
+                            <input type="checkbox" value="${escapeHtml(id)}" ${activeFilters.accountIds.includes(id) ? 'checked' : ''}>
+                            <span>${escapeHtml(name)}</span>
+                          </label>
+                        `).join('')}
+                      </div>
+                      <div class="filter-actions">
+                        <button class="btn" data-filter-action="apply">Apply</button>
+                        <button class="btn secondary" data-filter-action="clear">Reset</button>
+                      </div>
+                    </div>
+                  </th>
                   <th class="num">Shares</th>
                   <th class="num">Avg Cost</th>
                   <th class="num">Price</th>
@@ -739,7 +1024,7 @@ async function renderHoldings() {
                   <th class="actions-column">Actions</th>
                 </tr>
               </thead>
-              <tbody>${rows}</tbody>
+              <tbody>${rows || '<tr><td colspan="8" style="text-align:center; padding: 20px;">No positions match filters.</td></tr>'}</tbody>
             </table>
             ${renderAIAnalysisCard(aiResult, currency)}
           </div>
@@ -756,10 +1041,78 @@ async function renderHoldings() {
 
     initHoldingsTabs();
     initHoldingsSort();
+    initHoldingsFilters();
     bindHoldingsActions();
   } catch (err) {
+    console.error('renderHoldings failed', err);
     view.innerHTML = renderEmptyState('Unable to load holdings. Check API connection.');
   }
+}
+
+function initHoldingsFilters() {
+  const triggers = view.querySelectorAll('.filter-trigger');
+  triggers.forEach((trigger) => {
+    trigger.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const popover = trigger.nextElementSibling;
+      const isShow = popover.classList.contains('show');
+      
+      // Close all other popovers
+      view.querySelectorAll('.filter-popover.show').forEach(p => p.classList.remove('show'));
+      
+      if (!isShow) {
+        popover.classList.add('show');
+      }
+    });
+  });
+
+  // Handle Apply button
+  view.querySelectorAll('[data-filter-action="apply"]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const popover = btn.closest('.filter-popover');
+      const currency = popover.dataset.currency;
+      const type = popover.dataset.filterType;
+      const checked = Array.from(popover.querySelectorAll('input:checked')).map(i => i.value);
+      
+      if (!state.holdingsFilters[currency]) {
+        state.holdingsFilters[currency] = { accountIds: [], symbols: [] };
+      }
+      
+      if (type === 'account') {
+        state.holdingsFilters[currency].accountIds = checked;
+      } else {
+        state.holdingsFilters[currency].symbols = checked;
+      }
+      
+      renderHoldings();
+    });
+  });
+
+  // Handle Reset button
+  view.querySelectorAll('[data-filter-action="clear"]').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const popover = btn.closest('.filter-popover');
+      const currency = popover.dataset.currency;
+      const type = popover.dataset.filterType;
+      
+      if (state.holdingsFilters[currency]) {
+        if (type === 'account') {
+          state.holdingsFilters[currency].accountIds = [];
+        } else {
+          state.holdingsFilters[currency].symbols = [];
+        }
+      }
+      
+      renderHoldings();
+    });
+  });
+
+  // Close popovers on click outside
+  document.addEventListener('click', () => {
+    view.querySelectorAll('.filter-popover.show').forEach(p => p.classList.remove('show'));
+  }, { once: true });
 }
 
 function initHoldingsTabs() {
@@ -1029,7 +1382,7 @@ async function renderSymbolAnalysis() {
   // Load latest analysis
   try {
     const latest = await fetchJSON(`/api/ai/symbol-analysis?symbol=${encodeURIComponent(symbol)}&currency=${encodeURIComponent(currency)}`);
-    const history = await fetchJSON(`/api/ai/symbol-analysis/history?symbol=${encodeURIComponent(symbol)}&currency=${encodeURIComponent(currency)}&limit=5`);
+    const history = await fetchJSON(`/api/ai/symbol-analysis/history?symbol=${encodeURIComponent(symbol)}&currency=${encodeURIComponent(currency)}&limit=12`);
 
     const contentEl = document.getElementById('symbol-analysis-content');
     if (!latest) {
@@ -1038,6 +1391,7 @@ async function renderSymbolAnalysis() {
     }
 
     contentEl.innerHTML = `
+      ${renderReviewModeSection(history || [])}
       ${renderSynthesisCard(latest.synthesis, latest)}
       <div class="symbol-analysis-grid">
         ${renderDimensionCard('macro', '宏观经济政策', latest.dimensions?.macro)}
@@ -1061,6 +1415,9 @@ async function runSymbolAnalysis(symbol, currency) {
     baseUrl: (settings.baseUrl || 'https://api.openai.com/v1').trim(),
     model: (settings.model || '').trim(),
     apiKey: (settings.apiKey || '').trim(),
+    riskProfile: (settings.riskProfile || 'balanced').trim(),
+    horizon: (settings.horizon || 'medium').trim(),
+    adviceStyle: (settings.adviceStyle || 'balanced').trim(),
     strategyPrompt: (settings.strategyPrompt || '').trim(),
   };
 
@@ -1079,6 +1436,9 @@ async function runSymbolAnalysis(symbol, currency) {
       model: normalizedSettings.model,
       symbol,
       currency,
+      risk_profile: normalizedSettings.riskProfile,
+      horizon: normalizedSettings.horizon,
+      advice_style: normalizedSettings.adviceStyle,
       strategy_prompt: normalizedSettings.strategyPrompt,
     }),
   });
@@ -1126,6 +1486,19 @@ function renderSynthesisCard(synthesis, result) {
         </div>
       `).join('')}</div>`
     : '';
+  const positionMeta = parsePositionSuggestionMeta(synthesis.position_suggestion);
+  const positionMetaMarkup = positionMeta
+    ? `
+      <div class="position-meta-badges">
+        <span class="tag other">Current ${escapeHtml(positionMeta.current)}</span>
+        <span class="tag other">Target ${escapeHtml(positionMeta.target)}</span>
+        <span class="tag ${positionMeta.delta.startsWith('-') ? 'sell' : 'buy'}">Delta ${escapeHtml(positionMeta.delta)}</span>
+        ${positionMeta.status ? `<span class="tag other">${escapeHtml(positionMeta.status)}</span>` : ''}
+        ${positionMeta.action ? `<span class="tag other">Action ${escapeHtml(positionMeta.action)}</span>` : ''}
+      </div>
+      ${positionMeta.execution ? `<div class="section-sub"><strong>Execution:</strong> ${escapeHtml(positionMeta.execution)}</div>` : ''}
+    `
+    : '';
 
   return `
     <div class="card synthesis-card">
@@ -1139,7 +1512,9 @@ function renderSynthesisCard(synthesis, result) {
       <div class="ai-summary">
         <div>${escapeHtml(synthesis.overall_summary || '')}</div>
       </div>
-      ${synthesis.position_suggestion ? `<div class="section-sub"><strong>Position:</strong> ${escapeHtml(synthesis.position_suggestion)}</div>` : ''}
+      ${Number.isFinite(Number(synthesis.action_probability_percent)) ? `<div class="section-sub"><strong>Action Probability:</strong> ${escapeHtml(String(synthesis.action_probability_percent))}%</div>` : ''}
+      ${positionMetaMarkup}
+      ${synthesis.position_suggestion && !positionMeta ? `<div class="section-sub"><strong>Position:</strong> ${escapeHtml(synthesis.position_suggestion)}</div>` : ''}
       <div class="ai-section">
         <h5>Key Factors</h5>
         ${keyFactors}

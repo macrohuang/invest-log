@@ -52,6 +52,9 @@ type aiSymbolAnalysisPayload struct {
 	Model          string `json:"model"`
 	Symbol         string `json:"symbol"`
 	Currency       string `json:"currency"`
+	RiskProfile    string `json:"risk_profile"`
+	Horizon        string `json:"horizon"`
+	AdviceStyle    string `json:"advice_style"`
 	StrategyPrompt string `json:"strategy_prompt"`
 }
 

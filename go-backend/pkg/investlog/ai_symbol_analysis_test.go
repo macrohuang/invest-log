@@ -207,6 +207,58 @@ func TestAnalyzeSymbol_PartialFailure(t *testing.T) {
 	}
 }
 
+func TestAnalyzeSymbol_SynthesisUsesPositionAndPreferences(t *testing.T) {
+	core, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	testAccount(t, core, "acc-1", "Main")
+	testAccount(t, core, "acc-2", "IRA")
+	testBuyTransaction(t, core, "AAPL", 10, 100, "USD", "acc-1")
+	testBuyTransaction(t, core, "AAPL", 5, 120, "USD", "acc-2")
+	testBuyTransaction(t, core, "MSFT", 20, 50, "USD", "acc-1")
+
+	original := aiChatCompletion
+	defer func() { aiChatCompletion = original }()
+
+	var synthesisPrompt string
+	aiChatCompletion = func(ctx context.Context, req aiChatCompletionRequest) (aiChatCompletionResult, error) {
+		if strings.Contains(req.SystemPrompt, "综合投资分析师") {
+			synthesisPrompt = req.UserPrompt
+			return aiChatCompletionResult{Model: "mock", Content: stubSynthesisJSON}, nil
+		}
+		return dimensionStubRouter(ctx, req)
+	}
+
+	_, err := core.AnalyzeSymbol(SymbolAnalysisRequest{
+		BaseURL:        "https://example.com/v1",
+		APIKey:         "test-key",
+		Model:          "mock-model",
+		Symbol:         "AAPL",
+		Currency:       "USD",
+		RiskProfile:    "aggressive",
+		Horizon:        "long",
+		AdviceStyle:    "aggressive",
+		StrategyPrompt: "成长股高波动策略",
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeSymbol failed: %v", err)
+	}
+
+	checks := []string{
+		`"position_percent"`,
+		`"total_shares":15`,
+		`"risk_profile":"aggressive"`,
+		`"horizon":"long"`,
+		`"advice_style":"aggressive"`,
+		"成长股高波动策略",
+	}
+	for _, want := range checks {
+		if !strings.Contains(synthesisPrompt, want) {
+			t.Fatalf("expected synthesis prompt to contain %q, got: %s", want, synthesisPrompt)
+		}
+	}
+}
+
 func TestAnalyzeSymbol_AllFail(t *testing.T) {
 	core, cleanup := setupTestDB(t)
 	defer cleanup()
@@ -368,7 +420,10 @@ func TestBuildSymbolContext(t *testing.T) {
 	defer cleanup()
 
 	testAccount(t, core, "acc-1", "Main")
+	testAccount(t, core, "acc-2", "IRA")
 	testBuyTransaction(t, core, "AAPL", 10, 100, "USD", "acc-1")
+	testBuyTransaction(t, core, "AAPL", 5, 120, "USD", "acc-2")
+	testBuyTransaction(t, core, "MSFT", 20, 50, "USD", "acc-1")
 
 	ctxJSON, err := core.buildSymbolContext("AAPL", "USD")
 	if err != nil {
@@ -386,18 +441,27 @@ func TestBuildSymbolContext(t *testing.T) {
 	if ctx.Currency != "USD" {
 		t.Fatalf("expected currency USD, got %s", ctx.Currency)
 	}
-	if ctx.TotalShares != 10 {
-		t.Fatalf("expected 10 shares, got %f", ctx.TotalShares)
+	if ctx.TotalShares != 15 {
+		t.Fatalf("expected 15 shares across accounts, got %f", ctx.TotalShares)
 	}
-	if ctx.AvgCost != 100 {
-		t.Fatalf("expected avg cost 100, got %f", ctx.AvgCost)
+	if ctx.AvgCost != 106.67 {
+		t.Fatalf("expected avg cost 106.67, got %f", ctx.AvgCost)
 	}
-	if ctx.CostBasis != 1000 {
-		t.Fatalf("expected cost basis 1000, got %f", ctx.CostBasis)
+	if ctx.CostBasis != 1600 {
+		t.Fatalf("expected cost basis 1600, got %f", ctx.CostBasis)
+	}
+	if ctx.PositionPercent <= 60 || ctx.PositionPercent >= 62 {
+		t.Fatalf("expected position percent around 61.54, got %f", ctx.PositionPercent)
+	}
+	if len(ctx.AccountNames) != 2 {
+		t.Fatalf("expected 2 account names, got %v", ctx.AccountNames)
+	}
+	if !(contains(ctx.AccountNames, "Main") && contains(ctx.AccountNames, "IRA")) {
+		t.Fatalf("expected account names to include Main and IRA, got %v", ctx.AccountNames)
 	}
 
 	// Symbol not held: should still succeed with minimal data.
-	ctxJSON2, err := core.buildSymbolContext("MSFT", "USD")
+	ctxJSON2, err := core.buildSymbolContext("NVDA", "USD")
 	if err != nil {
 		t.Fatalf("buildSymbolContext for unheld symbol failed: %v", err)
 	}
@@ -405,8 +469,8 @@ func TestBuildSymbolContext(t *testing.T) {
 	if err := json.Unmarshal([]byte(ctxJSON2), &ctx2); err != nil {
 		t.Fatalf("unmarshal context2: %v", err)
 	}
-	if ctx2.Symbol != "MSFT" {
-		t.Fatalf("expected MSFT, got %s", ctx2.Symbol)
+	if ctx2.Symbol != "NVDA" {
+		t.Fatalf("expected NVDA, got %s", ctx2.Symbol)
 	}
 	if ctx2.TotalShares != 0 {
 		t.Fatalf("expected 0 shares for unheld symbol, got %f", ctx2.TotalShares)
@@ -447,6 +511,168 @@ func TestParseSymbolDimensionResult(t *testing.T) {
 	}
 }
 
+func TestNormalizeSynthesisProbability(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		confidence  string
+		probability float64
+		want        float64
+	}{
+		{name: "use provided probability", confidence: "high", probability: 67.123, want: 67.12},
+		{name: "fallback high confidence", confidence: "high", probability: 0, want: 72},
+		{name: "fallback medium confidence", confidence: "medium", probability: 0, want: 58},
+		{name: "fallback low confidence", confidence: "low", probability: 0, want: 42},
+		{name: "fallback for out of range", confidence: "high", probability: 132, want: 72},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got := normalizeSynthesisProbability(tc.confidence, tc.probability)
+			if got != tc.want {
+				t.Fatalf("expected %f, got %f", tc.want, got)
+			}
+		})
+	}
+}
+
+func TestParseSynthesisResult_UsesDirectSummaryTemplate(t *testing.T) {
+	t.Parallel()
+
+	raw := `{
+		"overall_rating":"buy",
+		"confidence":"high",
+		"target_action":"increase",
+		"position_suggestion":"把仓位从12%提到15%",
+		"overall_summary":"好的，综合看下来还要看情况。",
+		"key_factors":["盈利增速改善","订单能见度提升"],
+		"risk_warnings":["估值偏高"],
+		"action_items":[],
+		"time_horizon_notes":"中长期",
+		"disclaimer":"仅供参考，不构成投资建议"
+	}`
+
+	parsed, err := parseSynthesisResult(raw)
+	if err != nil {
+		t.Fatalf("unexpected parse error: %v", err)
+	}
+
+	wants := []string{
+		"结论：加仓，执行概率72%。",
+		"仓位：把仓位从12%提到15%。",
+		"依据：盈利增速改善；订单能见度提升。",
+		"雷点：估值偏高。",
+	}
+	for _, want := range wants {
+		if !strings.Contains(parsed.OverallSummary, want) {
+			t.Fatalf("expected summary to contain %q, got: %s", want, parsed.OverallSummary)
+		}
+	}
+
+	if strings.Contains(parsed.OverallSummary, "看情况") {
+		t.Fatalf("summary should not contain fuzzy phrase, got: %s", parsed.OverallSummary)
+	}
+}
+
+func TestNormalizeSynthesisSummary_TruncatesLength(t *testing.T) {
+	t.Parallel()
+
+	result := SymbolSynthesisResult{
+		TargetAction:       "hold",
+		Confidence:         "medium",
+		ActionProbability:  59,
+		PositionSuggestion: strings.Repeat("仓位控制", 40),
+		KeyFactors: []string{
+			strings.Repeat("强信号", 30),
+			strings.Repeat("边际改善", 30),
+		},
+		RiskWarnings: []string{strings.Repeat("波动风险", 30)},
+	}
+
+	summary := normalizeSynthesisSummary(result)
+	if len([]rune(summary)) > 200 {
+		t.Fatalf("expected summary <= 200 runes, got %d: %s", len([]rune(summary)), summary)
+	}
+	if !strings.HasPrefix(summary, "结论：") {
+		t.Fatalf("expected direct-answer prefix, got: %s", summary)
+	}
+}
+
+func TestNormalizeSynthesisPositionSuggestion_WithContextTriplet(t *testing.T) {
+	t.Parallel()
+
+	result := SymbolSynthesisResult{
+		TargetAction:       "increase",
+		PositionSuggestion: "建议加一点",
+	}
+	ctx := &symbolContextData{
+		PositionPercent:      12.34,
+		AllocationMinPercent: 15,
+		AllocationMaxPercent: 25,
+	}
+
+	got := normalizeSynthesisPositionSuggestion(result, ctx)
+	wants := []string{
+		"当前占比12.34%",
+		"目标区间15.00%-25.00%",
+		"差值-2.66%",
+		"动作：加仓",
+		"执行：建议加一点",
+	}
+	for _, want := range wants {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected position suggestion contain %q, got: %s", want, got)
+		}
+	}
+}
+
+func TestNormalizeSynthesisPositionSuggestion_DefaultRange(t *testing.T) {
+	t.Parallel()
+
+	result := SymbolSynthesisResult{TargetAction: "hold"}
+	ctx := &symbolContextData{PositionPercent: 40}
+
+	got := normalizeSynthesisPositionSuggestion(result, ctx)
+	if !strings.Contains(got, "目标区间0.00%-100.00%") {
+		t.Fatalf("expected default target range, got: %s", got)
+	}
+	if !strings.Contains(got, "差值0.00%（在区间内）") {
+		t.Fatalf("expected in-range delta, got: %s", got)
+	}
+}
+
+func TestNormalizeSynthesisResult_RewritesSummaryAndPositionByContext(t *testing.T) {
+	t.Parallel()
+
+	result := &SymbolSynthesisResult{
+		Confidence:         "medium",
+		TargetAction:       "reduce",
+		PositionSuggestion: "看情况",
+		OverallSummary:     "还要看情况",
+		KeyFactors:         []string{"盈利下修"},
+		RiskWarnings:       []string{"波动加大"},
+	}
+	ctx := &symbolContextData{
+		PositionPercent:      31.2,
+		AllocationMinPercent: 10,
+		AllocationMaxPercent: 20,
+	}
+
+	normalizeSynthesisResult(result, ctx)
+
+	if !strings.Contains(result.PositionSuggestion, "当前占比31.20%") {
+		t.Fatalf("expected rewritten position suggestion, got: %s", result.PositionSuggestion)
+	}
+	if !strings.Contains(result.OverallSummary, "仓位：当前占比31.20%") {
+		t.Fatalf("expected summary to embed rewritten position, got: %s", result.OverallSummary)
+	}
+	if strings.Contains(result.OverallSummary, "看情况") {
+		t.Fatalf("summary should remove fuzzy phrase, got: %s", result.OverallSummary)
+	}
+}
+
 func TestNormalizeSymbolAnalysisRequest(t *testing.T) {
 	t.Parallel()
 
@@ -456,6 +682,9 @@ func TestNormalizeSymbolAnalysisRequest(t *testing.T) {
 		Model:          "  gpt-4o  ",
 		Symbol:         "  aapl  ",
 		Currency:       "  usd  ",
+		RiskProfile:    "  AGGRESSIVE  ",
+		Horizon:        "  LONG  ",
+		AdviceStyle:    "  conservative  ",
 		StrategyPrompt: "  偏好低波动  ",
 	})
 	if err != nil {
@@ -475,6 +704,34 @@ func TestNormalizeSymbolAnalysisRequest(t *testing.T) {
 	}
 	if req.StrategyPrompt != "偏好低波动" {
 		t.Fatalf("expected trimmed strategy prompt, got %q", req.StrategyPrompt)
+	}
+	if req.RiskProfile != "aggressive" {
+		t.Fatalf("expected normalized risk_profile aggressive, got %q", req.RiskProfile)
+	}
+	if req.Horizon != "long" {
+		t.Fatalf("expected normalized horizon long, got %q", req.Horizon)
+	}
+	if req.AdviceStyle != "conservative" {
+		t.Fatalf("expected normalized advice_style conservative, got %q", req.AdviceStyle)
+	}
+
+	defaults, err := normalizeSymbolAnalysisRequest(SymbolAnalysisRequest{
+		APIKey:   "k",
+		Model:    "m",
+		Symbol:   "X",
+		Currency: "USD",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error for defaults: %v", err)
+	}
+	if defaults.RiskProfile != "balanced" {
+		t.Fatalf("expected default risk_profile balanced, got %q", defaults.RiskProfile)
+	}
+	if defaults.Horizon != "medium" {
+		t.Fatalf("expected default horizon medium, got %q", defaults.Horizon)
+	}
+	if defaults.AdviceStyle != "balanced" {
+		t.Fatalf("expected default advice_style balanced, got %q", defaults.AdviceStyle)
 	}
 
 	// Missing api_key
@@ -505,5 +762,20 @@ func TestNormalizeSymbolAnalysisRequest(t *testing.T) {
 	_, err = normalizeSymbolAnalysisRequest(SymbolAnalysisRequest{APIKey: "k", Model: "m", Symbol: "X", Currency: "EUR"})
 	if err == nil || !strings.Contains(err.Error(), "invalid currency") {
 		t.Fatalf("expected invalid currency error, got %v", err)
+	}
+
+	_, err = normalizeSymbolAnalysisRequest(SymbolAnalysisRequest{APIKey: "k", Model: "m", Symbol: "X", Currency: "USD", RiskProfile: "boom"})
+	if err == nil || !strings.Contains(err.Error(), "invalid risk_profile") {
+		t.Fatalf("expected invalid risk_profile error, got %v", err)
+	}
+
+	_, err = normalizeSymbolAnalysisRequest(SymbolAnalysisRequest{APIKey: "k", Model: "m", Symbol: "X", Currency: "USD", Horizon: "daytrade"})
+	if err == nil || !strings.Contains(err.Error(), "invalid horizon") {
+		t.Fatalf("expected invalid horizon error, got %v", err)
+	}
+
+	_, err = normalizeSymbolAnalysisRequest(SymbolAnalysisRequest{APIKey: "k", Model: "m", Symbol: "X", Currency: "USD", AdviceStyle: "wild"})
+	if err == nil || !strings.Contains(err.Error(), "invalid advice_style") {
+		t.Fatalf("expected invalid advice_style error, got %v", err)
 	}
 }

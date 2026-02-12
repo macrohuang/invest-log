@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -108,12 +109,13 @@ JSON 字段必须包含：
 
 const symbolSynthesisSystemPrompt = `你是一个综合投资分析师，负责整合多维度分析结果给出最终投资建议。
 你将收到四个维度的分析结果（宏观经济政策、行业竞争格局、公司基本面、国际政治经济），
-需要综合权衡所有维度给出最终投资建议。
+需要综合权衡所有维度，结合持仓规模、当前仓位占比、用户投资偏好和策略约束，给出最终投资建议。
 
 必须输出 JSON 对象，不要输出 Markdown，不要输出额外文字。
 JSON 字段必须包含：
 - overall_rating: string (strong_buy/buy/hold/reduce/strong_sell)
 - confidence: string (high/medium/low)
+- action_probability_percent: number (0-100，表示“执行当前 target_action 后在目标持有周期内跑赢无调整方案”的主观概率)
 - target_action: string (increase/hold/reduce)
 - position_suggestion: string (对仓位的具体建议)
 - overall_summary: string (综合分析总结，200字以内)
@@ -127,6 +129,12 @@ JSON 字段必须包含：
 - 综合评级必须有充分的逻辑依据
 - 如果各维度结论冲突，需要明确说明权衡逻辑
 - 行动建议必须具体可执行
+- 必须把“持仓数量 + 仓位占比 + 资产类别配置区间 + 用户偏好与策略”纳入权重计算
+- 禁止输出“看情况/视情况而定/it depends”等含混表达
+- 必须给出明确概率，不得只给定性判断
+- 语言要直接、锋利、去客套、去公关腔，句子短，信息密度高
+- 禁止起手寒暄；第一句直接给结论
+- 禁止冗长免责声明，disclaimer 字段只允许简短风险锚点（<=16字）
 - 禁止承诺收益，必须体现风险提示`
 
 // SymbolAnalysisRequest defines inputs for per-symbol AI deep analysis.
@@ -136,6 +144,9 @@ type SymbolAnalysisRequest struct {
 	Model          string
 	Symbol         string
 	Currency       string
+	RiskProfile    string
+	Horizon        string
+	AdviceStyle    string
 	StrategyPrompt string
 }
 
@@ -162,6 +173,7 @@ type SymbolAnalysisActionItem struct {
 type SymbolSynthesisResult struct {
 	OverallRating      string                     `json:"overall_rating"`
 	Confidence         string                     `json:"confidence"`
+	ActionProbability  float64                    `json:"action_probability_percent,omitempty"`
 	TargetAction       string                     `json:"target_action"`
 	PositionSuggestion string                     `json:"position_suggestion"`
 	OverallSummary     string                     `json:"overall_summary"`
@@ -208,22 +220,66 @@ func normalizeSymbolAnalysisRequest(req SymbolAnalysisRequest) (SymbolAnalysisRe
 		return SymbolAnalysisRequest{}, fmt.Errorf("invalid currency: %s", req.Currency)
 	}
 	normalized.Currency = currency
+
+	riskProfile, err := normalizeEnum(strings.TrimSpace(req.RiskProfile), "balanced", map[string]struct{}{
+		"conservative": {},
+		"balanced":     {},
+		"aggressive":   {},
+	})
+	if err != nil {
+		return SymbolAnalysisRequest{}, fmt.Errorf("invalid risk_profile: %w", err)
+	}
+	normalized.RiskProfile = riskProfile
+
+	horizon, err := normalizeEnum(strings.TrimSpace(req.Horizon), "medium", map[string]struct{}{
+		"short":  {},
+		"medium": {},
+		"long":   {},
+	})
+	if err != nil {
+		return SymbolAnalysisRequest{}, fmt.Errorf("invalid horizon: %w", err)
+	}
+	normalized.Horizon = horizon
+
+	adviceStyle, err := normalizeEnum(strings.TrimSpace(req.AdviceStyle), "balanced", map[string]struct{}{
+		"conservative": {},
+		"balanced":     {},
+		"aggressive":   {},
+	})
+	if err != nil {
+		return SymbolAnalysisRequest{}, fmt.Errorf("invalid advice_style: %w", err)
+	}
+	normalized.AdviceStyle = adviceStyle
+
 	normalized.StrategyPrompt = strings.TrimSpace(req.StrategyPrompt)
 	return normalized, nil
 }
 
 type symbolContextData struct {
-	Symbol      string  `json:"symbol"`
-	Name        string  `json:"name,omitempty"`
-	Currency    string  `json:"currency"`
-	AssetType   string  `json:"asset_type,omitempty"`
-	TotalShares float64 `json:"total_shares,omitempty"`
-	AvgCost     float64 `json:"avg_cost,omitempty"`
-	CostBasis   float64 `json:"cost_basis,omitempty"`
-	LatestPrice float64 `json:"latest_price,omitempty"`
-	MarketValue float64 `json:"market_value,omitempty"`
-	PnLPercent  float64 `json:"pnl_percent,omitempty"`
-	AccountName string  `json:"account_name,omitempty"`
+	Symbol                   string   `json:"symbol"`
+	Name                     string   `json:"name,omitempty"`
+	Currency                 string   `json:"currency"`
+	AssetType                string   `json:"asset_type,omitempty"`
+	TotalShares              float64  `json:"total_shares,omitempty"`
+	AvgCost                  float64  `json:"avg_cost,omitempty"`
+	CostBasis                float64  `json:"cost_basis,omitempty"`
+	LatestPrice              float64  `json:"latest_price,omitempty"`
+	MarketValue              float64  `json:"market_value,omitempty"`
+	PnLPercent               float64  `json:"pnl_percent,omitempty"`
+	PositionPercent          float64  `json:"position_percent,omitempty"`
+	CurrencyTotalMarketValue float64  `json:"currency_total_market_value,omitempty"`
+	AccountName              string   `json:"account_name,omitempty"`
+	AccountNames             []string `json:"account_names,omitempty"`
+	AllocationMinPercent     float64  `json:"allocation_min_percent,omitempty"`
+	AllocationMaxPercent     float64  `json:"allocation_max_percent,omitempty"`
+	AllocationStatus         string   `json:"allocation_status,omitempty"`
+}
+
+type symbolPreferenceContext struct {
+	RiskProfile    string `json:"risk_profile"`
+	Horizon        string `json:"horizon"`
+	AdviceStyle    string `json:"advice_style"`
+	StrategyPrompt string `json:"strategy_prompt,omitempty"`
 }
 
 func (c *Core) buildSymbolContext(symbol, currency string) (string, error) {
@@ -237,44 +293,117 @@ func (c *Core) buildSymbolContext(symbol, currency string) (string, error) {
 		return "", fmt.Errorf("no holdings found for currency: %s", currency)
 	}
 
-	var ctx symbolContextData
-	found := false
+	matched := make([]SymbolHolding, 0)
 	for _, s := range currData.Symbols {
 		if strings.EqualFold(s.Symbol, symbol) {
-			name := s.Symbol
-			if s.Name != nil && strings.TrimSpace(*s.Name) != "" {
-				name = strings.TrimSpace(*s.Name)
-			}
-			pnlPct := 0.0
-			if s.PnlPercent != nil {
-				pnlPct = *s.PnlPercent
-			}
-			latestPrice := 0.0
-			if s.LatestPrice != nil {
-				latestPrice = *s.LatestPrice
-			}
-			ctx = symbolContextData{
-				Symbol:      s.Symbol,
-				Name:        name,
-				Currency:    currency,
-				AssetType:   s.AssetType,
-				TotalShares: s.TotalShares,
-				AvgCost:     s.AvgCost,
-				CostBasis:   s.CostBasis,
-				LatestPrice: latestPrice,
-				MarketValue: s.MarketValue,
-				PnLPercent:  pnlPct,
-				AccountName: s.AccountName,
-			}
-			found = true
-			break
+			matched = append(matched, s)
 		}
 	}
-	if !found {
+
+	if len(matched) == 0 {
 		// Allow analysis even without holdings (just symbol + currency)
-		ctx = symbolContextData{
+		ctx := symbolContextData{
 			Symbol:   symbol,
 			Currency: currency,
+		}
+		data, marshalErr := json.Marshal(ctx)
+		if marshalErr != nil {
+			return "", fmt.Errorf("marshal symbol context: %w", marshalErr)
+		}
+		return string(data), nil
+	}
+
+	name := symbol
+	assetType := ""
+	var totalShares float64
+	var totalCostBasis float64
+	var totalMarketValue float64
+	accountNameSet := map[string]struct{}{}
+
+	for _, item := range matched {
+		if name == symbol && item.Name != nil && strings.TrimSpace(*item.Name) != "" {
+			name = strings.TrimSpace(*item.Name)
+		}
+		if assetType == "" {
+			assetType = strings.TrimSpace(item.AssetType)
+		}
+
+		totalShares += item.TotalShares
+		totalCostBasis += item.CostBasis
+		totalMarketValue += item.MarketValue
+
+		accountName := strings.TrimSpace(item.AccountName)
+		if accountName == "" {
+			accountName = strings.TrimSpace(item.AccountID)
+		}
+		if accountName != "" {
+			accountNameSet[accountName] = struct{}{}
+		}
+	}
+
+	if assetType == "" {
+		assetType = "stock"
+	}
+
+	accountNames := make([]string, 0, len(accountNameSet))
+	for accountName := range accountNameSet {
+		accountNames = append(accountNames, accountName)
+	}
+	sort.Strings(accountNames)
+
+	avgCost := 0.0
+	latestPrice := 0.0
+	if totalShares > 0 {
+		avgCost = round2(totalCostBasis / totalShares)
+		latestPrice = round2(totalMarketValue / totalShares)
+	}
+	pnlPercent := 0.0
+	if totalCostBasis > 0 {
+		pnlPercent = round2((totalMarketValue - totalCostBasis) / totalCostBasis * 100)
+	}
+	positionPercent := 0.0
+	if currData.TotalMarketValue > 0 {
+		positionPercent = round2(totalMarketValue / currData.TotalMarketValue * 100)
+	}
+
+	ctx := symbolContextData{
+		Symbol:                   symbol,
+		Name:                     name,
+		Currency:                 currency,
+		AssetType:                assetType,
+		TotalShares:              round2(totalShares),
+		AvgCost:                  avgCost,
+		CostBasis:                round2(totalCostBasis),
+		LatestPrice:              latestPrice,
+		MarketValue:              round2(totalMarketValue),
+		PnLPercent:               pnlPercent,
+		PositionPercent:          positionPercent,
+		CurrencyTotalMarketValue: round2(currData.TotalMarketValue),
+		AccountNames:             accountNames,
+	}
+	if len(accountNames) > 0 {
+		ctx.AccountName = accountNames[0]
+	}
+
+	allocationSettings, err := c.GetAllocationSettings(currency)
+	if err != nil {
+		c.Logger().Warn("load allocation settings failed", "currency", currency, "err", err)
+	} else {
+		ctx.AllocationStatus = "no_target"
+		for _, setting := range allocationSettings {
+			if strings.EqualFold(setting.AssetType, assetType) {
+				ctx.AllocationMinPercent = round2(setting.MinPercent)
+				ctx.AllocationMaxPercent = round2(setting.MaxPercent)
+				switch {
+				case positionPercent < setting.MinPercent:
+					ctx.AllocationStatus = "below_target"
+				case positionPercent > setting.MaxPercent:
+					ctx.AllocationStatus = "above_target"
+				default:
+					ctx.AllocationStatus = "within_target"
+				}
+				break
+			}
 		}
 	}
 
@@ -348,10 +477,19 @@ func (c *Core) runDimensionAgents(ctx context.Context, endpoint, apiKey, model, 
 	return outputs, nil
 }
 
-func runSynthesisAgent(ctx context.Context, endpoint, apiKey, model, symbolContext string, dimensionOutputs map[string]string, strategyPrompt string) (string, error) {
+func runSynthesisAgent(
+	ctx context.Context,
+	endpoint, apiKey, model, symbolContext string,
+	dimensionOutputs map[string]string,
+	preferenceContext symbolPreferenceContext,
+) (string, error) {
 	dimensionJSON, err := json.Marshal(dimensionOutputs)
 	if err != nil {
 		return "", fmt.Errorf("marshal dimension outputs: %w", err)
+	}
+	preferenceJSON, err := json.Marshal(preferenceContext)
+	if err != nil {
+		return "", fmt.Errorf("marshal preference context: %w", err)
 	}
 
 	userPrompt := fmt.Sprintf(`请基于以下标的信息和四维度分析结果，综合给出投资建议：
@@ -359,15 +497,17 @@ func runSynthesisAgent(ctx context.Context, endpoint, apiKey, model, symbolConte
 标的信息：
 %s
 
+用户投资偏好与策略约束：
+%s
+
 各维度分析结果：
-%s`, symbolContext, string(dimensionJSON))
+%s
 
-	if strategyPrompt != "" {
-		userPrompt += fmt.Sprintf(`
-
-用户投资策略偏好（优先考虑）：
-%s`, strategyPrompt)
-	}
+决策硬约束：
+1) 结论第一句必须直接给出 target_action + action_probability_percent。
+2) action_probability_percent 必须是具体数字（例如 67），不能给区间，不能模糊措辞。
+3) 必须明确说明“当前仓位占比”与“目标区间（如有）”之间差距。
+4) 语言直接，不要客套，不要公关腔。`, symbolContext, string(preferenceJSON), string(dimensionJSON))
 
 	result, err := aiChatCompletion(ctx, aiChatCompletionRequest{
 		EndpointURL:  endpoint,
@@ -397,7 +537,192 @@ func parseSynthesisResult(raw string) (*SymbolSynthesisResult, error) {
 	if err := json.Unmarshal([]byte(cleaned), &result); err != nil {
 		return nil, fmt.Errorf("parse synthesis result: %w", err)
 	}
+	normalizeSynthesisResult(&result, nil)
 	return &result, nil
+}
+
+func normalizeSynthesisResult(result *SymbolSynthesisResult, context *symbolContextData) {
+	if result == nil {
+		return
+	}
+	result.ActionProbability = normalizeSynthesisProbability(result.Confidence, result.ActionProbability)
+	result.PositionSuggestion = normalizeSynthesisPositionSuggestion(*result, context)
+	result.OverallSummary = normalizeSynthesisSummary(*result)
+}
+
+func normalizeSynthesisProbability(confidence string, probability float64) float64 {
+	if probability > 0 && probability <= 100 {
+		return round2(probability)
+	}
+
+	switch strings.ToLower(strings.TrimSpace(confidence)) {
+	case "high":
+		return 72
+	case "low":
+		return 42
+	default:
+		return 58
+	}
+}
+
+func normalizeSynthesisSummary(result SymbolSynthesisResult) string {
+	actionLabel := mapSynthesisActionLabel(result.TargetAction)
+	probability := normalizeSynthesisProbability(result.Confidence, result.ActionProbability)
+
+	position := compactSynthesisText(result.PositionSuggestion)
+	if position == "" {
+		position = "维持当前仓位。"
+	} else if !strings.HasSuffix(position, "。") {
+		position += "。"
+	}
+
+	factors := buildSynthesisListLine("依据", result.KeyFactors)
+	risks := buildSynthesisListLine("雷点", result.RiskWarnings)
+
+	builder := strings.Builder{}
+	builder.WriteString(fmt.Sprintf("结论：%s，执行概率%.0f%%。", actionLabel, probability))
+	builder.WriteString("仓位：")
+	builder.WriteString(position)
+	builder.WriteString(factors)
+	builder.WriteString(risks)
+
+	summary := builder.String()
+	summary = strings.ReplaceAll(summary, "看情况", "")
+	summary = strings.ReplaceAll(summary, "视情况", "")
+	summary = strings.ReplaceAll(summary, "it depends", "")
+	summary = strings.TrimSpace(summary)
+
+	if len([]rune(summary)) > 200 {
+		summary = string([]rune(summary)[:200])
+		if !strings.HasSuffix(summary, "。") {
+			summary += "。"
+		}
+	}
+
+	if summary == "" {
+		summary = fmt.Sprintf("结论：%s，执行概率%.0f%%。", actionLabel, probability)
+	}
+
+	return summary
+}
+
+func normalizeSynthesisPositionSuggestion(result SymbolSynthesisResult, context *symbolContextData) string {
+	base := compactSynthesisText(result.PositionSuggestion)
+	if context == nil {
+		if base == "" {
+			return "当前占比未知；目标区间未知；差值未知。"
+		}
+		if strings.Contains(base, "当前占比") && strings.Contains(base, "目标区间") && strings.Contains(base, "差值") {
+			if strings.HasSuffix(base, "。") {
+				return base
+			}
+			return base + "。"
+		}
+		return base
+	}
+
+	current := round2(context.PositionPercent)
+	targetMin, targetMax := context.AllocationMinPercent, context.AllocationMaxPercent
+	if targetMin == 0 && targetMax == 0 {
+		targetMin = 0
+		targetMax = 100
+	}
+
+	delta := 0.0
+	status := "在区间内"
+	switch {
+	case current < targetMin:
+		delta = round2(current - targetMin)
+		status = "低于下限"
+	case current > targetMax:
+		delta = round2(current - targetMax)
+		status = "高于上限"
+	default:
+		delta = 0
+	}
+
+	builder := strings.Builder{}
+	builder.WriteString(fmt.Sprintf("当前占比%.2f%%；目标区间%.2f%%-%.2f%%；差值%s（%s）；动作：%s",
+		current,
+		targetMin,
+		targetMax,
+		formatSignedPercent(delta),
+		status,
+		mapSynthesisActionLabel(result.TargetAction),
+	))
+
+	if base != "" {
+		builder.WriteString("；执行：")
+		builder.WriteString(base)
+	}
+
+	position := builder.String()
+	if !strings.HasSuffix(position, "。") {
+		position += "。"
+	}
+	return position
+}
+
+func formatSignedPercent(value float64) string {
+	if value > 0 {
+		return fmt.Sprintf("+%.2f%%", value)
+	}
+	if value < 0 {
+		return fmt.Sprintf("%.2f%%", value)
+	}
+	return "0.00%"
+}
+
+func buildSynthesisListLine(label string, items []string) string {
+	normalized := make([]string, 0, len(items))
+	for _, item := range items {
+		cleaned := compactSynthesisText(item)
+		if cleaned != "" {
+			normalized = append(normalized, cleaned)
+		}
+		if len(normalized) >= 2 {
+			break
+		}
+	}
+	if len(normalized) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s：%s。", label, strings.Join(normalized, "；"))
+}
+
+func compactSynthesisText(input string) string {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return ""
+	}
+	replacer := strings.NewReplacer(
+		"\n", " ",
+		"\r", " ",
+		"  ", " ",
+		"。", "",
+	)
+	cleaned := replacer.Replace(trimmed)
+	cleaned = strings.TrimSpace(cleaned)
+	if cleaned == "" {
+		return ""
+	}
+	if len([]rune(cleaned)) > 42 {
+		cleaned = string([]rune(cleaned)[:42])
+	}
+	return cleaned
+}
+
+func mapSynthesisActionLabel(action string) string {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "increase":
+		return "加仓"
+	case "reduce":
+		return "减仓"
+	case "hold":
+		return "持有"
+	default:
+		return "持有"
+	}
 }
 
 // AnalyzeSymbol runs a multi-agent deep analysis for a single symbol.
@@ -432,11 +757,20 @@ func (c *Core) AnalyzeSymbol(req SymbolAnalysisRequest) (*SymbolAnalysisResult, 
 
 请根据你的专业维度进行深入分析，并输出指定格式的 JSON 结果。`, symbolContext)
 
-	if normalizedReq.StrategyPrompt != "" {
+	if normalizedReq.StrategyPrompt != "" || normalizedReq.RiskProfile != "" || normalizedReq.Horizon != "" || normalizedReq.AdviceStyle != "" {
+		preferenceJSON, marshalErr := json.Marshal(symbolPreferenceContext{
+			RiskProfile:    normalizedReq.RiskProfile,
+			Horizon:        normalizedReq.Horizon,
+			AdviceStyle:    normalizedReq.AdviceStyle,
+			StrategyPrompt: normalizedReq.StrategyPrompt,
+		})
+		if marshalErr != nil {
+			return nil, fmt.Errorf("marshal symbol preferences: %w", marshalErr)
+		}
 		userPrompt += fmt.Sprintf(`
 
-用户投资策略偏好：
-%s`, normalizedReq.StrategyPrompt)
+用户投资偏好（用于结论权重与表达强度）：
+%s`, string(preferenceJSON))
 	}
 
 	// Run 4 dimension agents in parallel.
@@ -447,7 +781,12 @@ func (c *Core) AnalyzeSymbol(req SymbolAnalysisRequest) (*SymbolAnalysisResult, 
 	}
 
 	// Run synthesis agent sequentially.
-	synthesisOutput, err := runSynthesisAgent(ctx, endpointURL, normalizedReq.APIKey, normalizedReq.Model, symbolContext, dimensionOutputs, normalizedReq.StrategyPrompt)
+	synthesisOutput, err := runSynthesisAgent(ctx, endpointURL, normalizedReq.APIKey, normalizedReq.Model, symbolContext, dimensionOutputs, symbolPreferenceContext{
+		RiskProfile:    normalizedReq.RiskProfile,
+		Horizon:        normalizedReq.Horizon,
+		AdviceStyle:    normalizedReq.AdviceStyle,
+		StrategyPrompt: normalizedReq.StrategyPrompt,
+	})
 	if err != nil {
 		_ = c.updateSymbolAnalysisStatus(rowID, "failed", err.Error())
 		return nil, fmt.Errorf("synthesis agent failed: %w", err)
@@ -470,6 +809,20 @@ func (c *Core) AnalyzeSymbol(req SymbolAnalysisRequest) (*SymbolAnalysisResult, 
 		return nil, fmt.Errorf("parse synthesis result: %w", err)
 	}
 
+	var contextData symbolContextData
+	if unmarshalErr := json.Unmarshal([]byte(symbolContext), &contextData); unmarshalErr != nil {
+		c.Logger().Warn("failed to parse symbol context for synthesis normalization", "err", unmarshalErr)
+	} else {
+		normalizeSynthesisResult(synthesis, &contextData)
+	}
+
+	synthesisToSave := synthesisOutput
+	if normalizedJSON, marshalErr := json.Marshal(synthesis); marshalErr == nil {
+		synthesisToSave = string(normalizedJSON)
+	} else {
+		c.Logger().Warn("failed to marshal normalized synthesis", "err", marshalErr)
+	}
+
 	// Save completed result.
 	result := &SymbolAnalysisResult{
 		ID:         rowID,
@@ -482,7 +835,7 @@ func (c *Core) AnalyzeSymbol(req SymbolAnalysisRequest) (*SymbolAnalysisResult, 
 		CreatedAt:  time.Now().Format(time.RFC3339),
 	}
 
-	if err := c.saveCompletedSymbolAnalysis(rowID, dimensionOutputs, synthesisOutput); err != nil {
+	if err := c.saveCompletedSymbolAnalysis(rowID, dimensionOutputs, synthesisToSave); err != nil {
 		return nil, fmt.Errorf("save analysis result: %w", err)
 	}
 
@@ -536,16 +889,16 @@ func (c *Core) GetSymbolAnalysis(symbol, currency string) (*SymbolAnalysisResult
 	currency = strings.TrimSpace(strings.ToUpper(currency))
 
 	var (
-		id                   int64
-		model, status        string
-		macroRaw             sql.NullString
-		industryRaw          sql.NullString
-		companyRaw           sql.NullString
-		internationalRaw     sql.NullString
-		synthesisRaw         sql.NullString
-		errorMessage         sql.NullString
-		createdAt            string
-		completedAtRaw       sql.NullString
+		id               int64
+		model, status    string
+		macroRaw         sql.NullString
+		industryRaw      sql.NullString
+		companyRaw       sql.NullString
+		internationalRaw sql.NullString
+		synthesisRaw     sql.NullString
+		errorMessage     sql.NullString
+		createdAt        string
+		completedAtRaw   sql.NullString
 	)
 
 	err := c.db.QueryRow(

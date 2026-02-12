@@ -264,6 +264,9 @@ func (h *handler) analyzeSymbolWithAI(w http.ResponseWriter, r *http.Request) {
 		Model:          payload.Model,
 		Symbol:         payload.Symbol,
 		Currency:       payload.Currency,
+		RiskProfile:    payload.RiskProfile,
+		Horizon:        payload.Horizon,
+		AdviceStyle:    payload.AdviceStyle,
 		StrategyPrompt: payload.StrategyPrompt,
 	})
 	if err != nil {

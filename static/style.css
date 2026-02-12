@@ -739,8 +739,22 @@ select.btn.trade-select {
   transition: all 0.2s ease;
 }
 
+.tab-btn {
+  border: none;
+  background: transparent;
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--muted);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
 .tab-button.active,
-.tab-button:hover {
+.tab-button:hover,
+.tab-btn.active,
+.tab-btn:hover {
   background: rgba(240, 108, 59, 0.18);
   color: var(--ink-0);
 }
@@ -1243,6 +1257,64 @@ select.btn.trade-select {
   justify-content: flex-end;
 }
 
+.filter-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  margin-left: 4px;
+  cursor: pointer;
+}
+
+.filter-trigger:hover,
+.filter-trigger.active {
+  color: var(--accent-strong);
+}
+
+.filter-popover {
+  display: none;
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 240px;
+  max-width: 320px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(29, 31, 27, 0.12);
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: var(--shadow-soft);
+}
+
+.filter-popover.show {
+  display: block;
+}
+
+.filter-list {
+  max-height: 220px;
+  overflow: auto;
+  padding-right: 4px;
+  margin-bottom: 8px;
+}
+
+.filter-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink-0);
+  padding: 4px 0;
+}
+
+.filter-item input {
+  margin: 0;
+}
+
+.filter-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .symbols-empty-row td {
   text-align: center;
   color: var(--muted);
@@ -1467,6 +1539,18 @@ select.btn.trade-select {
   gap: 10px;
 }
 
+.position-meta-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.position-meta-badges .tag {
+  font-size: 11px;
+  padding: 2px 8px;
+}
+
 .rating-strong-buy {
   background: rgba(52, 168, 83, 0.15);
   color: #1e7e34;
@@ -1507,6 +1591,85 @@ select.btn.trade-select {
 
 .analysis-history {
   margin-top: 16px;
+}
+
+.review-mode-section {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.review-mode-card {
+  border: 1px solid rgba(26, 115, 232, 0.16);
+  background: rgba(26, 115, 232, 0.02);
+}
+
+.review-mode-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.review-mode-header h4 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.review-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px dashed rgba(29, 31, 27, 0.08);
+}
+
+.review-row:last-of-type {
+  border-bottom: none;
+}
+
+.review-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.review-value {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.review-up {
+  color: #1e7e34;
+}
+
+.review-down {
+  color: #c5221f;
+}
+
+.review-split {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.review-risk-list {
+  margin: 6px 0 0;
+  padding-left: 16px;
+}
+
+.review-risk-list li {
+  font-size: 12px;
+  margin-bottom: 2px;
+  color: #ea4335;
+}
+
+.review-risk-list.review-cleared li {
+  color: #34a853;
 }
 
 .analysis-history h4 {

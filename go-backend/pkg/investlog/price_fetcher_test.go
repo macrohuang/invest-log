@@ -26,6 +26,21 @@ func (m *mockHTTPClient) Do(req *http.Request) (*http.Response, error) {
 	}, nil
 }
 
+type routeHTTPClient struct {
+	routes map[string]mockHTTPClient
+}
+
+func (m *routeHTTPClient) Do(req *http.Request) (*http.Response, error) {
+	if response, ok := m.routes[req.URL.String()]; ok {
+		return (&response).Do(req)
+	}
+	return &http.Response{
+		StatusCode: http.StatusNotFound,
+		Body:       io.NopCloser(strings.NewReader("")),
+		Header:     make(http.Header),
+	}, nil
+}
+
 func newFetcherWithBody(status int, body string) *priceFetcher {
 	return newPriceFetcher(priceFetcherOptions{
 		CacheTTL:      time.Second,
@@ -149,6 +164,62 @@ func TestPriceFetcherFetchSuccessAndCooldown(t *testing.T) {
 		t.Fatalf("expected error when all services fail")
 	} else if !strings.Contains(msg, "熔断冷却中") {
 		t.Fatalf("expected cooldown message, got %q", msg)
+	}
+}
+
+func TestPriceFetcherFetchUSDLSEFallback(t *testing.T) {
+	pf := newPriceFetcher(priceFetcherOptions{
+		CacheTTL:      time.Second,
+		FailThreshold: 2,
+		FailWindow:    time.Second,
+		Cooldown:      time.Second,
+		HTTPTimeout:   time.Second,
+		HTTPClient: &routeHTTPClient{routes: map[string]mockHTTPClient{
+			"https://query1.finance.yahoo.com/v8/finance/chart/VWRA?interval=1d&range=1d": {
+				status: http.StatusOK,
+				body:   `{"chart":{"result":[]}}`,
+			},
+			"https://query1.finance.yahoo.com/v8/finance/chart/VWRA.L?interval=1d&range=1d": {
+				status: http.StatusOK,
+				body:   `{"chart":{"result":[{"meta":{"regularMarketPrice":145.67,"currency":"USD"}}]}}`,
+			},
+		}},
+	})
+
+	price, _, err := pf.fetch("VWRA", "USD", "stock")
+	if err != nil {
+		t.Fatalf("expected fallback to LSE symbol to succeed, got error: %v", err)
+	}
+	if price == nil || *price != 145.67 {
+		t.Fatalf("expected LSE fallback price 145.67, got %v", price)
+	}
+}
+
+func TestPriceFetcherFetchUSDLSEFallbackWhenPrimaryIsZero(t *testing.T) {
+	pf := newPriceFetcher(priceFetcherOptions{
+		CacheTTL:      time.Second,
+		FailThreshold: 2,
+		FailWindow:    time.Second,
+		Cooldown:      time.Second,
+		HTTPTimeout:   time.Second,
+		HTTPClient: &routeHTTPClient{routes: map[string]mockHTTPClient{
+			"https://query1.finance.yahoo.com/v8/finance/chart/SGLN?interval=1d&range=1d": {
+				status: http.StatusOK,
+				body:   `{"chart":{"result":[{"meta":{"regularMarketPrice":0},"indicators":{"quote":[{"close":[0]}]}}]}}`,
+			},
+			"https://query1.finance.yahoo.com/v8/finance/chart/SGLN.L?interval=1d&range=1d": {
+				status: http.StatusOK,
+				body:   `{"chart":{"result":[{"meta":{"regularMarketPrice":41.23,"currency":"USD"}}]}}`,
+			},
+		}},
+	})
+
+	price, _, err := pf.fetch("SGLN", "USD", "stock")
+	if err != nil {
+		t.Fatalf("expected fallback to LSE symbol to succeed, got error: %v", err)
+	}
+	if price == nil || *price != 41.23 {
+		t.Fatalf("expected LSE fallback price 41.23, got %v", price)
 	}
 }
 
