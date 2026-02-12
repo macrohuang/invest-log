@@ -3177,9 +3177,25 @@ function bindSettingsActions() {
 }
 
 function registerServiceWorker() {
-  if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
-    navigator.serviceWorker.register('sw.js').catch(() => {});
+  if (!('serviceWorker' in navigator) || !window.location.protocol.startsWith('http')) {
+    return;
   }
+
+  const hostname = window.location.hostname;
+  const isLocalHost = hostname === '127.0.0.1' || hostname === 'localhost';
+  if (isLocalHost) {
+    navigator.serviceWorker.getRegistrations()
+      .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
+      .catch(() => {});
+    if ('caches' in window) {
+      caches.keys()
+        .then((keys) => Promise.all(keys.filter((key) => key.startsWith('invest-log-')).map((key) => caches.delete(key))))
+        .catch(() => {});
+    }
+    return;
+  }
+
+  navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
 document.addEventListener('DOMContentLoaded', init);

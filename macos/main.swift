@@ -1,6 +1,15 @@
 import AppKit
 import WebKit
 
+@available(macOS 11.0, *)
+private func clearWebViewWebsiteData() {
+  let dataStore = WKWebsiteDataStore.default()
+  let allTypes = WKWebsiteDataStore.allWebsiteDataTypes()
+  dataStore.fetchDataRecords(ofTypes: allTypes) { records in
+    dataStore.removeData(ofTypes: allTypes, for: records) {}
+  }
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate {
   private var window: NSWindow!
   private var webView: WKWebView!
@@ -11,6 +20,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   private let maxAttempts = 80
 
   func applicationDidFinishLaunching(_ notification: Notification) {
+    if #available(macOS 11.0, *) {
+      clearWebViewWebsiteData()
+    }
     setupWindow()
     loadLoadingScreen()
     startBackend()

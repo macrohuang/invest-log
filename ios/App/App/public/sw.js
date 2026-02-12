@@ -2,7 +2,7 @@
  * Service Worker for Invest Log SPA
  */
 
-const CACHE_NAME = 'invest-log-v2';
+const CACHE_NAME = 'invest-log-v3';
 const STATIC_ASSETS = [
   './',
   './index.html',

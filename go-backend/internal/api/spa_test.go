@@ -46,6 +46,9 @@ func TestWithSPA_ServesStaticAndIndex(t *testing.T) {
 	if rr.Body.String() != "INDEX" {
 		t.Fatalf("expected index body, got %q", rr.Body.String())
 	}
+	if got := rr.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("expected no-store for index, got %q", got)
+	}
 
 	// Static asset should be served.
 	rr = httptest.NewRecorder()
@@ -57,6 +60,9 @@ func TestWithSPA_ServesStaticAndIndex(t *testing.T) {
 	if rr.Body.String() != "APP" {
 		t.Fatalf("expected asset body, got %q", rr.Body.String())
 	}
+	if got := rr.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("expected no-store for asset, got %q", got)
+	}
 
 	// Unknown path should fall back to index.
 	rr = httptest.NewRecorder()
@@ -67,6 +73,9 @@ func TestWithSPA_ServesStaticAndIndex(t *testing.T) {
 	}
 	if rr.Body.String() != "INDEX" {
 		t.Fatalf("expected fallback index, got %q", rr.Body.String())
+	}
+	if got := rr.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("expected no-store for fallback index, got %q", got)
 	}
 }
 

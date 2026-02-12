@@ -982,6 +982,239 @@ select.btn.trade-select {
   margin-bottom: 6px;
 }
 
+/* Charts Page - Horizontal Layout */
+.charts-horizontal {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.currency-block {
+  flex: 1;
+  min-width: 340px;
+  max-width: 520px;
+}
+
+.currency-block h3 {
+  margin-bottom: 16px;
+  font-size: 18px;
+}
+
+.chart-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* SVG Pie Chart */
+.pie-svg-container {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 10px 0;
+}
+
+.pie-svg {
+  width: 160px;
+  height: 160px;
+  filter: drop-shadow(0 4px 12px rgba(0,0,0,0.1));
+}
+
+.pie-sector {
+  transition: transform 0.2s ease, opacity 0.2s ease;
+  transform-origin: center;
+  cursor: pointer;
+}
+
+.pie-sector:hover {
+  opacity: 0.85;
+}
+
+.pie-sector.highlighted {
+  transform: scale(1.06);
+  filter: brightness(1.1);
+}
+
+.pie-svg.has-highlight .pie-sector:not(.highlighted) {
+  opacity: 0.4;
+}
+
+.pie-center-label {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  pointer-events: none;
+}
+
+.pie-center-label .pie-label {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.pie-center-label .pie-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--ink-0);
+}
+
+.pie-tooltip {
+  position: absolute;
+  top: 50%;
+  right: -10px;
+  transform: translateY(-50%);
+  background: var(--card);
+  border: var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  box-shadow: var(--shadow);
+  z-index: 100;
+  font-size: 13px;
+  min-width: 140px;
+}
+
+.pie-tooltip .tooltip-name {
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--ink-0);
+}
+
+.pie-tooltip .tooltip-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.pie-tooltip .tooltip-row span:last-child {
+  font-weight: 600;
+  color: var(--ink-1);
+}
+
+/* Account Groups */
+.account-groups-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.account-group {
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.account-group.alt {
+  background: rgba(0, 0, 0, 0.025);
+}
+
+.account-header {
+  display: flex;
+  align-items: center;
+  padding: 10px 14px;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.account-header .account-name {
+  flex: 1;
+  font-weight: 600;
+  color: var(--ink-0);
+}
+
+.account-header .account-total {
+  margin-left: 12px;
+  font-weight: 600;
+  color: var(--ink-1);
+}
+
+.account-header .account-percent {
+  margin-left: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.account-symbols {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Symbol Row */
+.symbol-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 14px;
+  cursor: pointer;
+  transition: background 0.15s;
+  font-size: 13px;
+}
+
+.symbol-row:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.symbol-row.highlighted {
+  background: rgba(16, 185, 129, 0.12);
+}
+
+.symbol-row .symbol-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.symbol-row .symbol-name {
+  font-weight: 500;
+  color: var(--ink-0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.symbol-row .symbol-code {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.symbol-row .symbol-value,
+.symbol-row .symbol-percent,
+.symbol-row .symbol-pnl {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.symbol-row .symbol-value {
+  min-width: 80px;
+}
+
+.symbol-row .symbol-percent {
+  min-width: 55px;
+  color: var(--muted);
+}
+
+.symbol-row .symbol-pnl {
+  min-width: 70px;
+}
+
+.symbol-row .symbol-pnl.positive {
+  color: var(--accent-cool);
+}
+
+.symbol-row .symbol-pnl.negative {
+  color: var(--accent-strong);
+}
+
 .table .table-input,
 .table .table-select {
   width: 100%;
