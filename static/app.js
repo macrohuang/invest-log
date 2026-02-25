@@ -32,6 +32,89 @@ const chartPalette = [
   '#3f463e'
 ];
 
+const displayTimeZone = 'Asia/Shanghai';
+const displayDateFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: displayTimeZone,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+const displayDateTimeFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: displayTimeZone,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+});
+
+function extractDateParts(formatter, value) {
+  const parts = {};
+  formatter.formatToParts(value).forEach((part) => {
+    if (part.type !== 'literal') {
+      parts[part.type] = part.value;
+    }
+  });
+  return parts;
+}
+
+function parseTimestampAsDate(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+
+  const text = String(value).trim();
+  if (!text) {
+    return null;
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}$/.test(text)) {
+    const parsedUTC = new Date(text.replace(' ', 'T') + 'Z');
+    return Number.isNaN(parsedUTC.getTime()) ? null : parsedUTC;
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    const parsedDate = new Date(`${text}T00:00:00Z`);
+    return Number.isNaN(parsedDate.getTime()) ? null : parsedDate;
+  }
+
+  const parsed = new Date(text);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatDateInDisplayTimezone(value = new Date()) {
+  const date = parseTimestampAsDate(value);
+  if (!date) {
+    return '';
+  }
+  const parts = extractDateParts(displayDateFormatter, date);
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
+function formatDateTimeInDisplayTimezone(value) {
+  const date = parseTimestampAsDate(value);
+  if (!date) {
+    return value ? String(value) : '—';
+  }
+  const parts = extractDateParts(displayDateTimeFormatter, date);
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`;
+}
+
+function formatDateTimeISOInDisplayTimezone(value = new Date()) {
+  const date = parseTimestampAsDate(value);
+  if (!date) {
+    return '';
+  }
+  const parts = extractDateParts(displayDateTimeFormatter, date);
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}+08:00`;
+}
+
 function init() {
   state.apiBase = resolveApiBase();
   state.privacy = localStorage.getItem('privacyMode') === '1';
@@ -195,11 +278,8 @@ function parsePositionSuggestionMeta(positionSuggestion) {
 }
 
 function parseAnalysisTimestamp(value) {
-  if (!value) {
-    return null;
-  }
-  const ts = Date.parse(value);
-  return Number.isFinite(ts) ? ts : null;
+  const date = parseTimestampAsDate(value);
+  return date ? date.getTime() : null;
 }
 
 function parseReviewNumber(value) {
@@ -340,7 +420,7 @@ function renderReviewCard(results, title, windowDays) {
     <div class="card review-mode-card">
       <div class="review-mode-header">
         <h4>${escapeHtml(title)}</h4>
-        <span class="section-sub">${escapeHtml(snapshot.baseline.created_at || '—')} → ${escapeHtml(snapshot.latest.created_at || '—')}</span>
+        <span class="section-sub">${escapeHtml(formatDateTimeInDisplayTimezone(snapshot.baseline.created_at))} → ${escapeHtml(formatDateTimeInDisplayTimezone(snapshot.latest.created_at))}</span>
       </div>
       <div class="review-row">
         <span class="review-label">Probability</span>
@@ -411,7 +491,9 @@ function renderAIAnalysisCard(result, currency) {
     }).join('')}</div>`
     : '<div class="section-sub">No recommendations returned.</div>';
 
-  const generatedAt = result.generated_at ? escapeHtml(String(result.generated_at)) : '—';
+  const generatedAt = result.generated_at
+    ? escapeHtml(formatDateTimeInDisplayTimezone(result.generated_at))
+    : '—';
   const model = result.model ? escapeHtml(String(result.model)) : '—';
   const riskLevel = result.risk_level ? escapeHtml(String(result.risk_level)) : 'unknown';
   const summary = result.overall_summary ? escapeHtml(String(result.overall_summary)) : '—';
@@ -1467,7 +1549,9 @@ function renderSynthesisCard(synthesis, result) {
   const ratingLabel = ratingLabels[synthesis.overall_rating] || synthesis.overall_rating || '—';
   const ratingClass = ratingColors[synthesis.overall_rating] || 'rating-hold';
   const model = result?.model ? escapeHtml(String(result.model)) : '—';
-  const createdAt = result?.created_at ? escapeHtml(String(result.created_at)) : '—';
+  const createdAt = result?.created_at
+    ? escapeHtml(formatDateTimeInDisplayTimezone(result.created_at))
+    : '—';
 
   const keyFactors = Array.isArray(synthesis.key_factors)
     ? `<ul class="ai-findings">${synthesis.key_factors.map(f => `<li>${escapeHtml(f)}</li>`).join('')}</ul>`
@@ -1592,7 +1676,7 @@ function renderSymbolAnalysisHistory(results) {
   const items = results.map(r => {
     const rating = r.synthesis?.overall_rating || '—';
     const ratingLabel = ratingLabels[rating] || rating;
-    const date = r.created_at || '—';
+    const date = formatDateTimeInDisplayTimezone(r.created_at);
     const model = r.model || '—';
     return `
       <div class="analysis-history-item">
@@ -2259,7 +2343,7 @@ async function renderAddTransaction() {
         });
       });
     });
-    const today = new Date().toISOString().slice(0, 10);
+    const today = formatDateInDisplayTimezone();
 
     view.innerHTML = `
       <div class="section-title">New Transaction</div>
@@ -2627,7 +2711,7 @@ async function renderTransfer() {
         });
       });
     });
-    const today = new Date().toISOString().slice(0, 10);
+    const today = formatDateInDisplayTimezone();
 
     const buildAccountOptions = (items) => items.map((a) => `
       <option value="${escapeHtml(a.account_id)}">${escapeHtml(a.account_name || a.account_id)}</option>
@@ -2926,7 +3010,7 @@ async function exportBackupData() {
   ]);
 
   const payload = {
-    exported_at: new Date().toISOString(),
+    exported_at: formatDateTimeISOInDisplayTimezone(),
     storage: {
       db_name: storageInfo && storageInfo.db_name ? storageInfo.db_name : '',
       data_dir: storageInfo && storageInfo.data_dir ? storageInfo.data_dir : '',
@@ -2941,7 +3025,7 @@ async function exportBackupData() {
     },
   };
 
-  const stamp = new Date().toISOString().slice(0, 10);
+  const stamp = formatDateInDisplayTimezone();
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -3083,7 +3167,9 @@ async function renderSettings() {
       const key = `${pair.from}_${pair.to}`;
       const item = exchangeRateMap[key] || {};
       const rate = Number(item.rate || 0);
-      const updatedAt = item.updated_at ? escapeHtml(String(item.updated_at)) : '—';
+      const updatedAt = item.updated_at
+        ? escapeHtml(formatDateTimeInDisplayTimezone(item.updated_at))
+        : '—';
       const source = item.source ? escapeHtml(String(item.source)) : 'manual';
       return `
         <div class="list-item allocation-item">

@@ -20,6 +20,10 @@ import (
 	"investlog/pkg/investlog"
 )
 
+// buildMode is set via -ldflags at build time. Default "dev" enables debug logging.
+// Build with: go build -ldflags "-X main.buildMode=release" ./cmd/server
+var buildMode = "dev"
+
 var getppid = os.Getppid
 var sleep = time.Sleep
 var exit = os.Exit
@@ -29,11 +33,13 @@ func main() {
 	var port int
 	var host string
 	var webDir string
+	var debug bool
 
 	flag.StringVar(&dataDir, "data-dir", "", "Directory for storing database and application data")
 	flag.IntVar(&port, "port", 8000, "Port to run the server on")
 	flag.StringVar(&host, "host", "127.0.0.1", "Host to bind the server to")
 	flag.StringVar(&webDir, "web-dir", "", "Directory for SPA static files (optional)")
+	flag.BoolVar(&debug, "debug", false, "Enable debug logging (overrides build mode)")
 	flag.Parse()
 
 	if dataDir != "" {
@@ -47,11 +53,20 @@ func main() {
 		os.Exit(1)
 	}
 	logDir := filepath.Join(resolvedDataDir, "logs")
-	logger, writer, err := logging.NewLogger(logDir)
+	logLevel := slog.LevelInfo
+	if debug || buildMode == "dev" {
+		logLevel = slog.LevelDebug
+	}
+	logger, writer, err := logging.NewLogger(logDir, logLevel)
 	if err != nil {
 		slog.Error("failed to initialize logger", "err", err)
 		os.Exit(1)
 	}
+	logger.Info("logger initialized",
+		"build_mode", buildMode,
+		"log_level", logLevel.String(),
+		"log_dir", logDir,
+	)
 	defer func() {
 		if err := writer.Close(); err != nil {
 			logger.Error("failed to close log writer", "err", err)
@@ -76,6 +91,7 @@ func main() {
 	}()
 
 	if os.Getenv("INVEST_LOG_PARENT_WATCH") == "1" {
+		logger.Info("parent watcher enabled")
 		go watchParent(logger)
 	}
 
@@ -96,7 +112,14 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 	}
 
-	logger.Info("server starting", "addr", addr)
+	logger.Info("server starting",
+		"addr", addr,
+		"host", host,
+		"port", port,
+		"pid", os.Getpid(),
+		"data_dir", resolvedDataDir,
+		"db_path", dbPath,
+	)
 	go func() {
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("server error", "err", err)
@@ -105,21 +128,24 @@ func main() {
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
-	<-stop
+	received := <-stop
 
-	logger.Info("server shutting down")
+	logger.Info("server shutting down", "signal", received.String())
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := server.Shutdown(ctx); err != nil {
 		logger.Error("server shutdown error", "err", err)
+		return
 	}
+	logger.Info("server shutdown completed")
 }
 
 func watchParent(logger *slog.Logger) {
 	for {
 		sleep(1 * time.Second)
-		if getppid() == 1 {
-			logger.Info("parent process exited; shutting down")
+		ppid := getppid()
+		if ppid == 1 {
+			logger.Info("parent process exited; shutting down", "parent_pid", ppid)
 			exit(0)
 		}
 	}

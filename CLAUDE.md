@@ -103,6 +103,11 @@ A simple circuit breaker is applied per source (3 failures in 60s -> 120s cooldo
 ## Logging
 
 Logs are written under the data directory in `logs/` with daily rotation (7 days).
+- File naming: `app-YYYYMMDD.log` (e.g., `app-20260219.log`)
+- The prefix **must** be `app` (defined as `defaultPrefix` in `go-backend/internal/logging/logging.go`)
+- Output goes to both stdout and the daily log file via `io.MultiWriter`
+- Uses `log/slog` structured logging — **never** use `fmt.Println` or `log.Println` for application logging
+- All log calls must go through `slog.Logger` instances (or `slog.Default()`) so they are captured in the log files
 
 ## Repo Structure (high level)
 

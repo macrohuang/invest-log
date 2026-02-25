@@ -8,10 +8,9 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"time"
 )
 
-const symbolAnalysisTimeout = 225 * time.Second // 3 * aiRequestTimeout
+const symbolAnalysisTimeout = aiTotalRequestTimeout
 
 const macroAnalysisSystemPrompt = `你是一个专注于宏观经济政策分析的投资研究助手。
 你需要分析以下维度：
@@ -276,21 +275,47 @@ type symbolContextData struct {
 }
 
 type symbolPreferenceContext struct {
-	RiskProfile    string `json:"risk_profile"`
-	Horizon        string `json:"horizon"`
-	AdviceStyle    string `json:"advice_style"`
-	StrategyPrompt string `json:"strategy_prompt,omitempty"`
+	RiskProfile string `json:"risk_profile"`
+	Horizon     string `json:"horizon"`
+	AdviceStyle string `json:"advice_style"`
 }
 
-func (c *Core) buildSymbolContext(symbol, currency string) (string, error) {
+// aiJSON returns a JSON string containing only the fields allowed for AI consumption:
+// symbol, name, avg_cost, pnl_percent, position_percent, allocation_max_percent, allocation_status.
+func (ctx *symbolContextData) aiJSON() (string, error) {
+	slim := struct {
+		Symbol               string  `json:"symbol"`
+		Name                 string  `json:"name,omitempty"`
+		AvgCost              float64 `json:"avg_cost,omitempty"`
+		PnLPercent           float64 `json:"pnl_percent,omitempty"`
+		PositionPercent      float64 `json:"position_percent,omitempty"`
+		AllocationMaxPercent float64 `json:"allocation_max_percent,omitempty"`
+		AllocationStatus     string  `json:"allocation_status,omitempty"`
+	}{
+		Symbol:               ctx.Symbol,
+		Name:                 ctx.Name,
+		AvgCost:              ctx.AvgCost,
+		PnLPercent:           ctx.PnLPercent,
+		PositionPercent:      ctx.PositionPercent,
+		AllocationMaxPercent: ctx.AllocationMaxPercent,
+		AllocationStatus:     ctx.AllocationStatus,
+	}
+	data, err := json.Marshal(slim)
+	if err != nil {
+		return "", fmt.Errorf("marshal symbol AI context: %w", err)
+	}
+	return string(data), nil
+}
+
+func (c *Core) buildSymbolContext(symbol, currency string) (*symbolContextData, error) {
 	bySymbol, err := c.GetHoldingsBySymbol()
 	if err != nil {
-		return "", fmt.Errorf("load holdings: %w", err)
+		return nil, fmt.Errorf("load holdings: %w", err)
 	}
 
 	currData, ok := bySymbol[currency]
 	if !ok {
-		return "", fmt.Errorf("no holdings found for currency: %s", currency)
+		return nil, fmt.Errorf("no holdings found for currency: %s", currency)
 	}
 
 	matched := make([]SymbolHolding, 0)
@@ -302,15 +327,10 @@ func (c *Core) buildSymbolContext(symbol, currency string) (string, error) {
 
 	if len(matched) == 0 {
 		// Allow analysis even without holdings (just symbol + currency)
-		ctx := symbolContextData{
+		return &symbolContextData{
 			Symbol:   symbol,
 			Currency: currency,
-		}
-		data, marshalErr := json.Marshal(ctx)
-		if marshalErr != nil {
-			return "", fmt.Errorf("marshal symbol context: %w", marshalErr)
-		}
-		return string(data), nil
+		}, nil
 	}
 
 	name := symbol
@@ -366,7 +386,7 @@ func (c *Core) buildSymbolContext(symbol, currency string) (string, error) {
 		positionPercent = round2(totalMarketValue / currData.TotalMarketValue * 100)
 	}
 
-	ctx := symbolContextData{
+	ctx := &symbolContextData{
 		Symbol:                   symbol,
 		Name:                     name,
 		Currency:                 currency,
@@ -407,11 +427,7 @@ func (c *Core) buildSymbolContext(symbol, currency string) (string, error) {
 		}
 	}
 
-	data, err := json.Marshal(ctx)
-	if err != nil {
-		return "", fmt.Errorf("marshal symbol context: %w", err)
-	}
-	return string(data), nil
+	return ctx, nil
 }
 
 type dimensionAgent struct {
@@ -725,6 +741,37 @@ func mapSynthesisActionLabel(action string) string {
 	}
 }
 
+// buildDimensionUserPrompt constructs the user prompt for dimension agents,
+// optionally injecting enriched context from external data.
+func buildDimensionUserPrompt(symbolContext, enrichedContext string, req SymbolAnalysisRequest) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("请分析以下投资标的：\n%s\n", symbolContext))
+
+	if enrichedContext != "" {
+		sb.WriteString(fmt.Sprintf(`
+以下是该标的的最新实时数据和新闻摘要（数据截至今日）：
+%s
+
+重要：请优先使用上述实时数据进行分析，而非你的训练数据中的过时信息。
+`, enrichedContext))
+	}
+
+	sb.WriteString("\n请根据你的专业维度进行深入分析，并输出指定格式的 JSON 结果。")
+
+	if req.RiskProfile != "" || req.Horizon != "" || req.AdviceStyle != "" {
+		preferenceJSON, err := json.Marshal(symbolPreferenceContext{
+			RiskProfile: req.RiskProfile,
+			Horizon:     req.Horizon,
+			AdviceStyle: req.AdviceStyle,
+		})
+		if err == nil {
+			sb.WriteString(fmt.Sprintf("\n\n用户投资偏好（用于结论权重与表达强度）：\n%s", string(preferenceJSON)))
+		}
+	}
+
+	return sb.String()
+}
+
 // AnalyzeSymbol runs a multi-agent deep analysis for a single symbol.
 func (c *Core) AnalyzeSymbol(req SymbolAnalysisRequest) (*SymbolAnalysisResult, error) {
 	normalizedReq, err := normalizeSymbolAnalysisRequest(req)
@@ -732,7 +779,12 @@ func (c *Core) AnalyzeSymbol(req SymbolAnalysisRequest) (*SymbolAnalysisResult, 
 		return nil, err
 	}
 
-	symbolContext, err := c.buildSymbolContext(normalizedReq.Symbol, normalizedReq.Currency)
+	contextData, err := c.buildSymbolContext(normalizedReq.Symbol, normalizedReq.Currency)
+	if err != nil {
+		return nil, err
+	}
+
+	symbolContextJSON, err := contextData.aiJSON()
 	if err != nil {
 		return nil, err
 	}
@@ -751,27 +803,19 @@ func (c *Core) AnalyzeSymbol(req SymbolAnalysisRequest) (*SymbolAnalysisResult, 
 		return nil, fmt.Errorf("save pending analysis: %w", err)
 	}
 
-	// Build user prompt for dimension agents.
-	userPrompt := fmt.Sprintf(`请分析以下投资标的：
-%s
-
-请根据你的专业维度进行深入分析，并输出指定格式的 JSON 结果。`, symbolContext)
-
-	if normalizedReq.StrategyPrompt != "" || normalizedReq.RiskProfile != "" || normalizedReq.Horizon != "" || normalizedReq.AdviceStyle != "" {
-		preferenceJSON, marshalErr := json.Marshal(symbolPreferenceContext{
-			RiskProfile:    normalizedReq.RiskProfile,
-			Horizon:        normalizedReq.Horizon,
-			AdviceStyle:    normalizedReq.AdviceStyle,
-			StrategyPrompt: normalizedReq.StrategyPrompt,
-		})
-		if marshalErr != nil {
-			return nil, fmt.Errorf("marshal symbol preferences: %w", marshalErr)
+	// Fetch and summarize external data (graceful degradation on failure).
+	var enrichedContext string
+	externalData := fetchExternalDataFn(ctx, normalizedReq.Symbol, normalizedReq.Currency, c.Logger())
+	if externalData != nil {
+		summary := summarizeExternalDataFn(ctx, externalData, endpointURL, normalizedReq.APIKey, normalizedReq.Model, c.Logger())
+		if summary != "" {
+			enrichedContext = summary
+			externalData.Summary = summary
 		}
-		userPrompt += fmt.Sprintf(`
-
-用户投资偏好（用于结论权重与表达强度）：
-%s`, string(preferenceJSON))
 	}
+
+	// Build user prompt for dimension agents.
+	userPrompt := buildDimensionUserPrompt(symbolContextJSON, enrichedContext, normalizedReq)
 
 	// Run 4 dimension agents in parallel.
 	dimensionOutputs, err := c.runDimensionAgents(ctx, endpointURL, normalizedReq.APIKey, normalizedReq.Model, userPrompt)
@@ -781,11 +825,10 @@ func (c *Core) AnalyzeSymbol(req SymbolAnalysisRequest) (*SymbolAnalysisResult, 
 	}
 
 	// Run synthesis agent sequentially.
-	synthesisOutput, err := runSynthesisAgent(ctx, endpointURL, normalizedReq.APIKey, normalizedReq.Model, symbolContext, dimensionOutputs, symbolPreferenceContext{
-		RiskProfile:    normalizedReq.RiskProfile,
-		Horizon:        normalizedReq.Horizon,
-		AdviceStyle:    normalizedReq.AdviceStyle,
-		StrategyPrompt: normalizedReq.StrategyPrompt,
+	synthesisOutput, err := runSynthesisAgent(ctx, endpointURL, normalizedReq.APIKey, normalizedReq.Model, symbolContextJSON, dimensionOutputs, symbolPreferenceContext{
+		RiskProfile: normalizedReq.RiskProfile,
+		Horizon:     normalizedReq.Horizon,
+		AdviceStyle: normalizedReq.AdviceStyle,
 	})
 	if err != nil {
 		_ = c.updateSymbolAnalysisStatus(rowID, "failed", err.Error())
@@ -809,12 +852,7 @@ func (c *Core) AnalyzeSymbol(req SymbolAnalysisRequest) (*SymbolAnalysisResult, 
 		return nil, fmt.Errorf("parse synthesis result: %w", err)
 	}
 
-	var contextData symbolContextData
-	if unmarshalErr := json.Unmarshal([]byte(symbolContext), &contextData); unmarshalErr != nil {
-		c.Logger().Warn("failed to parse symbol context for synthesis normalization", "err", unmarshalErr)
-	} else {
-		normalizeSynthesisResult(synthesis, &contextData)
-	}
+	normalizeSynthesisResult(synthesis, contextData)
 
 	synthesisToSave := synthesisOutput
 	if normalizedJSON, marshalErr := json.Marshal(synthesis); marshalErr == nil {
@@ -832,10 +870,10 @@ func (c *Core) AnalyzeSymbol(req SymbolAnalysisRequest) (*SymbolAnalysisResult, 
 		Status:     "completed",
 		Dimensions: dimensions,
 		Synthesis:  synthesis,
-		CreatedAt:  time.Now().Format(time.RFC3339),
+		CreatedAt:  NowRFC3339InShanghai(),
 	}
 
-	if err := c.saveCompletedSymbolAnalysis(rowID, dimensionOutputs, synthesisToSave); err != nil {
+	if err := c.saveCompletedSymbolAnalysis(rowID, dimensionOutputs, synthesisToSave, enrichedContext); err != nil {
 		return nil, fmt.Errorf("save analysis result: %w", err)
 	}
 
@@ -862,7 +900,7 @@ func (c *Core) updateSymbolAnalysisStatus(id int64, status, errMsg string) error
 	return err
 }
 
-func (c *Core) saveCompletedSymbolAnalysis(id int64, dimensionOutputs map[string]string, synthesisOutput string) error {
+func (c *Core) saveCompletedSymbolAnalysis(id int64, dimensionOutputs map[string]string, synthesisOutput string, externalDataSummary string) error {
 	_, err := c.db.Exec(
 		`UPDATE symbol_analyses
 		 SET status = 'completed',
@@ -871,6 +909,7 @@ func (c *Core) saveCompletedSymbolAnalysis(id int64, dimensionOutputs map[string
 		     company_analysis = ?,
 		     international_analysis = ?,
 		     synthesis = ?,
+		     external_data_summary = ?,
 		     completed_at = CURRENT_TIMESTAMP
 		 WHERE id = ?`,
 		dimensionOutputs["macro"],
@@ -878,6 +917,7 @@ func (c *Core) saveCompletedSymbolAnalysis(id int64, dimensionOutputs map[string
 		dimensionOutputs["company"],
 		dimensionOutputs["international"],
 		synthesisOutput,
+		externalDataSummary,
 		id,
 	)
 	return err

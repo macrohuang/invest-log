@@ -91,9 +91,79 @@ mkdir -p "$DMG_STAGE"
 cp -R "$APP_DIR" "$DMG_STAGE/"
 ln -s /Applications "$DMG_STAGE/Applications"
 
+RW_DMG_PATH="$OUT_DIR/${APP_NAME}-macOS-arm64.tmp.dmg"
 DMG_PATH="$OUT_DIR/${APP_NAME}-macOS-arm64.dmg"
-rm -f "$DMG_PATH"
-hdiutil create -volname "$APP_TITLE" -srcfolder "$DMG_STAGE" -ov -format UDZO "$DMG_PATH"
-rm -rf "$DMG_STAGE"
+ATTACHED_DEVICE=""
+ATTACHED_VOLUME_NAME=""
+
+cleanup() {
+  if [[ -n "$ATTACHED_DEVICE" ]]; then
+    hdiutil detach "$ATTACHED_DEVICE" -quiet || true
+  fi
+  rm -rf "$DMG_STAGE"
+  rm -f "$RW_DMG_PATH"
+}
+trap cleanup EXIT
+
+STAGE_SIZE_MB="$(du -sm "$DMG_STAGE" | awk '{print $1}')"
+DMG_SIZE_MB=$((STAGE_SIZE_MB + 80))
+
+rm -f "$DMG_PATH" "$RW_DMG_PATH"
+hdiutil create -volname "$APP_TITLE" -srcfolder "$DMG_STAGE" -ov -format UDRW -size "${DMG_SIZE_MB}m" "$RW_DMG_PATH"
+
+ATTACH_INFO="$(hdiutil attach "$RW_DMG_PATH" -readwrite -noverify -noautoopen)"
+ATTACHED_DEVICE="$(echo "$ATTACH_INFO" | awk '/^\/dev\// { print $1; exit }')"
+ATTACHED_VOLUME_PATH="$(echo "$ATTACH_INFO" | awk -F'\t' '/\/Volumes\// { print $NF; exit }')"
+ATTACHED_VOLUME_NAME="${ATTACHED_VOLUME_PATH##*/}"
+if [[ -z "$ATTACHED_VOLUME_NAME" ]]; then
+  ATTACHED_VOLUME_NAME="$APP_TITLE"
+fi
+
+if command -v osascript >/dev/null 2>&1; then
+  for _ in 1 2 3 4 5; do
+    if osascript -e "tell application \"Finder\" to get name of disk \"${ATTACHED_VOLUME_NAME}\"" >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.5
+  done
+
+  if ! osascript <<EOF
+tell application "Finder"
+  tell disk "${ATTACHED_VOLUME_NAME}"
+    open
+    set current view of container window to icon view
+    set toolbar visible of container window to false
+    set statusbar visible of container window to false
+    set bounds of container window to {120, 120, 1180, 760}
+
+    set opts to the icon view options of container window
+    set arrangement of opts to not arranged
+    set icon size of opts to 128
+    set text size of opts to 16
+
+    set position of item "${APP_NAME}.app" of container window to {300, 320}
+    set position of item "Applications" of container window to {760, 320}
+
+    update without registering applications
+    delay 1
+    close
+  end tell
+end tell
+EOF
+  then
+    echo "Warning: failed to apply Finder layout; continue with default layout." >&2
+  fi
+else
+  echo "Warning: osascript not found; continue with default layout." >&2
+fi
+
+sync
+hdiutil detach "$ATTACHED_DEVICE"
+ATTACHED_DEVICE=""
+
+hdiutil convert "$RW_DMG_PATH" -format UDZO -imagekey zlib-level=9 -ov -o "$DMG_PATH"
+
+trap - EXIT
+cleanup
 
 echo "Done: $DMG_PATH"

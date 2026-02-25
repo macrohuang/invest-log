@@ -2,10 +2,11 @@ package investlog
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Dimension stub responses used across tests.
@@ -16,6 +17,14 @@ const (
 	stubInternationalJSON = `{"dimension":"international","rating":"neutral","confidence":"medium","key_points":["贸易关系稳定"],"risks":["地缘政治不确定"],"opportunities":["全球化布局"],"summary":"国际环境中性"}`
 	stubSynthesisJSON     = `{"overall_rating":"buy","confidence":"medium","target_action":"increase","position_suggestion":"建议持有并适度加仓","overall_summary":"综合四维度分析看好","key_factors":["行业增长","基本面优良"],"risk_warnings":["估值偏高","地缘政治"],"action_items":[{"action":"适度加仓","rationale":"基本面支撑","priority":"medium"}],"time_horizon_notes":"中长期持有","disclaimer":"仅供参考，不构成投资建议"}`
 )
+
+func TestSymbolAnalysisTimeoutIsFifteenMinutes(t *testing.T) {
+	t.Parallel()
+
+	if symbolAnalysisTimeout != 15*time.Minute {
+		t.Fatalf("expected symbolAnalysisTimeout to be 15m, got %s", symbolAnalysisTimeout)
+	}
+}
 
 // dimensionStubRouter inspects the system prompt to return the matching dimension JSON.
 // The synthesis prompt is checked first because it also mentions dimension keywords like "宏观".
@@ -47,6 +56,12 @@ func TestAnalyzeSymbol_EndToEnd(t *testing.T) {
 	original := aiChatCompletion
 	defer func() { aiChatCompletion = original }()
 	aiChatCompletion = dimensionStubRouter
+
+	origFetch := fetchExternalDataFn
+	defer func() { fetchExternalDataFn = origFetch }()
+	fetchExternalDataFn = func(_ context.Context, _, _ string, _ *slog.Logger) *symbolExternalData {
+		return nil
+	}
 
 	result, err := core.AnalyzeSymbol(SymbolAnalysisRequest{
 		BaseURL:  "https://example.com/v1",
@@ -168,6 +183,12 @@ func TestAnalyzeSymbol_PartialFailure(t *testing.T) {
 	original := aiChatCompletion
 	defer func() { aiChatCompletion = original }()
 
+	origFetch := fetchExternalDataFn
+	defer func() { fetchExternalDataFn = origFetch }()
+	fetchExternalDataFn = func(_ context.Context, _, _ string, _ *slog.Logger) *symbolExternalData {
+		return nil
+	}
+
 	// macro agent fails; the other 3 dimensions + synthesis succeed.
 	aiChatCompletion = func(ctx context.Context, req aiChatCompletionRequest) (aiChatCompletionResult, error) {
 		sp := req.SystemPrompt
@@ -220,6 +241,12 @@ func TestAnalyzeSymbol_SynthesisUsesPositionAndPreferences(t *testing.T) {
 	original := aiChatCompletion
 	defer func() { aiChatCompletion = original }()
 
+	origFetch := fetchExternalDataFn
+	defer func() { fetchExternalDataFn = origFetch }()
+	fetchExternalDataFn = func(_ context.Context, _, _ string, _ *slog.Logger) *symbolExternalData {
+		return nil
+	}
+
 	var synthesisPrompt string
 	aiChatCompletion = func(ctx context.Context, req aiChatCompletionRequest) (aiChatCompletionResult, error) {
 		if strings.Contains(req.SystemPrompt, "综合投资分析师") {
@@ -244,17 +271,34 @@ func TestAnalyzeSymbol_SynthesisUsesPositionAndPreferences(t *testing.T) {
 		t.Fatalf("AnalyzeSymbol failed: %v", err)
 	}
 
-	checks := []string{
+	// Only allowed fields should appear in the synthesis prompt.
+	allowed := []string{
 		`"position_percent"`,
-		`"total_shares":15`,
+		`"avg_cost"`,
 		`"risk_profile":"aggressive"`,
 		`"horizon":"long"`,
 		`"advice_style":"aggressive"`,
-		"成长股高波动策略",
 	}
-	for _, want := range checks {
+	for _, want := range allowed {
 		if !strings.Contains(synthesisPrompt, want) {
 			t.Fatalf("expected synthesis prompt to contain %q, got: %s", want, synthesisPrompt)
+		}
+	}
+
+	// Forbidden fields must NOT appear in the prompt sent to AI.
+	forbidden := []string{
+		`"total_shares"`,
+		`"cost_basis"`,
+		`"latest_price"`,
+		`"market_value"`,
+		`"currency_total_market_value"`,
+		`"account_name"`,
+		`"account_names"`,
+		"成长股高波动策略",
+	}
+	for _, bad := range forbidden {
+		if strings.Contains(synthesisPrompt, bad) {
+			t.Fatalf("synthesis prompt must NOT contain %q, got: %s", bad, synthesisPrompt)
 		}
 	}
 }
@@ -268,6 +312,12 @@ func TestAnalyzeSymbol_AllFail(t *testing.T) {
 
 	original := aiChatCompletion
 	defer func() { aiChatCompletion = original }()
+
+	origFetch := fetchExternalDataFn
+	defer func() { fetchExternalDataFn = origFetch }()
+	fetchExternalDataFn = func(_ context.Context, _, _ string, _ *slog.Logger) *symbolExternalData {
+		return nil
+	}
 
 	aiChatCompletion = func(ctx context.Context, req aiChatCompletionRequest) (aiChatCompletionResult, error) {
 		sp := req.SystemPrompt
@@ -425,14 +475,9 @@ func TestBuildSymbolContext(t *testing.T) {
 	testBuyTransaction(t, core, "AAPL", 5, 120, "USD", "acc-2")
 	testBuyTransaction(t, core, "MSFT", 20, 50, "USD", "acc-1")
 
-	ctxJSON, err := core.buildSymbolContext("AAPL", "USD")
+	ctx, err := core.buildSymbolContext("AAPL", "USD")
 	if err != nil {
 		t.Fatalf("buildSymbolContext failed: %v", err)
-	}
-
-	var ctx symbolContextData
-	if err := json.Unmarshal([]byte(ctxJSON), &ctx); err != nil {
-		t.Fatalf("unmarshal context: %v", err)
 	}
 
 	if ctx.Symbol != "AAPL" {
@@ -460,14 +505,28 @@ func TestBuildSymbolContext(t *testing.T) {
 		t.Fatalf("expected account names to include Main and IRA, got %v", ctx.AccountNames)
 	}
 
+	// aiJSON should only contain allowed fields.
+	aiJSON, err := ctx.aiJSON()
+	if err != nil {
+		t.Fatalf("aiJSON failed: %v", err)
+	}
+	// Allowed fields that have non-zero values must be present.
+	for _, want := range []string{`"symbol"`, `"avg_cost"`, `"position_percent"`} {
+		if !strings.Contains(aiJSON, want) {
+			t.Fatalf("expected aiJSON to contain %s, got: %s", want, aiJSON)
+		}
+	}
+	// Forbidden fields must be absent.
+	for _, forbidden := range []string{`"currency"`, `"total_shares"`, `"cost_basis"`, `"latest_price"`, `"market_value"`, `"account_name"`, `"account_names"`} {
+		if strings.Contains(aiJSON, forbidden) {
+			t.Fatalf("aiJSON must NOT contain %s, got: %s", forbidden, aiJSON)
+		}
+	}
+
 	// Symbol not held: should still succeed with minimal data.
-	ctxJSON2, err := core.buildSymbolContext("NVDA", "USD")
+	ctx2, err := core.buildSymbolContext("NVDA", "USD")
 	if err != nil {
 		t.Fatalf("buildSymbolContext for unheld symbol failed: %v", err)
-	}
-	var ctx2 symbolContextData
-	if err := json.Unmarshal([]byte(ctxJSON2), &ctx2); err != nil {
-		t.Fatalf("unmarshal context2: %v", err)
 	}
 	if ctx2.Symbol != "NVDA" {
 		t.Fatalf("expected NVDA, got %s", ctx2.Symbol)

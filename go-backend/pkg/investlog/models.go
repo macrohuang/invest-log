@@ -1,7 +1,5 @@
 package investlog
 
-import "time"
-
 var Currencies = []string{"CNY", "USD", "HKD"}
 
 var DefaultAssetTypes = []string{"stock", "bond", "metal", "cash"}
@@ -269,5 +267,5 @@ type PriceResult struct {
 
 // Time helpers.
 func todayISO() string {
-	return time.Now().Format("2006-01-02")
+	return TodayISOInShanghai()
 }

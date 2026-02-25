@@ -248,6 +248,15 @@ func initDatabase(db *sql.DB) error {
 		return err
 	}
 
+	// Migrate: add external_data_summary column for AI symbol analysis.
+	if hasCol, err := tableHasColumn(tx, "symbol_analyses", "external_data_summary"); err != nil {
+		return err
+	} else if !hasCol {
+		if err := exec(tx, "ALTER TABLE symbol_analyses ADD COLUMN external_data_summary TEXT"); err != nil {
+			return err
+		}
+	}
+
 	indexes := []string{
 		"CREATE INDEX IF NOT EXISTS idx_symbol_id ON transactions(symbol_id)",
 		"CREATE INDEX IF NOT EXISTS idx_date ON transactions(transaction_date)",

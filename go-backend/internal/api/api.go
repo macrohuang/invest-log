@@ -17,8 +17,20 @@ import (
 // NewRouter builds the HTTP API router.
 func NewRouter(core *investlog.Core) http.Handler {
 	r := chi.NewRouter()
-	r.Use(middleware.Recoverer)
+
+	logger := slog.Default()
+	if core != nil {
+		logger = core.Logger()
+	}
+	h := &handler{
+		core:   core,
+		logger: logger,
+	}
+
 	r.Use(middleware.RequestID)
+	r.Use(middleware.RealIP)
+	r.Use(requestLoggingMiddleware(logger))
+	r.Use(recoveryLoggingMiddleware(logger))
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins: []string{
 			"http://localhost:*",
@@ -48,15 +60,6 @@ func NewRouter(core *investlog.Core) http.Handler {
 		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
 		AllowCredentials: true,
 	}))
-
-	logger := slog.Default()
-	if core != nil {
-		logger = core.Logger()
-	}
-	h := &handler{
-		core:   core,
-		logger: logger,
-	}
 
 	r.Use(h.coreLockMiddleware)
 
@@ -134,5 +137,8 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
+	if setter, ok := w.(interface{ SetErrorMessage(string) }); ok {
+		setter.SetErrorMessage(message)
+	}
 	writeJSON(w, status, map[string]string{"error": message})
 }

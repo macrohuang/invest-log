@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,7 +77,7 @@ func TestDailyWriterCloseNil(t *testing.T) {
 
 func TestNewLogger(t *testing.T) {
 	dir := t.TempDir()
-	logger, writer, err := NewLogger(dir)
+	logger, writer, err := NewLogger(dir, slog.LevelInfo)
 	if err != nil {
 		t.Fatalf("NewLogger: %v", err)
 	}
@@ -84,4 +85,80 @@ func TestNewLogger(t *testing.T) {
 		t.Fatalf("expected logger and writer")
 	}
 	_ = writer.Close()
+}
+
+func TestNewLoggerHonorsEnvLogLevel(t *testing.T) {
+	t.Setenv("INVEST_LOG_LOG_LEVEL", "debug")
+
+	dir := t.TempDir()
+	logger, writer, err := NewLogger(dir, slog.LevelInfo)
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = writer.Close()
+	})
+
+	if !logger.Enabled(nil, slog.LevelDebug) {
+		t.Fatalf("expected debug level to be enabled by environment")
+	}
+
+	logger.Debug("debug enabled by env")
+	_ = writer.Close()
+
+	date := time.Now().Format("20060102")
+	path := filepath.Join(dir, defaultPrefix+"-"+date+".log")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	if !strings.Contains(string(data), "debug enabled by env") {
+		t.Fatalf("expected debug log in file, got %q", string(data))
+	}
+}
+
+func TestNewLoggerSupportsJSONFormatByEnv(t *testing.T) {
+	t.Setenv("INVEST_LOG_LOG_FORMAT", "json")
+
+	dir := t.TempDir()
+	logger, writer, err := NewLogger(dir, slog.LevelInfo)
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = writer.Close()
+	})
+
+	logger.Info("json log message")
+	_ = writer.Close()
+
+	date := time.Now().Format("20060102")
+	path := filepath.Join(dir, defaultPrefix+"-"+date+".log")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read log: %v", err)
+	}
+	if !strings.Contains(string(data), `"msg":"json log message"`) {
+		t.Fatalf("expected json log format, got %q", string(data))
+	}
+}
+
+func TestNewLoggerSetsSlogDefault(t *testing.T) {
+	oldDefault := slog.Default()
+	t.Cleanup(func() {
+		slog.SetDefault(oldDefault)
+	})
+
+	dir := t.TempDir()
+	logger, writer, err := NewLogger(dir, slog.LevelInfo)
+	if err != nil {
+		t.Fatalf("NewLogger: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = writer.Close()
+	})
+
+	if slog.Default() != logger {
+		t.Fatalf("expected slog.Default to be updated")
+	}
 }

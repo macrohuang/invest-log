@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -347,7 +346,7 @@ func (h *handler) addAccount(w http.ResponseWriter, r *http.Request) {
 	for currency, amount := range balances {
 		if amount > 0 {
 			_, _ = h.core.AddTransaction(investlog.AddTransactionRequest{
-				TransactionDate: time.Now().Format("2006-01-02"),
+				TransactionDate: investlog.TodayISOInShanghai(),
 				Symbol:          "CASH",
 				TransactionType: "TRANSFER_IN",
 				AssetType:       "cash",

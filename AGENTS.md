@@ -191,9 +191,15 @@ For UI changes, do a manual pass in the SPA and in the iOS/macOS wrappers:
 - `INVEST_LOG_PARENT_WATCH` - Set to "1" to enable parent process watching
 
 ### Logging
-- Logs are written under the data directory in `logs/`
-- Daily rotation with 7 days retention
-- Use structured logging with `slog` package
+
+Logs are written under the data directory in `logs/` with daily rotation (7 days retention).
+- Logs are written to both **stdout** and a **daily log file** (`logs/app-YYYYMMDD.log`)
+- File prefix is `app` (defined in `go-backend/internal/logging/logging.go` as `defaultPrefix`)
+- **Never** change the log file prefix from `app` without explicit instruction
+- Use structured logging with `slog` package — all application log output **must** go through `slog.Logger`
+- **Never** use `fmt.Println`, `log.Println`, or other raw print functions for application logging, as they bypass the log file
+- Log levels can be overridden via `INVEST_LOG_LOG_LEVEL` env var (debug, info, warn, error)
+- Log format can be switched to JSON via `INVEST_LOG_LOG_FORMAT=json`
 
 ## Common Patterns
 

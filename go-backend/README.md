@@ -19,8 +19,11 @@ Optional flags:
 Environment variables:
 - `INVEST_LOG_DATA_DIR`: override data directory
 - `INVEST_LOG_DB_PATH`: override DB file path
+- `INVEST_LOG_LOG_LEVEL`: override log level (`debug`/`info`/`warn`/`error`)
+- `INVEST_LOG_LOG_FORMAT`: log output format (`text` or `json`)
 
 Logs are written to `logs/` under the data directory with daily rotation (7 days).
+API requests are logged with request ID, status code, latency, client IP, and user agent.
 
 ## API (JSON)
 

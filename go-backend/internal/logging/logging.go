@@ -6,12 +6,18 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
-const defaultPrefix = "invest-log"
+const defaultPrefix = "app"
+
+const (
+	envLogLevel  = "INVEST_LOG_LOG_LEVEL"
+	envLogFormat = "INVEST_LOG_LOG_FORMAT"
+)
 
 // DailyWriter writes logs into a date-based file and prunes old files.
 type DailyWriter struct {
@@ -119,12 +125,47 @@ func (w *DailyWriter) cleanup(now time.Time) {
 }
 
 // NewLogger creates a slog.Logger writing to stdout and a daily file.
-func NewLogger(logDir string) (*slog.Logger, *DailyWriter, error) {
+func NewLogger(logDir string, level slog.Level) (*slog.Logger, *DailyWriter, error) {
 	writer, err := NewDailyWriter(logDir, 7)
 	if err != nil {
 		return nil, nil, err
 	}
 	multi := io.MultiWriter(os.Stdout, writer)
-	handler := slog.NewTextHandler(multi, &slog.HandlerOptions{Level: slog.LevelInfo})
-	return slog.New(handler), writer, nil
+	effectiveLevel := resolveLevel(level)
+	handler := newHandler(multi, effectiveLevel)
+	logger := slog.New(handler).With("service", defaultPrefix)
+	slog.SetDefault(logger)
+	return logger, writer, nil
+}
+
+func resolveLevel(fallback slog.Level) slog.Level {
+	value := strings.TrimSpace(os.Getenv(envLogLevel))
+	if value == "" {
+		return fallback
+	}
+
+	switch strings.ToLower(value) {
+	case "debug":
+		return slog.LevelDebug
+	case "info":
+		return slog.LevelInfo
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		if i, err := strconv.Atoi(value); err == nil {
+			return slog.Level(i)
+		}
+		return fallback
+	}
+}
+
+func newHandler(w io.Writer, level slog.Level) slog.Handler {
+	options := &slog.HandlerOptions{Level: level}
+	format := strings.ToLower(strings.TrimSpace(os.Getenv(envLogFormat)))
+	if format == "json" {
+		return slog.NewJSONHandler(w, options)
+	}
+	return slog.NewTextHandler(w, options)
 }

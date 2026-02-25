@@ -1,9 +1,11 @@
 package investlog
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -47,6 +49,14 @@ func TestBuildAICompletionsEndpoint(t *testing.T) {
 				t.Fatalf("got %q want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestAIRequestTimeoutIsFiveMinutes(t *testing.T) {
+	t.Parallel()
+
+	if aiRequestTimeout != 5*time.Minute {
+		t.Fatalf("expected aiRequestTimeout to be 5m, got %s", aiRequestTimeout)
 	}
 }
 
@@ -411,6 +421,148 @@ func TestRequestAIChatCompletion_ReturnsFriendlyTimeout(t *testing.T) {
 	}
 }
 
+func TestRequestAIChatCompletion_DebugLogsPrompt(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"model-debug","choices":[{"message":{"content":"{\"overall_summary\":\"ok\",\"risk_level\":\"balanced\",\"key_findings\":[\"x\"],\"recommendations\":[{\"action\":\"hold\",\"theory_tag\":\"Buffett\",\"rationale\":\"wait\"}],\"disclaimer\":\"d\"}"}}]}`))
+	}))
+	defer server.Close()
+
+	_, err := requestAIChatCompletion(context.Background(), aiChatCompletionRequest{
+		EndpointURL:  server.URL + "/v1/chat/completions",
+		APIKey:       "key",
+		Model:        "model-debug",
+		SystemPrompt: "system prompt for debug",
+		UserPrompt:   "user prompt for debug",
+		Logger:       logger,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	logs := buf.String()
+	if !strings.Contains(logs, "ai request prompt") {
+		t.Fatalf("expected debug prompt log, got %q", logs)
+	}
+	if !strings.Contains(logs, "system_prompt=\"system prompt for debug\"") {
+		t.Fatalf("expected system prompt in debug log, got %q", logs)
+	}
+	if !strings.Contains(logs, "user_prompt=\"user prompt for debug\"") {
+		t.Fatalf("expected user prompt in debug log, got %q", logs)
+	}
+}
+
+func TestRequestAIChatCompletion_InfoLevelSkipsPromptLog(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"model-info","choices":[{"message":{"content":"{\"overall_summary\":\"ok\",\"risk_level\":\"balanced\",\"key_findings\":[\"x\"],\"recommendations\":[{\"action\":\"hold\",\"theory_tag\":\"Buffett\",\"rationale\":\"wait\"}],\"disclaimer\":\"d\"}"}}]}`))
+	}))
+	defer server.Close()
+
+	_, err := requestAIChatCompletion(context.Background(), aiChatCompletionRequest{
+		EndpointURL:  server.URL + "/v1/chat/completions",
+		APIKey:       "key",
+		Model:        "model-info",
+		SystemPrompt: "system prompt for info",
+		UserPrompt:   "user prompt for info",
+		Logger:       logger,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	logs := buf.String()
+	if strings.Contains(logs, "ai request prompt") {
+		t.Fatalf("did not expect debug prompt log at info level, got %q", logs)
+	}
+	if strings.Contains(logs, "system_prompt=") || strings.Contains(logs, "user_prompt=") {
+		t.Fatalf("did not expect prompt fields at info level, got %q", logs)
+	}
+}
+
+func TestRequestAIChatCompletion_DebugLogsRawResponse(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"model-raw","choices":[{"message":{"content":"{\"overall_summary\":\"ok\",\"risk_level\":\"balanced\",\"key_findings\":[\"x\"],\"recommendations\":[{\"action\":\"hold\",\"theory_tag\":\"Buffett\",\"rationale\":\"wait\"}],\"disclaimer\":\"d\"}"}}]}`))
+	}))
+	defer server.Close()
+
+	_, err := requestAIChatCompletion(context.Background(), aiChatCompletionRequest{
+		EndpointURL:  server.URL + "/v1/chat/completions",
+		APIKey:       "key",
+		Model:        "model-raw",
+		SystemPrompt: "sys",
+		UserPrompt:   "user",
+		Logger:       logger,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	logs := buf.String()
+	if !strings.Contains(logs, "ai raw response") {
+		t.Fatalf("expected raw response debug log, got %q", logs)
+	}
+	if !strings.Contains(logs, "status_code=200") {
+		t.Fatalf("expected status_code in debug log, got %q", logs)
+	}
+	if !strings.Contains(logs, "model-raw") {
+		t.Fatalf("expected raw model data in debug log, got %q", logs)
+	}
+}
+
+func TestRequestAIByChatCompletions_DebugLogsRawResponseOnError(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"provider raw detail"}}`))
+	}))
+	defer server.Close()
+
+	_, err := requestAIByChatCompletions(context.Background(), aiChatCompletionRequest{
+		EndpointURL:  server.URL,
+		APIKey:       "key",
+		Model:        "model-raw-err",
+		SystemPrompt: "sys",
+		UserPrompt:   "user",
+		Logger:       logger,
+	}, server.URL)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+
+	logs := buf.String()
+	if !strings.Contains(logs, "ai raw response") {
+		t.Fatalf("expected raw response debug log, got %q", logs)
+	}
+	if !strings.Contains(logs, "status_code=400") {
+		t.Fatalf("expected status_code in debug log, got %q", logs)
+	}
+	if !strings.Contains(logs, "provider raw detail") {
+		t.Fatalf("expected upstream raw message in debug log, got %q", logs)
+	}
+}
+
 func TestDecodeAIModelAndContent(t *testing.T) {
 	t.Parallel()
 
@@ -471,5 +623,55 @@ func TestAnalyzeHoldingsEndToEndWithStub(t *testing.T) {
 	}
 	if result.Recommendations[0].Action != "reduce" {
 		t.Fatalf("unexpected action: %s", result.Recommendations[0].Action)
+	}
+}
+
+func TestAnalyzeHoldings_UsesFifteenMinuteOverallTimeout(t *testing.T) {
+	core, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	testAccount(t, core, "acc-1", "Main")
+	testBuyTransaction(t, core, "AAPL", 10, 100, "USD", "acc-1")
+
+	original := aiChatCompletion
+	defer func() { aiChatCompletion = original }()
+
+	var remainingAtCall time.Duration
+	aiChatCompletion = func(ctx context.Context, req aiChatCompletionRequest) (aiChatCompletionResult, error) {
+		deadline, ok := ctx.Deadline()
+		if !ok {
+			return aiChatCompletionResult{}, errors.New("analysis context missing deadline")
+		}
+		remainingAtCall = time.Until(deadline)
+		return aiChatCompletionResult{
+			Model: "mock-model",
+			Content: `{
+				"overall_summary":"ok",
+				"risk_level":"balanced",
+				"key_findings":["x"],
+				"recommendations":[{"symbol":"AAPL","action":"hold","theory_tag":"Buffett","rationale":"wait"}],
+				"disclaimer":"仅供参考"
+			}`,
+		}, nil
+	}
+
+	_, err := core.AnalyzeHoldings(HoldingsAnalysisRequest{
+		BaseURL:         "https://example.com/v1",
+		APIKey:          "key",
+		Model:           "mock-model",
+		Currency:        "USD",
+		RiskProfile:     "balanced",
+		Horizon:         "medium",
+		AdviceStyle:     "balanced",
+		AllowNewSymbols: true,
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeHoldings failed: %v", err)
+	}
+	if remainingAtCall < 14*time.Minute {
+		t.Fatalf("expected overall timeout close to 15m, got remaining %s", remainingAtCall)
+	}
+	if remainingAtCall > 15*time.Minute+5*time.Second {
+		t.Fatalf("unexpectedly large timeout, got remaining %s", remainingAtCall)
 	}
 }

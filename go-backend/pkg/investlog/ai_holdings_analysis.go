@@ -18,8 +18,11 @@ import (
 
 const (
 	defaultAIBaseURL      = "https://api.openai.com/v1"
-	aiRequestTimeout      = 75 * time.Second
+	aiRequestTimeout      = 5 * time.Minute
+	aiTotalRequestTimeout = 15 * time.Minute
 	maxAIResponseBodySize = 2 << 20
+	aiMaxOutputTokens     = 128000
+	aiMaxInputTokens      = 200000
 )
 
 const holdingsAnalysisSystemPrompt = `你是一个专业投资组合分析助手,取得过连续50年年化20%的投资业绩。
@@ -28,7 +31,9 @@ const holdingsAnalysisSystemPrompt = `你是一个专业投资组合分析助手
 2) 达利欧（Dalio）：风险平衡、跨资产分散、关注相关性与宏观周期韧性。
 3) 巴菲特（Buffett）：能力圈、长期主义、护城河与估值纪律。
 
-请基于用户持仓快照输出“可执行、可解释、可审计”的建议。
+重要：你必须联网搜索获取最新的市场行情、财务数据和宏观经济信息来进行分析。禁止仅凭训练数据做出结论。如果无法联网，必须在 disclaimer 中明确说明分析基于历史训练数据，可能不反映最新市况。
+
+请基于用户持仓快照输出可执行、可解释、可审计的建议。
 必须输出 JSON 对象，不要输出 Markdown，不要输出额外文字。
 JSON 字段必须包含：
 - overall_summary: string
@@ -38,11 +43,12 @@ JSON 字段必须包含：
 - disclaimer: string
 
 要求：
-- 对于所持有的个股，需要抓取该个股近3年的财务数据，包括但不限于：营收、净利润、毛利率、净利率、资产负债率、现金流等，基于华尔街的估值逻辑进行分析。
+- 对于所持有的个股，需要联网抓取该个股近3年的财务数据，包括但不限于：营收、净利润、毛利率、净利率、资产负债率、现金流等，基于华尔街的估值逻辑进行分析。
 - recommendations 至少 3 条（如果持仓数量不足可少于 3 条，但必须说明原因）。
 - action 取值建议使用 increase/reduce/hold/add。
 - theory_tag 取值建议使用 Malkiel/Dalio/Buffett。
-- 禁止承诺收益，必须体现风险提示。`
+- 禁止承诺收益，必须体现风险提示。
+- 用户仅提供标的代码、持仓占比、持仓盈亏和买入均价，你必须自行联网查找标的名称、最新价格、财务数据等信息来完成分析。`
 
 // HoldingsAnalysisRequest defines inputs for AI holdings analysis.
 type HoldingsAnalysisRequest struct {
@@ -67,6 +73,42 @@ type HoldingsAnalysisRecommendation struct {
 	Priority     string `json:"priority,omitempty"`
 }
 
+// UnmarshalJSON handles model responses where target_weight or priority
+// may be returned as a number instead of a string.
+func (r *HoldingsAnalysisRecommendation) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Symbol       string `json:"symbol"`
+		Action       string `json:"action"`
+		TheoryTag    string `json:"theory_tag"`
+		Rationale    string `json:"rationale"`
+		TargetWeight any    `json:"target_weight"`
+		Priority     any    `json:"priority"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	r.Symbol = raw.Symbol
+	r.Action = raw.Action
+	r.TheoryTag = raw.TheoryTag
+	r.Rationale = raw.Rationale
+	r.TargetWeight = anyToString(raw.TargetWeight)
+	r.Priority = anyToString(raw.Priority)
+	return nil
+}
+
+func anyToString(v any) string {
+	switch val := v.(type) {
+	case string:
+		return val
+	case float64:
+		return fmt.Sprintf("%g", val)
+	case nil:
+		return ""
+	default:
+		return fmt.Sprintf("%v", val)
+	}
+}
+
 // HoldingsAnalysisResult is the structured response returned to clients.
 type HoldingsAnalysisResult struct {
 	GeneratedAt     string                           `json:"generated_at"`
@@ -80,19 +122,15 @@ type HoldingsAnalysisResult struct {
 }
 
 type holdingsAnalysisCurrencySnapshot struct {
-	Currency         string                       `json:"currency"`
-	TotalMarketValue float64                      `json:"total_market_value"`
-	Symbols          []holdingsAnalysisSymbolItem `json:"symbols"`
+	Currency string                       `json:"currency"`
+	Symbols  []holdingsAnalysisSymbolItem `json:"symbols"`
 }
 
 type holdingsAnalysisSymbolItem struct {
-	Symbol      string   `json:"symbol"`
-	Name        string   `json:"name"`
-	AssetType   string   `json:"asset_type"`
-	AccountName string   `json:"account_name"`
-	MarketValue float64  `json:"market_value"`
-	WeightPct   float64  `json:"weight_pct"`
-	PnLPct      *float64 `json:"pnl_pct,omitempty"`
+	Symbol    string   `json:"symbol"`
+	WeightPct float64  `json:"weight_pct"`
+	PnLPct    *float64 `json:"pnl_pct,omitempty"`
+	AvgCost   float64  `json:"avg_cost"`
 }
 
 type holdingsAnalysisPromptInput struct {
@@ -150,7 +188,7 @@ func (c *Core) AnalyzeHoldings(req HoldingsAnalysisRequest) (*HoldingsAnalysisRe
 		return nil, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), aiRequestTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), aiTotalRequestTimeout)
 	defer cancel()
 
 	chatResult, err := aiChatCompletion(ctx, aiChatCompletionRequest{
@@ -189,7 +227,7 @@ func (c *Core) AnalyzeHoldings(req HoldingsAnalysisRequest) (*HoldingsAnalysisRe
 	}
 
 	result := &HoldingsAnalysisResult{
-		GeneratedAt:     time.Now().Format(time.RFC3339),
+		GeneratedAt:     NowRFC3339InShanghai(),
 		Model:           model,
 		Currency:        normalizedReq.Currency,
 		OverallSummary:  overallSummary,
@@ -288,25 +326,17 @@ func (c *Core) buildHoldingsAnalysisPromptInput(currency string) (*holdingsAnaly
 		currData := bySymbol[curr]
 		symbols := make([]holdingsAnalysisSymbolItem, 0, len(currData.Symbols))
 		for _, item := range currData.Symbols {
-			name := item.Symbol
-			if item.Name != nil && strings.TrimSpace(*item.Name) != "" {
-				name = strings.TrimSpace(*item.Name)
-			}
 			symbols = append(symbols, holdingsAnalysisSymbolItem{
-				Symbol:      item.Symbol,
-				Name:        name,
-				AssetType:   item.AssetType,
-				AccountName: item.AccountName,
-				MarketValue: item.MarketValue,
-				WeightPct:   item.Percent,
-				PnLPct:      item.PnlPercent,
+				Symbol:    item.Symbol,
+				WeightPct: item.Percent,
+				PnLPct:    item.PnlPercent,
+				AvgCost:   item.AvgCost,
 			})
 		}
 
 		holdings = append(holdings, holdingsAnalysisCurrencySnapshot{
-			Currency:         curr,
-			TotalMarketValue: currData.TotalMarketValue,
-			Symbols:          symbols,
+			Currency: curr,
+			Symbols:  symbols,
 		})
 	}
 
@@ -528,14 +558,18 @@ func toAltResponsesEndpoint(endpoint string) string {
 }
 
 func requestAIByChatCompletions(ctx context.Context, req aiChatCompletionRequest, endpoint string) (aiChatCompletionResult, error) {
+	logAIPromptDebug(req.Logger, endpoint, req.Model, req.SystemPrompt, req.UserPrompt)
+
 	payload := map[string]any{
 		"model": req.Model,
 		"messages": []map[string]string{
 			{"role": "system", "content": req.SystemPrompt},
 			{"role": "user", "content": req.UserPrompt},
 		},
-		"temperature": 0.2,
-		"stream":      false,
+		"temperature":           0.2,
+		"stream":                false,
+		"max_tokens":            aiMaxOutputTokens,
+		"max_completion_tokens": aiMaxOutputTokens,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -549,7 +583,7 @@ func requestAIByChatCompletions(ctx context.Context, req aiChatCompletionRequest
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+req.APIKey)
 
-	respBody, err := executeAIRequest(httpReq)
+	respBody, err := executeAIRequest(httpReq, req.Logger)
 	if err != nil {
 		return aiChatCompletionResult{}, err
 	}
@@ -566,11 +600,12 @@ func requestAIByChatCompletions(ctx context.Context, req aiChatCompletionRequest
 
 func requestAIByResponses(ctx context.Context, req aiChatCompletionRequest, endpoint string) (aiChatCompletionResult, error) {
 	payload := map[string]any{
-		"model":        req.Model,
-		"instructions": req.SystemPrompt,
-		"input":        req.UserPrompt,
-		"temperature":  0.2,
-		"stream":       false,
+		"model":             req.Model,
+		"instructions":      req.SystemPrompt,
+		"input":             req.UserPrompt,
+		"temperature":       0.2,
+		"stream":            false,
+		"max_output_tokens": aiMaxOutputTokens,
 		"messages": []map[string]string{
 			{"role": "system", "content": req.SystemPrompt},
 			{"role": "user", "content": req.UserPrompt},
@@ -586,28 +621,36 @@ func requestAIByHybridPayload(ctx context.Context, req aiChatCompletionRequest, 
 			{"role": "system", "content": req.SystemPrompt},
 			{"role": "user", "content": req.UserPrompt},
 		},
-		"input":        req.UserPrompt,
-		"instructions": req.SystemPrompt,
-		"temperature":  0.2,
-		"stream":       false,
+		"input":                 req.UserPrompt,
+		"instructions":          req.SystemPrompt,
+		"temperature":           0.2,
+		"stream":                false,
+		"max_tokens":            aiMaxOutputTokens,
+		"max_completion_tokens": aiMaxOutputTokens,
+		"max_output_tokens":     aiMaxOutputTokens,
 	}
 	return requestAIByPayload(ctx, req, endpoint, payload)
 }
 
 func requestAIByPayload(ctx context.Context, req aiChatCompletionRequest, endpoint string, payload map[string]any) (aiChatCompletionResult, error) {
+	logAIPromptDebug(req.Logger, endpoint, req.Model, req.SystemPrompt, req.UserPrompt)
+
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return aiChatCompletionResult{}, fmt.Errorf("marshal ai request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	requestCtx, cancel := context.WithTimeout(ctx, aiRequestTimeout)
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return aiChatCompletionResult{}, fmt.Errorf("build ai request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+req.APIKey)
 
-	respBody, err := executeAIRequest(httpReq)
+	respBody, err := executeAIRequest(httpReq, req.Logger)
 	if err != nil {
 		return aiChatCompletionResult{}, err
 	}
@@ -620,6 +663,32 @@ func requestAIByPayload(ctx context.Context, req aiChatCompletionRequest, endpoi
 		return aiChatCompletionResult{}, fmt.Errorf("ai response content is empty")
 	}
 	return aiChatCompletionResult{Model: model, Content: content}, nil
+}
+
+func logAIPromptDebug(logger *slog.Logger, endpoint, model, systemPrompt, userPrompt string) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	logger.Debug("ai request prompt",
+		"endpoint", strings.TrimSpace(endpoint),
+		"model", strings.TrimSpace(model),
+		"system_prompt", systemPrompt,
+		"user_prompt", userPrompt,
+	)
+}
+
+func logAIRawResponseDebug(logger *slog.Logger, endpoint string, statusCode int, body []byte) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	logger.Debug("ai raw response",
+		"endpoint", strings.TrimSpace(endpoint),
+		"status_code", statusCode,
+		"body_bytes", len(body),
+		"raw_body", string(body),
+	)
 }
 
 func decodeAIModelAndContent(body []byte) (string, string, error) {
@@ -724,7 +793,7 @@ func asString(value any) string {
 	return strings.TrimSpace(text)
 }
 
-func executeAIRequest(httpReq *http.Request) ([]byte, error) {
+func executeAIRequest(httpReq *http.Request, logger *slog.Logger) ([]byte, error) {
 	client := &http.Client{Timeout: aiRequestTimeout}
 	resp, err := client.Do(httpReq)
 	if err != nil {
@@ -736,6 +805,8 @@ func executeAIRequest(httpReq *http.Request) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read ai response: %w", err)
 	}
+
+	logAIRawResponseDebug(logger, httpReq.URL.String(), resp.StatusCode, respBody)
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		message := parseAIErrorMessage(respBody)
