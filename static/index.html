@@ -46,6 +46,17 @@
 
   <div id="toast" class="toast" aria-live="polite"></div>
 
+  <div id="prompt-overlay" class="prompt-overlay hidden" role="dialog" aria-modal="true">
+    <div class="prompt-box">
+      <label id="prompt-label"></label>
+      <input id="prompt-input" type="number" step="any" min="0">
+      <div class="prompt-box-actions">
+        <button class="btn secondary" id="prompt-cancel">Cancel</button>
+        <button class="btn primary" id="prompt-ok">OK</button>
+      </div>
+    </div>
+  </div>
+
   <script src="app.js" defer></script>
 </body>
 </html>

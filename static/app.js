@@ -566,6 +566,51 @@ function showToast(message) {
   setTimeout(() => toastEl.classList.remove('show'), 2600);
 }
 
+/**
+ * Custom prompt modal to replace window.prompt(), which is blocked in WKWebView.
+ * Returns a Promise that resolves with the entered string, or null if cancelled.
+ */
+function showPromptModal(label) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('prompt-overlay');
+    const labelEl = document.getElementById('prompt-label');
+    const input = document.getElementById('prompt-input');
+    const okBtn = document.getElementById('prompt-ok');
+    const cancelBtn = document.getElementById('prompt-cancel');
+
+    labelEl.textContent = label;
+    input.value = '';
+    overlay.classList.remove('hidden');
+    input.focus();
+
+    function cleanup() {
+      overlay.classList.add('hidden');
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      input.removeEventListener('keydown', onKeydown);
+    }
+
+    function onOk() {
+      cleanup();
+      resolve(input.value.trim() || null);
+    }
+
+    function onCancel() {
+      cleanup();
+      resolve(null);
+    }
+
+    function onKeydown(e) {
+      if (e.key === 'Enter') onOk();
+      if (e.key === 'Escape') onCancel();
+    }
+
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    input.addEventListener('keydown', onKeydown);
+  });
+}
+
 function updateConnectionStatus() {
   if (!state.apiBase && window.location.protocol === 'file:') {
     connectionPill.textContent = 'API base required';
@@ -1317,7 +1362,7 @@ function bindHoldingsActions() {
           showToast(`${symbol} updated`);
         }
         if (action === 'manual') {
-          const value = window.prompt(`Manual price for ${symbol} (${currency})`);
+          const value = await showPromptModal(`Manual price for ${symbol} (${currency})`);
           if (!value) return;
           const price = Number(value);
           if (Number.isNaN(price)) {

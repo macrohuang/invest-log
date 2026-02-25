@@ -1384,6 +1384,62 @@ select.btn.trade-select {
   transform: translateY(0);
 }
 
+/* Prompt modal (replaces window.prompt for WKWebView compatibility) */
+.prompt-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.prompt-overlay.hidden {
+  display: none;
+}
+
+.prompt-box {
+  background: var(--card);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  width: 320px;
+  max-width: calc(100vw - 48px);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.prompt-box label {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink-0);
+}
+
+.prompt-box input[type="number"],
+.prompt-box input[type="text"] {
+  width: 100%;
+  padding: 10px 12px;
+  border: var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 15px;
+  font-family: inherit;
+  background: var(--bg-0);
+  color: var(--ink-0);
+  outline: none;
+}
+
+.prompt-box input:focus {
+  border-color: var(--accent);
+}
+
+.prompt-box-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .privacy [data-sensitive] {
   color: transparent;
   text-shadow: 0 0 8px rgba(29, 31, 27, 0.55);
