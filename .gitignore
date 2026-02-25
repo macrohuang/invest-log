@@ -14,3 +14,4 @@ invest-log-backend
 go-backend/coverage.out
 *.pyc
 InvestLog-iPad-Unsigned.zip
+.claude/worktrees/**
