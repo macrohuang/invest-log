@@ -46,4 +46,29 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         return ApplicationDelegateProxy.shared.application(application, continue: userActivity, restorationHandler: restorationHandler)
     }
 
+    // MARK: - Mac Catalyst keyboard shortcuts
+    // Ensures Cmd+C/V/X/A/Z work inside WKWebView on macOS (Mac Catalyst)
+    #if targetEnvironment(macCatalyst)
+    override func buildMenu(with builder: UIMenuBuilder) {
+        super.buildMenu(with: builder)
+        guard builder.system == .main else { return }
+        // Re-register standard edit commands so they route through the responder chain
+        // and reach the WKWebView's internal text editing support.
+        builder.replaceChildren(ofMenu: .standardEdit) { _ in
+            return [
+                UIMenu(options: .displayInline, children: [
+                    UIKeyCommand(title: "Undo", action: #selector(UIResponderStandardEditActions.undo), input: "z", modifierFlags: .command),
+                    UIKeyCommand(title: "Redo", action: #selector(UIResponderStandardEditActions.redo), input: "z", modifierFlags: [.command, .shift]),
+                ]),
+                UIMenu(options: .displayInline, children: [
+                    UIKeyCommand(title: "Cut", action: #selector(UIResponderStandardEditActions.cut), input: "x", modifierFlags: .command),
+                    UIKeyCommand(title: "Copy", action: #selector(UIResponderStandardEditActions.copy), input: "c", modifierFlags: .command),
+                    UIKeyCommand(title: "Paste", action: #selector(UIResponderStandardEditActions.paste), input: "v", modifierFlags: .command),
+                    UIKeyCommand(title: "Select All", action: #selector(UIResponderStandardEditActions.selectAll), input: "a", modifierFlags: .command),
+                ]),
+            ]
+        }
+    }
+    #endif
+
 }
