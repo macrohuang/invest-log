@@ -1000,6 +1000,7 @@ async function renderHoldings() {
 
       // Apply filtering
       const filteredSymbols = allSymbols.filter(s => {
+        if ((s.total_shares || 0) <= 0) return false;
         const matchesAccount = !activeFilters.accountIds.length || activeFilters.accountIds.includes(String(s.account_id || ''));
         const matchesSymbol = !activeFilters.symbols.length || activeFilters.symbols.includes(String(s.symbol || ''));
         return matchesAccount && matchesSymbol;
