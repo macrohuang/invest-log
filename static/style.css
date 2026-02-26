@@ -1119,6 +1119,14 @@ select.btn.trade-select {
   color: var(--ink-1);
 }
 
+.pie-tooltip .tooltip-row span.positive {
+  color: var(--accent-cool);
+}
+
+.pie-tooltip .tooltip-row span.negative {
+  color: var(--accent-strong);
+}
+
 /* Account Groups */
 .account-groups-list {
   display: flex;

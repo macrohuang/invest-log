@@ -837,6 +837,8 @@ function buildSymbolPieItems(symbols, limit = 8) {
     label: s.display_name || s.symbol,
     value: s.market_value,
     amount: s.market_value,
+    pnl: s.unrealized_pnl ?? null,
+    cost: (s.avg_cost || 0) * (s.total_shares || 0),
   }));
   if (rest.length) {
     const otherValue = rest.reduce((sum, s) => sum + s.market_value, 0);
@@ -845,6 +847,8 @@ function buildSymbolPieItems(symbols, limit = 8) {
         label: 'Other',
         value: otherValue,
         amount: otherValue,
+        pnl: null,
+        cost: null,
       });
     }
   }
@@ -2128,12 +2132,16 @@ function renderInteractivePieChart({ items, totalLabel, totalValue, currency, pi
     const d = `M ${x1} ${y1} A ${outerRadius} ${outerRadius} 0 ${largeArc} 1 ${x2} ${y2} L ${x3} ${y3} A ${innerRadius} ${innerRadius} 0 ${largeArc} 0 ${x4} ${y4} Z`;
 
     const segKey = seg.key || seg.label || '';
+    const pnlAttr = seg.pnl !== null && seg.pnl !== undefined ? seg.pnl : '';
+    const costAttr = seg.cost !== null && seg.cost !== undefined ? seg.cost : '';
     return `<path d="${d}" fill="${seg.color}"
                   data-pie-id="${pieId}"
                   data-symbol-key="${escapeHtml(segKey)}"
                   data-label="${escapeHtml(seg.label)}"
                   data-value="${seg.value || 0}"
                   data-percent="${seg.percent || 0}"
+                  data-pnl="${pnlAttr}"
+                  data-cost="${costAttr}"
                   class="pie-sector"/>`;
   }).join('');
 
@@ -2223,16 +2231,37 @@ function highlightPieSector(pieId, symbolKey) {
       const label = sector.dataset.label || '';
       const value = Number(sector.dataset.value || 0);
       const percent = Number(sector.dataset.percent || 0);
+      const pnlRaw = sector.dataset.pnl;
+      const costRaw = sector.dataset.cost;
+      const hasPnl = pnlRaw !== '' && pnlRaw !== undefined;
+      const pnl = hasPnl ? Number(pnlRaw) : null;
+      const cost = costRaw !== '' && costRaw !== undefined ? Number(costRaw) : null;
+      const pnlPercent = hasPnl && cost !== null && cost > 0 ? (pnl / cost) * 100 : null;
+      const pnlClass = pnl !== null && pnl >= 0 ? 'positive' : 'negative';
+
+      const pnlRows = hasPnl ? `
+        <div class="tooltip-row">
+          <span>盈亏</span>
+          <span class="${pnlClass}" data-sensitive>${formatMoneyPlain(pnl)}</span>
+        </div>
+        ${pnlPercent !== null ? `
+        <div class="tooltip-row">
+          <span>盈亏率</span>
+          <span class="${pnlClass}">${formatPercent(pnlPercent)}</span>
+        </div>` : ''}
+      ` : '';
+
       tooltip.innerHTML = `
         <div class="tooltip-name">${escapeHtml(label)}</div>
         <div class="tooltip-row">
-          <span>Value</span>
-          <span data-sensitive>${formatMoneyPlain(value)}</span>
-        </div>
-        <div class="tooltip-row">
-          <span>Percent</span>
+          <span>占比</span>
           <span>${formatPercent(percent)}</span>
         </div>
+        <div class="tooltip-row">
+          <span>市值</span>
+          <span data-sensitive>${formatMoneyPlain(value)}</span>
+        </div>
+        ${pnlRows}
       `;
       tooltip.style.display = 'block';
     }
@@ -2251,6 +2280,21 @@ function highlightPieSector(pieId, symbolKey) {
  * 绑定Charts页面交互事件
  */
 function bindChartsInteractions() {
+  // 环图扇区：鼠标悬停高亮并显示tooltip
+  view.querySelectorAll('.pie-sector[data-symbol-key]').forEach((sector) => {
+    sector.addEventListener('mouseenter', () => {
+      const pieId = sector.dataset.pieId;
+      const symbolKey = sector.dataset.symbolKey;
+      highlightPieSector(pieId, symbolKey);
+    });
+    sector.addEventListener('mouseleave', () => {
+      const pieId = sector.dataset.pieId;
+      highlightPieSector(pieId, null);
+      const tooltip = document.querySelector(`.pie-tooltip[data-pie-id="${pieId}"]`);
+      if (tooltip) tooltip.style.display = 'none';
+    });
+  });
+
   // 标的行点击
   view.querySelectorAll('.symbol-row[data-symbol-key]').forEach((row) => {
     row.addEventListener('click', () => {
@@ -2311,6 +2355,8 @@ async function renderCharts() {
         return {
           ...item,
           key: matchingSymbol ? `${matchingSymbol.symbol}-${matchingSymbol.account_id}` : item.label,
+          pnl: matchingSymbol ? (matchingSymbol.unrealized_pnl ?? null) : item.pnl,
+          cost: matchingSymbol ? (matchingSymbol.avg_cost || 0) * (matchingSymbol.total_shares || 0) : item.cost,
         };
       });
 
