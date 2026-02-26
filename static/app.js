@@ -5,6 +5,9 @@ const state = {
   holdingsFilters: {}, // { currency: { accountIds: [], symbols: [] } }
 };
 
+// Tracks which filter popover is open across re-renders: { filterType, currency } | null
+let _openPopover = null;
+
 const aiAnalysisSettingsKey = 'aiHoldingsAnalysisSettings';
 
 const view = document.getElementById('view');
@@ -124,6 +127,13 @@ function init() {
     state.privacy = !state.privacy;
     document.body.classList.toggle('privacy', state.privacy);
     localStorage.setItem('privacyMode', state.privacy ? '1' : '0');
+  });
+
+  // Persistent outside-click handler: closes open filter popovers across re-renders.
+  document.addEventListener('click', () => {
+    if (!_openPopover) return;
+    view.querySelectorAll('.filter-popover.show').forEach(p => p.classList.remove('show'));
+    _openPopover = null;
   });
 
   window.addEventListener('hashchange', renderRoute);
@@ -1168,7 +1178,6 @@ async function renderHoldings() {
                         `).join('')}
                       </div>
                       <div class="filter-actions">
-                        <button class="btn" data-filter-action="apply">Apply</button>
                         <button class="btn secondary" data-filter-action="clear">Reset</button>
                       </div>
                     </div>
@@ -1185,7 +1194,6 @@ async function renderHoldings() {
                         `).join('')}
                       </div>
                       <div class="filter-actions">
-                        <button class="btn" data-filter-action="apply">Apply</button>
                         <button class="btn secondary" data-filter-action="clear">Reset</button>
                       </div>
                     </div>
@@ -1224,53 +1232,63 @@ async function renderHoldings() {
 }
 
 function initHoldingsFilters() {
-  const triggers = view.querySelectorAll('.filter-trigger');
-  triggers.forEach((trigger) => {
+  // Restore open popover state after re-render.
+  if (_openPopover) {
+    const { filterType, currency } = _openPopover;
+    const toRestore = view.querySelector(
+      `.filter-popover[data-filter-type="${filterType}"][data-currency="${currency}"]`
+    );
+    if (toRestore) {
+      toRestore.classList.add('show');
+    } else {
+      _openPopover = null;
+    }
+  }
+
+  // Toggle popover on trigger click.
+  view.querySelectorAll('.filter-trigger').forEach((trigger) => {
     trigger.addEventListener('click', (e) => {
-      e.stopPropagation();
+      e.stopPropagation(); // prevent document listener from closing it immediately
       const popover = trigger.nextElementSibling;
-      const isShow = popover.classList.contains('show');
-      
-      // Close all other popovers
+      const isAlreadyOpen = popover.classList.contains('show');
       view.querySelectorAll('.filter-popover.show').forEach(p => p.classList.remove('show'));
-      
-      if (!isShow) {
-        popover.classList.add('show');
-      }
-    });
-  });
-
-  // Handle Apply button
-  view.querySelectorAll('[data-filter-action="apply"]').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const popover = btn.closest('.filter-popover');
-      const currency = popover.dataset.currency;
-      const type = popover.dataset.filterType;
-      const checked = Array.from(popover.querySelectorAll('input:checked')).map(i => i.value);
-      
-      if (!state.holdingsFilters[currency]) {
-        state.holdingsFilters[currency] = { accountIds: [], symbols: [] };
-      }
-      
-      if (type === 'account') {
-        state.holdingsFilters[currency].accountIds = checked;
+      if (isAlreadyOpen) {
+        _openPopover = null;
       } else {
-        state.holdingsFilters[currency].symbols = checked;
+        popover.classList.add('show');
+        _openPopover = { filterType: popover.dataset.filterType, currency: popover.dataset.currency };
       }
-      
-      renderHoldings();
     });
   });
 
-  // Handle Reset button
+  // Live-apply on checkbox change.
+  view.querySelectorAll('.filter-popover').forEach((popover) => {
+    popover.querySelectorAll('input[type="checkbox"]').forEach((checkbox) => {
+      checkbox.addEventListener('change', (e) => {
+        e.stopPropagation();
+        const currency = popover.dataset.currency;
+        const type = popover.dataset.filterType;
+        const checked = Array.from(popover.querySelectorAll('input:checked')).map(i => i.value);
+        if (!state.holdingsFilters[currency]) {
+          state.holdingsFilters[currency] = { accountIds: [], symbols: [] };
+        }
+        if (type === 'account') {
+          state.holdingsFilters[currency].accountIds = checked;
+        } else {
+          state.holdingsFilters[currency].symbols = checked;
+        }
+        renderHoldings(); // _openPopover already set from trigger click; will be restored after render
+      });
+    });
+  });
+
+  // Handle Reset button: clear filter and keep popover open.
   view.querySelectorAll('[data-filter-action="clear"]').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       const popover = btn.closest('.filter-popover');
       const currency = popover.dataset.currency;
       const type = popover.dataset.filterType;
-      
       if (state.holdingsFilters[currency]) {
         if (type === 'account') {
           state.holdingsFilters[currency].accountIds = [];
@@ -1278,15 +1296,11 @@ function initHoldingsFilters() {
           state.holdingsFilters[currency].symbols = [];
         }
       }
-      
-      renderHoldings();
+      renderHoldings(); // _openPopover already set from trigger click; will be restored after render
     });
   });
 
-  // Close popovers on click outside
-  document.addEventListener('click', () => {
-    view.querySelectorAll('.filter-popover.show').forEach(p => p.classList.remove('show'));
-  }, { once: true });
+  // Note: document click listener is registered once in init(), not here.
 }
 
 function initHoldingsTabs() {
