@@ -611,6 +611,48 @@ function showPromptModal(label) {
   });
 }
 
+/**
+ * Custom confirm modal to replace window.confirm(), which is blocked in WKWebView.
+ * Returns a Promise that resolves with true (confirmed) or false (cancelled).
+ */
+function showConfirmModal(message) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('confirm-overlay');
+    const messageEl = document.getElementById('confirm-message');
+    const okBtn = document.getElementById('confirm-ok');
+    const cancelBtn = document.getElementById('confirm-cancel');
+
+    messageEl.textContent = message;
+    overlay.classList.remove('hidden');
+
+    function cleanup() {
+      overlay.classList.add('hidden');
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      document.removeEventListener('keydown', onKeydown);
+    }
+
+    function onOk() {
+      cleanup();
+      resolve(true);
+    }
+
+    function onCancel() {
+      cleanup();
+      resolve(false);
+    }
+
+    function onKeydown(e) {
+      if (e.key === 'Enter') onOk();
+      if (e.key === 'Escape') onCancel();
+    }
+
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    document.addEventListener('keydown', onKeydown);
+  });
+}
+
 function updateConnectionStatus() {
   if (!state.apiBase && window.location.protocol === 'file:') {
     connectionPill.textContent = 'API base required';
@@ -2040,7 +2082,7 @@ async function renderTransactions() {
     view.querySelectorAll('button[data-action="delete"]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const id = btn.dataset.id;
-        if (!confirm('Delete this transaction?')) return;
+        if (!await showConfirmModal('Delete this transaction?')) return;
         try {
           await fetchJSON(`/api/transactions/${id}`, { method: 'DELETE' });
           showToast('Deleted');
@@ -3771,7 +3813,7 @@ function bindSettingsActions() {
     btn.addEventListener('click', async () => {
       if (btn.disabled) return;
       const accountID = btn.dataset.account;
-      if (!confirm('Delete this account?')) return;
+      if (!await showConfirmModal('Delete this account?')) return;
       try {
         await fetchJSON(`/api/accounts/${accountID}`, { method: 'DELETE' });
         showToast('Account deleted');
@@ -3804,7 +3846,7 @@ function bindSettingsActions() {
     btn.addEventListener('click', async () => {
       if (btn.disabled) return;
       const code = btn.dataset.asset;
-      if (!confirm('Delete this asset type?')) return;
+      if (!await showConfirmModal('Delete this asset type?')) return;
       try {
         await fetchJSON(`/api/asset-types/${code}`, { method: 'DELETE' });
         showToast('Asset type deleted');
