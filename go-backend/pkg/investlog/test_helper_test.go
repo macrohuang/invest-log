@@ -50,8 +50,8 @@ func testBuyTransaction(t *testing.T, core *Core, symbol string, qty, price floa
 	id, err := core.AddTransaction(AddTransactionRequest{
 		Symbol:          symbol,
 		TransactionType: "BUY",
-		Quantity:        qty,
-		Price:           price,
+		Quantity:        NewAmount(qty),
+		Price:           NewAmount(price),
 		Currency:        currency,
 		AccountID:       accountID,
 		AssetType:       "stock",
@@ -68,8 +68,8 @@ func testSellTransaction(t *testing.T, core *Core, symbol string, qty, price flo
 	id, err := core.AddTransaction(AddTransactionRequest{
 		Symbol:          symbol,
 		TransactionType: "SELL",
-		Quantity:        qty,
-		Price:           price,
+		Quantity:        NewAmount(qty),
+		Price:           NewAmount(price),
 		Currency:        currency,
 		AccountID:       accountID,
 		AssetType:       "stock",
@@ -89,11 +89,22 @@ func floatEquals(a, b, epsilon float64) bool {
 	return diff < epsilon
 }
 
-// assertFloatEquals fails the test if the floats are not approximately equal.
-func assertFloatEquals(t *testing.T, got, want float64, msg string) {
+// assertFloatEquals fails the test if the value is not approximately equal to want.
+// got may be float64 or Amount.
+func assertFloatEquals(t *testing.T, got any, want float64, msg string) {
 	t.Helper()
-	if !floatEquals(got, want, 0.001) {
-		t.Errorf("%s: got %.4f, want %.4f", msg, got, want)
+	var f float64
+	switch v := got.(type) {
+	case float64:
+		f = v
+	case Amount:
+		f = v.InexactFloat64()
+	default:
+		t.Errorf("%s: unsupported type %T", msg, got)
+		return
+	}
+	if !floatEquals(f, want, 0.001) {
+		t.Errorf("%s: got %.4f, want %.4f", msg, f, want)
 	}
 }
 

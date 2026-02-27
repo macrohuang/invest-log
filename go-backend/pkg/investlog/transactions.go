@@ -46,7 +46,7 @@ func (c *Core) AddTransaction(req AddTransactionRequest) (int64, error) {
 	if strings.EqualFold(req.TransactionType, "INCOME") {
 		req.Symbol = "CASH"
 		req.AssetType = "cash"
-		req.Price = 1.0
+		req.Price = NewAmountFromInt(1)
 	}
 	if req.Symbol == "" {
 		return 0, errors.New("symbol required")
@@ -55,11 +55,11 @@ func (c *Core) AddTransaction(req AddTransactionRequest) (int64, error) {
 	// Validate quantity based on transaction type
 	switch req.TransactionType {
 	case "BUY", "TRANSFER_IN", "INCOME":
-		if req.Quantity <= 0 {
+		if !req.Quantity.IsPositive() {
 			return 0, errors.New("quantity must be positive for BUY/TRANSFER_IN/INCOME")
 		}
 	case "SELL", "TRANSFER_OUT":
-		if req.Quantity <= 0 {
+		if !req.Quantity.IsPositive() {
 			return 0, errors.New("quantity must be positive for SELL/TRANSFER_OUT")
 		}
 	case "DIVIDEND":
@@ -71,7 +71,7 @@ func (c *Core) AddTransaction(req AddTransactionRequest) (int64, error) {
 	}
 
 	// Validate price is not negative
-	if req.Price < 0 {
+	if req.Price.IsNegative() {
 		return 0, errors.New("price cannot be negative")
 	}
 
@@ -81,13 +81,13 @@ func (c *Core) AddTransaction(req AddTransactionRequest) (int64, error) {
 		if err != nil {
 			return 0, fmt.Errorf("failed to check current holdings: %w", err)
 		}
-		if req.Quantity > currentShares {
-			return 0, fmt.Errorf("insufficient shares: trying to %s %.4f but only have %.4f",
-				req.TransactionType, req.Quantity, currentShares)
+		if req.Quantity.GreaterThan(currentShares.Decimal) {
+			return 0, fmt.Errorf("insufficient shares: trying to %s %s but only have %s",
+				req.TransactionType, req.Quantity.Round(4).String(), currentShares.Round(4).String())
 		}
 	}
 
-	totalAmount := req.Quantity * req.Price
+	totalAmount := Amount{req.Quantity.Mul(req.Price.Decimal)}
 	if req.TotalAmount != nil {
 		totalAmount = *req.TotalAmount
 	}
@@ -119,9 +119,9 @@ func (c *Core) AddTransaction(req AddTransactionRequest) (int64, error) {
 		if req.TransactionType == "SELL" {
 			cashType = "BUY"
 		}
-		cashAmount := totalAmount + req.Commission
+		cashAmount := Amount{totalAmount.Add(req.Commission.Decimal)}
 		if req.TransactionType == "SELL" {
-			cashAmount = totalAmount - req.Commission
+			cashAmount = Amount{totalAmount.Sub(req.Commission.Decimal)}
 		}
 		cashReq := AddTransactionRequest{
 			TransactionDate: req.TransactionDate,
@@ -129,10 +129,10 @@ func (c *Core) AddTransaction(req AddTransactionRequest) (int64, error) {
 			Symbol:          "CASH",
 			TransactionType: cashType,
 			Quantity:        cashAmount,
-			Price:           1.0,
+			Price:           NewAmountFromInt(1),
 			AccountID:       req.AccountID,
 			AssetType:       "cash",
-			Commission:      0,
+			Commission:      NewAmountFromInt(0),
 			Currency:        req.Currency,
 			AccountName:     req.AccountName,
 			Notes:           stringPtr(fmt.Sprintf("Linked to %s %s", req.TransactionType, symbol)),
@@ -154,11 +154,11 @@ func (c *Core) AddTransaction(req AddTransactionRequest) (int64, error) {
 	return id, nil
 }
 
-func (c *Core) insertTransactionTx(tx *sql.Tx, req AddTransactionRequest, symbolID int64, totalAmount float64) (int64, error) {
+func (c *Core) insertTransactionTx(tx *sql.Tx, req AddTransactionRequest, symbolID int64, totalAmount Amount) (int64, error) {
 	return c.insertTransactionWithLinkTx(tx, req, symbolID, totalAmount, nil)
 }
 
-func (c *Core) insertTransactionWithLinkTx(tx *sql.Tx, req AddTransactionRequest, symbolID int64, totalAmount float64, linkedTxnID *int64) (int64, error) {
+func (c *Core) insertTransactionWithLinkTx(tx *sql.Tx, req AddTransactionRequest, symbolID int64, totalAmount Amount, linkedTxnID *int64) (int64, error) {
 	result, err := tx.Exec(`
 		INSERT INTO transactions (
 			transaction_date, transaction_time, symbol_id, transaction_type,
@@ -431,7 +431,7 @@ func nullString(value *string) sql.NullString {
 }
 
 // getCurrentShares returns the current share count for a symbol in a specific account and currency.
-func (c *Core) getCurrentShares(symbol, currency, accountID string) (float64, error) {
+func (c *Core) getCurrentShares(symbol, currency, accountID string) (Amount, error) {
 	query := `
 		SELECT COALESCE(SUM(CASE
 			WHEN t.transaction_type IN ('BUY', 'TRANSFER_IN', 'INCOME') THEN t.quantity
@@ -443,10 +443,10 @@ func (c *Core) getCurrentShares(symbol, currency, accountID string) (float64, er
 		JOIN symbols s ON s.id = t.symbol_id
 		WHERE s.symbol = ? AND t.currency = ? AND t.account_id = ?
 	`
-	var shares float64
+	var shares Amount
 	err := c.db.QueryRow(query, normalizeSymbol(symbol), normalizeCurrency(currency), accountID).Scan(&shares)
 	if err != nil {
-		return 0, err
+		return Amount{}, err
 	}
 	return shares, nil
 }

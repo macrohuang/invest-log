@@ -151,8 +151,8 @@ func TestCanDeleteAssetType(t *testing.T) {
 	_, err = core.AddTransaction(AddTransactionRequest{
 		Symbol:          "BTC",
 		TransactionType: "BUY",
-		Quantity:        1,
-		Price:           50000,
+		Quantity:        NewAmountFromInt(1),
+		Price:           NewAmountFromInt(50000),
 		Currency:        "USD",
 		AccountID:       "test-account",
 		AssetType:       "crypto",
@@ -200,8 +200,8 @@ func TestDeleteAssetType_InUse(t *testing.T) {
 	_, _ = core.AddTransaction(AddTransactionRequest{
 		Symbol:          "BTC",
 		TransactionType: "BUY",
-		Quantity:        1,
-		Price:           50000,
+		Quantity:        NewAmountFromInt(1),
+		Price:           NewAmountFromInt(50000),
 		Currency:        "USD",
 		AccountID:       "test-account",
 		AssetType:       "crypto",

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/shopspring/decimal"
 )
 
 // GetHoldings calculates holdings aggregated by symbol, currency, and account.
@@ -65,11 +67,11 @@ func (c *Core) GetHoldings(accountID string) ([]Holding, error) {
 		}
 		if strings.ToLower(h.AssetType) == "cash" {
 			h.TotalCost = h.TotalShares
-			if h.TotalShares != 0 {
-				h.AvgCost = 1
+			if !h.TotalShares.IsZero() {
+				h.AvgCost = NewAmountFromInt(1)
 			}
-		} else if h.TotalShares > 0 {
-			h.AvgCost = h.TotalCost / h.TotalShares
+		} else if h.TotalShares.IsPositive() {
+			h.AvgCost = Amount{h.TotalCost.Div(h.TotalShares.Decimal)}
 		}
 		holdings = append(holdings, h)
 	}
@@ -119,13 +121,13 @@ func (c *Core) GetHoldingsBySymbol() (HoldingsBySymbolResult, error) {
 	}
 
 	byCurrency := map[string]struct {
-		totalCost float64
+		totalCost Amount
 		symbols   []Holding
 	}{}
 	for _, h := range holdings {
 		curr := h.Currency
 		entry := byCurrency[curr]
-		entry.totalCost += h.TotalCost
+		entry.totalCost = Amount{entry.totalCost.Add(h.TotalCost.Decimal)}
 		entry.symbols = append(entry.symbols, h)
 		byCurrency[curr] = entry
 	}
@@ -134,10 +136,10 @@ func (c *Core) GetHoldingsBySymbol() (HoldingsBySymbolResult, error) {
 	for currency, data := range byCurrency {
 		// sort by cost basis desc
 		sort.Slice(data.symbols, func(i, j int) bool {
-			return data.symbols[i].TotalCost > data.symbols[j].TotalCost
+			return data.symbols[i].TotalCost.GreaterThan(data.symbols[j].TotalCost.Decimal)
 		})
 		symbolsData := make([]SymbolHolding, 0, len(data.symbols))
-		var totalMarketValue float64
+		var totalMarketValue Amount
 
 		for _, h := range data.symbols {
 			name := ""
@@ -149,7 +151,7 @@ func (c *Core) GetHoldingsBySymbol() (HoldingsBySymbolResult, error) {
 				displayName = name
 			}
 			priceKey := [2]string{h.Symbol, currency}
-			var latestPrice *float64
+			var latestPrice *Amount
 			var priceUpdatedAt *string
 			if p, ok := latestPrices[priceKey]; ok {
 				lp := p.Price
@@ -158,18 +160,18 @@ func (c *Core) GetHoldingsBySymbol() (HoldingsBySymbolResult, error) {
 			}
 
 			marketValue := h.TotalCost
-			var unrealizedPnL *float64
+			var unrealizedPnL *Amount
 			var pnlPercent *float64
-			if latestPrice != nil && h.TotalShares > 0 {
-				marketValue = (*latestPrice) * h.TotalShares
-				pnl := marketValue - h.TotalCost
-				unrealizedPnL = &pnl
-				if h.TotalCost > 0 {
-					percent := round2(pnl / h.TotalCost * 100)
+			if latestPrice != nil && h.TotalShares.IsPositive() {
+				marketValue = Amount{latestPrice.Mul(h.TotalShares.Decimal)}
+				pnl := Amount{marketValue.Sub(h.TotalCost.Decimal)}
+				unrealizedPnL = amountPtr(pnl)
+				if h.TotalCost.IsPositive() {
+					percent := round2(pnl.Div(h.TotalCost.Decimal).Mul(decimal.NewFromInt(100)).InexactFloat64())
 					pnlPercent = &percent
 				}
 			}
-			totalMarketValue += marketValue
+			totalMarketValue = Amount{totalMarketValue.Add(marketValue.Decimal)}
 
 			assetType := h.AssetType
 			if assetType == "" {
@@ -209,8 +211,8 @@ func (c *Core) GetHoldingsBySymbol() (HoldingsBySymbolResult, error) {
 		}
 
 		for i := range symbolsData {
-			if totalMarketValue > 0 {
-				symbolsData[i].Percent = round2(symbolsData[i].MarketValue / totalMarketValue * 100)
+			if totalMarketValue.IsPositive() {
+				symbolsData[i].Percent = round2(symbolsData[i].MarketValue.Div(totalMarketValue.Decimal).Mul(decimal.NewFromInt(100)).InexactFloat64())
 			}
 		}
 
@@ -225,7 +227,7 @@ func (c *Core) GetHoldingsBySymbol() (HoldingsBySymbolResult, error) {
 		result[currency] = SymbolHoldingsCurrency{
 			TotalCost:        data.totalCost,
 			TotalMarketValue: totalMarketValue,
-			TotalPnL:         totalMarketValue - data.totalCost,
+			TotalPnL:         Amount{totalMarketValue.Sub(data.totalCost.Decimal)},
 			Symbols:          symbolsData,
 			ByAccount:        byAccount,
 		}
@@ -274,26 +276,26 @@ func (c *Core) GetHoldingsByCurrency() (HoldingsByCurrencyResult, error) {
 	}
 
 	byCurrency := map[string]struct {
-		total       float64
-		byAssetType map[string]float64
+		total       Amount
+		byAssetType map[string]Amount
 	}{}
 	for _, h := range holdings {
 		curr := h.Currency
 		entry := byCurrency[curr]
 		if entry.byAssetType == nil {
-			entry.byAssetType = map[string]float64{}
+			entry.byAssetType = map[string]Amount{}
 		}
 		priceKey := [2]string{h.Symbol, curr}
 		marketValue := h.TotalCost
-		if p, ok := latestPrices[priceKey]; ok && h.TotalShares > 0 {
-			marketValue = p.Price * h.TotalShares
+		if p, ok := latestPrices[priceKey]; ok && h.TotalShares.IsPositive() {
+			marketValue = Amount{p.Price.Mul(h.TotalShares.Decimal)}
 		}
-		entry.total += marketValue
+		entry.total = Amount{entry.total.Add(marketValue.Decimal)}
 		asset := strings.ToLower(h.AssetType)
 		if asset == "" {
 			asset = "stock"
 		}
-		entry.byAssetType[asset] += marketValue
+		entry.byAssetType[asset] = Amount{entry.byAssetType[asset].Add(marketValue.Decimal)}
 		byCurrency[curr] = entry
 	}
 
@@ -340,8 +342,8 @@ func (c *Core) GetHoldingsByCurrency() (HoldingsByCurrencyResult, error) {
 		for _, assetType := range orderedAssetTypes {
 			amount := data.byAssetType[assetType]
 			percent := 0.0
-			if data.total > 0 {
-				percent = amount / data.total * 100
+			if data.total.IsPositive() {
+				percent = amount.Div(data.total.Decimal).Mul(decimal.NewFromInt(100)).InexactFloat64()
 			}
 			setting, ok := settingsMap[[2]string{curr, assetType}]
 			if !ok {
@@ -421,22 +423,22 @@ func (c *Core) GetHoldingsByCurrencyAndAccount() (HoldingsByCurrencyAccountResul
 
 	result := HoldingsByCurrencyAccountResult{}
 	for curr, accountsMap := range byCurrency {
-		currencyTotal := 0.0
+		var currencyTotal Amount
 		accountResults := map[string]AccountHoldings{}
 
 		for accountID, items := range accountsMap {
 			sort.Slice(items, func(i, j int) bool {
-				return items[i].TotalCost > items[j].TotalCost
+				return items[i].TotalCost.GreaterThan(items[j].TotalCost.Decimal)
 			})
-			accountTotal := 0.0
+			var accountTotal Amount
 			symbols := []AccountSymbolHolding{}
 			for _, h := range items {
 				priceKey := [2]string{h.Symbol, curr}
 				marketValue := h.TotalCost
-				if p, ok := latestPrices[priceKey]; ok && h.TotalShares > 0 {
-					marketValue = p.Price * h.TotalShares
+				if p, ok := latestPrices[priceKey]; ok && h.TotalShares.IsPositive() {
+					marketValue = Amount{p.Price.Mul(h.TotalShares.Decimal)}
 				}
-				accountTotal += marketValue
+				accountTotal = Amount{accountTotal.Add(marketValue.Decimal)}
 
 				name := ""
 				if h.Name != nil {
@@ -464,12 +466,12 @@ func (c *Core) GetHoldingsByCurrencyAndAccount() (HoldingsByCurrencyAccountResul
 				})
 			}
 			for i := range symbols {
-				if accountTotal > 0 {
-					symbols[i].Percent = round2(symbols[i].MarketValue / accountTotal * 100)
+				if accountTotal.IsPositive() {
+					symbols[i].Percent = round2(symbols[i].MarketValue.Div(accountTotal.Decimal).Mul(decimal.NewFromInt(100)).InexactFloat64())
 				}
 			}
 
-			currencyTotal += accountTotal
+			currencyTotal = Amount{currencyTotal.Add(accountTotal.Decimal)}
 			accountName := accountNames[accountID]
 			if strings.TrimSpace(accountName) == "" {
 				accountName = accountID
@@ -493,35 +495,35 @@ func (c *Core) GetHoldingsByCurrencyAndAccount() (HoldingsByCurrencyAccountResul
 }
 
 // AdjustAssetValue creates an ADJUST transaction for value changes.
-func (c *Core) AdjustAssetValue(symbol string, newValue float64, currency string, accountID string, assetType string, notes *string) (int64, error) {
+func (c *Core) AdjustAssetValue(symbol string, newValue Amount, currency string, accountID string, assetType string, notes *string) (int64, error) {
 	holdings, err := c.GetHoldings("")
 	if err != nil {
 		return 0, err
 	}
-	var currentValue float64
+	var currentValue Amount
 	for _, h := range holdings {
 		if h.Symbol == normalizeSymbol(symbol) && h.Currency == normalizeCurrency(currency) && h.AccountID == accountID {
 			currentValue = h.TotalCost
 			break
 		}
 	}
-	adjustment := newValue - currentValue
+	adjustment := Amount{newValue.Sub(currentValue.Decimal)}
 	text := notes
 	if text == nil || strings.TrimSpace(*text) == "" {
-		msg := fmt.Sprintf("价值调整: %.2f -> %.2f", currentValue, newValue)
+		msg := fmt.Sprintf("价值调整: %s -> %s", currentValue.Round(4).String(), newValue.Round(4).String())
 		text = &msg
 	}
 	return c.AddTransaction(AddTransactionRequest{
 		TransactionDate: todayISO(),
 		Symbol:          symbol,
 		TransactionType: "ADJUST",
-		Quantity:        0,
+		Quantity:        NewAmountFromInt(0),
 		Price:           adjustment,
 		AccountID:       accountID,
 		AssetType:       assetType,
 		Currency:        currency,
 		Notes:           text,
-		TotalAmount:     &adjustment,
+		TotalAmount:     amountPtr(adjustment),
 	})
 }
 

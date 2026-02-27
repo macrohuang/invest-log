@@ -20,8 +20,8 @@ func TestHoldingsAggregations(t *testing.T) {
 		TransactionDate: "2024-01-01",
 		Symbol:          "AAA",
 		TransactionType: "BUY",
-		Quantity:        10,
-		Price:           10,
+		Quantity:        NewAmountFromInt(10),
+		Price:           NewAmountFromInt(10),
 		Currency:        "USD",
 		AccountID:       "acct",
 		AssetType:       "stock",
@@ -33,8 +33,8 @@ func TestHoldingsAggregations(t *testing.T) {
 		TransactionDate: "2024-01-01",
 		Symbol:          "CASH",
 		TransactionType: "TRANSFER_IN",
-		Quantity:        100,
-		Price:           1,
+		Quantity:        NewAmountFromInt(100),
+		Price:           NewAmountFromInt(1),
 		Currency:        "USD",
 		AccountID:       "acct",
 		AssetType:       "cash",
@@ -46,8 +46,8 @@ func TestHoldingsAggregations(t *testing.T) {
 		TransactionDate: "2024-01-01",
 		Symbol:          "BTC",
 		TransactionType: "BUY",
-		Quantity:        1,
-		Price:           50,
+		Quantity:        NewAmountFromInt(1),
+		Price:           NewAmountFromInt(50),
 		Currency:        "USD",
 		AccountID:       "acct",
 		AssetType:       "crypto",
@@ -61,8 +61,8 @@ func TestHoldingsAggregations(t *testing.T) {
 	}
 
 	// Latest prices to calculate PnL.
-	_ = core.UpdateLatestPrice("AAA", "USD", 12)
-	_ = core.UpdateLatestPrice("BTC", "USD", 40)
+	_ = core.UpdateLatestPrice("AAA", "USD", NewAmountFromInt(12))
+	_ = core.UpdateLatestPrice("BTC", "USD", NewAmountFromInt(40))
 
 	holdings, err := core.GetHoldings("")
 	if err != nil {
@@ -72,8 +72,8 @@ func TestHoldingsAggregations(t *testing.T) {
 		t.Fatalf("expected holdings")
 	}
 	for _, h := range holdings {
-		if h.Symbol == "CASH" && h.AvgCost != 1 {
-			t.Fatalf("expected cash avg cost 1, got %.2f", h.AvgCost)
+		if h.Symbol == "CASH" && h.AvgCost.InexactFloat64() != 1 {
+			t.Fatalf("expected cash avg cost 1, got %v", h.AvgCost)
 		}
 	}
 
@@ -136,7 +136,7 @@ func TestHoldingsAggregations(t *testing.T) {
 	}
 
 	// AdjustAssetValue with nil notes should generate default message.
-	if _, err := core.AdjustAssetValue("AAA", 200, "USD", "acct", "stock", nil); err != nil {
+	if _, err := core.AdjustAssetValue("AAA", NewAmountFromInt(200), "USD", "acct", "stock", nil); err != nil {
 		t.Fatalf("AdjustAssetValue: %v", err)
 	}
 }

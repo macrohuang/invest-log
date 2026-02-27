@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"investlog/pkg/investlog"
 )
 
 func setupMobileCore(t *testing.T) (*Core, func()) {
@@ -65,7 +67,7 @@ func TestMobileCoreJSONFlows(t *testing.T) {
 		t.Fatalf("GetHoldingsBySymbolJSON: %v", err)
 	}
 
-	if err := core.ManualUpdatePrice("CASH", "USD", 1.0); err != nil {
+	if err := core.ManualUpdatePrice("CASH", "USD", investlog.NewAmount(1.0)); err != nil {
 		t.Fatalf("ManualUpdatePrice: %v", err)
 	}
 	priceResp, err := core.UpdatePriceJSON(`{"symbol":"CASH","currency":"USD"}`)

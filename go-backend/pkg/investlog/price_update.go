@@ -30,7 +30,7 @@ func (c *Core) UpdatePrice(symbol, currency, assetType string) (PriceResult, err
 }
 
 // ManualUpdatePrice stores a manual price override.
-func (c *Core) ManualUpdatePrice(symbol, currency string, price float64) error {
+func (c *Core) ManualUpdatePrice(symbol, currency string, price Amount) error {
 	if err := c.UpdateLatestPrice(symbol, currency, price); err != nil {
 		return err
 	}
@@ -39,7 +39,7 @@ func (c *Core) ManualUpdatePrice(symbol, currency string, price float64) error {
 		Symbol:       stringPtr(normalizeSymbol(symbol)),
 		Currency:     stringPtr(normalizeCurrency(currency)),
 		Details:      stringPtr("Manual price update"),
-		PriceFetched: floatPtr(price),
+		PriceFetched: amountPtr(price),
 	})
 	return nil
 }

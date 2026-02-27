@@ -9,7 +9,7 @@ func TestUpdateLatestPrice(t *testing.T) {
 	defer cleanup()
 
 	// Update price
-	err := core.UpdateLatestPrice("AAPL", "USD", 150.50)
+	err := core.UpdateLatestPrice("AAPL", "USD", NewAmount(150.50))
 	assertNoError(t, err, "update price")
 
 	// Verify it was stored
@@ -32,11 +32,11 @@ func TestUpdateLatestPrice_Upsert(t *testing.T) {
 	defer cleanup()
 
 	// Initial price
-	err := core.UpdateLatestPrice("AAPL", "USD", 150.00)
+	err := core.UpdateLatestPrice("AAPL", "USD", NewAmount(150.00))
 	assertNoError(t, err, "set initial price")
 
 	// Update price
-	err = core.UpdateLatestPrice("AAPL", "USD", 160.00)
+	err = core.UpdateLatestPrice("AAPL", "USD", NewAmount(160.00))
 	assertNoError(t, err, "update price")
 
 	// Should have the new price
@@ -60,9 +60,9 @@ func TestGetAllLatestPrices(t *testing.T) {
 	defer cleanup()
 
 	// Add multiple prices
-	_ = core.UpdateLatestPrice("AAPL", "USD", 150.00)
-	_ = core.UpdateLatestPrice("GOOGL", "USD", 2000.00)
-	_ = core.UpdateLatestPrice("600000", "CNY", 10.50)
+	_ = core.UpdateLatestPrice("AAPL", "USD", NewAmount(150.00))
+	_ = core.UpdateLatestPrice("GOOGL", "USD", NewAmount(2000.00))
+	_ = core.UpdateLatestPrice("600000", "CNY", NewAmount(10.50))
 
 	prices, err := core.GetAllLatestPrices()
 	assertNoError(t, err, "get all prices")
@@ -91,7 +91,7 @@ func TestManualUpdatePrice(t *testing.T) {
 	core, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	err := core.ManualUpdatePrice("AAPL", "USD", 155.00)
+	err := core.ManualUpdatePrice("AAPL", "USD", NewAmount(155.00))
 	assertNoError(t, err, "manual update price")
 
 	// Verify price was updated
@@ -107,7 +107,7 @@ func TestPriceSymbolNormalization(t *testing.T) {
 	defer cleanup()
 
 	// Set price with lowercase symbol
-	err := core.UpdateLatestPrice("aapl", "usd", 150.00)
+	err := core.UpdateLatestPrice("aapl", "usd", NewAmount(150.00))
 	assertNoError(t, err, "set price with lowercase")
 
 	// Should be retrievable with uppercase

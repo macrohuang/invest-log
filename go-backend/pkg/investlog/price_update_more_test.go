@@ -10,14 +10,14 @@ func TestUpdatePriceAndUpdateAllPrices(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdatePrice: %v", err)
 	}
-	if result.Price == nil || *result.Price != 1.0 {
+	if result.Price == nil || result.Price.InexactFloat64() != 1.0 {
 		t.Fatalf("expected cash price 1.0, got %v", result.Price)
 	}
 	latest, err := core.GetLatestPrice("CASH", "USD")
 	if err != nil {
 		t.Fatalf("GetLatestPrice: %v", err)
 	}
-	if latest == nil || latest.Price != 1.0 {
+	if latest == nil || latest.Price.InexactFloat64() != 1.0 {
 		t.Fatalf("expected latest price 1.0, got %v", latest)
 	}
 
@@ -31,8 +31,8 @@ func TestUpdatePriceAndUpdateAllPrices(t *testing.T) {
 		TransactionDate: "2024-01-01",
 		Symbol:          "CASH",
 		TransactionType: "TRANSFER_IN",
-		Quantity:        100,
-		Price:           1.0,
+		Quantity:        NewAmountFromInt(100),
+		Price:           NewAmountFromInt(1),
 		Currency:        "USD",
 		AccountID:       "acct",
 		AssetType:       "cash",

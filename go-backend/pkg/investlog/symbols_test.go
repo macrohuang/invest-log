@@ -226,8 +226,8 @@ func TestSymbolNormalization(t *testing.T) {
 	_, err := core.AddTransaction(AddTransactionRequest{
 		Symbol:          "  aapl  ",
 		TransactionType: "BUY",
-		Quantity:        100,
-		Price:           150,
+		Quantity:        NewAmountFromInt(100),
+		Price:           NewAmountFromInt(150),
 		Currency:        "USD",
 		AccountID:       "test-account",
 	})

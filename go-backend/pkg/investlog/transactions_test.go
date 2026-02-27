@@ -15,8 +15,8 @@ func TestAddTransaction_Basic(t *testing.T) {
 	id, err := core.AddTransaction(AddTransactionRequest{
 		Symbol:          "AAPL",
 		TransactionType: "BUY",
-		Quantity:        100,
-		Price:           150.0,
+		Quantity:        NewAmountFromInt(100),
+		Price:           NewAmount(150.0),
 		Currency:        "USD",
 		AccountID:       "test-account",
 		AssetType:       "stock",
@@ -37,11 +37,11 @@ func TestAddTransaction_Basic(t *testing.T) {
 	if tx.Symbol != "AAPL" {
 		t.Errorf("expected symbol AAPL, got %s", tx.Symbol)
 	}
-	if tx.Quantity != 100 {
-		t.Errorf("expected quantity 100, got %f", tx.Quantity)
+	if tx.Quantity.InexactFloat64() != 100 {
+		t.Errorf("expected quantity 100, got %v", tx.Quantity)
 	}
-	if tx.Price != 150.0 {
-		t.Errorf("expected price 150, got %f", tx.Price)
+	if tx.Price.InexactFloat64() != 150.0 {
+		t.Errorf("expected price 150, got %v", tx.Price)
 	}
 	assertFloatEquals(t, tx.TotalAmount, 15000.0, "total amount")
 }
@@ -61,8 +61,8 @@ func TestAddTransaction_ValidationErrors(t *testing.T) {
 			name: "missing transaction type",
 			req: AddTransactionRequest{
 				Symbol:    "AAPL",
-				Quantity:  100,
-				Price:     150,
+				Quantity:  NewAmountFromInt(100),
+				Price:     NewAmountFromInt(150),
 				Currency:  "USD",
 				AccountID: "test-account",
 			},
@@ -73,8 +73,8 @@ func TestAddTransaction_ValidationErrors(t *testing.T) {
 			req: AddTransactionRequest{
 				Symbol:          "AAPL",
 				TransactionType: "INVALID",
-				Quantity:        100,
-				Price:           150,
+				Quantity:        NewAmountFromInt(100),
+				Price:           NewAmountFromInt(150),
 				Currency:        "USD",
 				AccountID:       "test-account",
 			},
@@ -85,8 +85,8 @@ func TestAddTransaction_ValidationErrors(t *testing.T) {
 			req: AddTransactionRequest{
 				Symbol:          "AAPL",
 				TransactionType: "BUY",
-				Quantity:        100,
-				Price:           150,
+				Quantity:        NewAmountFromInt(100),
+				Price:           NewAmountFromInt(150),
 				Currency:        "USD",
 			},
 			wantErr: "account_id required",
@@ -96,8 +96,8 @@ func TestAddTransaction_ValidationErrors(t *testing.T) {
 			req: AddTransactionRequest{
 				Symbol:          "AAPL",
 				TransactionType: "BUY",
-				Quantity:        100,
-				Price:           150,
+				Quantity:        NewAmountFromInt(100),
+				Price:           NewAmountFromInt(150),
 				Currency:        "EUR",
 				AccountID:       "test-account",
 			},
@@ -107,8 +107,8 @@ func TestAddTransaction_ValidationErrors(t *testing.T) {
 			name: "missing symbol",
 			req: AddTransactionRequest{
 				TransactionType: "BUY",
-				Quantity:        100,
-				Price:           150,
+				Quantity:        NewAmountFromInt(100),
+				Price:           NewAmountFromInt(150),
 				Currency:        "USD",
 				AccountID:       "test-account",
 			},
@@ -119,8 +119,8 @@ func TestAddTransaction_ValidationErrors(t *testing.T) {
 			req: AddTransactionRequest{
 				Symbol:          "AAPL",
 				TransactionType: "BUY",
-				Quantity:        -100,
-				Price:           150,
+				Quantity:        NewAmount(-100),
+				Price:           NewAmountFromInt(150),
 				Currency:        "USD",
 				AccountID:       "test-account",
 			},
@@ -131,8 +131,8 @@ func TestAddTransaction_ValidationErrors(t *testing.T) {
 			req: AddTransactionRequest{
 				Symbol:          "AAPL",
 				TransactionType: "BUY",
-				Quantity:        0,
-				Price:           150,
+				Quantity:        NewAmountFromInt(0),
+				Price:           NewAmountFromInt(150),
 				Currency:        "USD",
 				AccountID:       "test-account",
 			},
@@ -143,8 +143,8 @@ func TestAddTransaction_ValidationErrors(t *testing.T) {
 			req: AddTransactionRequest{
 				Symbol:          "AAPL",
 				TransactionType: "BUY",
-				Quantity:        100,
-				Price:           -150,
+				Quantity:        NewAmountFromInt(100),
+				Price:           NewAmount(-150),
 				Currency:        "USD",
 				AccountID:       "test-account",
 			},
@@ -173,8 +173,8 @@ func TestAddTransaction_SellValidation(t *testing.T) {
 	_, err := core.AddTransaction(AddTransactionRequest{
 		Symbol:          "AAPL",
 		TransactionType: "SELL",
-		Quantity:        100,
-		Price:           150,
+		Quantity:        NewAmountFromInt(100),
+		Price:           NewAmountFromInt(150),
 		Currency:        "USD",
 		AccountID:       "test-account",
 		AssetType:       "stock",
@@ -191,8 +191,8 @@ func TestAddTransaction_SellValidation(t *testing.T) {
 	_, err = core.AddTransaction(AddTransactionRequest{
 		Symbol:          "AAPL",
 		TransactionType: "SELL",
-		Quantity:        150, // More than 100 we own
-		Price:           160,
+		Quantity:        NewAmountFromInt(150), // More than 100 we own
+		Price:           NewAmountFromInt(160),
 		Currency:        "USD",
 		AccountID:       "test-account",
 		AssetType:       "stock",
@@ -206,8 +206,8 @@ func TestAddTransaction_SellValidation(t *testing.T) {
 	_, err = core.AddTransaction(AddTransactionRequest{
 		Symbol:          "AAPL",
 		TransactionType: "SELL",
-		Quantity:        50,
-		Price:           160,
+		Quantity:        NewAmountFromInt(50),
+		Price:           NewAmountFromInt(160),
 		Currency:        "USD",
 		AccountID:       "test-account",
 		AssetType:       "stock",
@@ -233,8 +233,8 @@ func TestAddTransaction_TransferOutValidation(t *testing.T) {
 	_, err := core.AddTransaction(AddTransactionRequest{
 		Symbol:          "TSLA",
 		TransactionType: "TRANSFER_OUT",
-		Quantity:        100,
-		Price:           200,
+		Quantity:        NewAmountFromInt(100),
+		Price:           NewAmountFromInt(200),
 		Currency:        "USD",
 		AccountID:       "test-account",
 		AssetType:       "stock",
@@ -245,8 +245,8 @@ func TestAddTransaction_TransferOutValidation(t *testing.T) {
 	_, err = core.AddTransaction(AddTransactionRequest{
 		Symbol:          "TSLA",
 		TransactionType: "TRANSFER_OUT",
-		Quantity:        25,
-		Price:           200,
+		Quantity:        NewAmountFromInt(25),
+		Price:           NewAmountFromInt(200),
 		Currency:        "USD",
 		AccountID:       "test-account",
 		AssetType:       "stock",
@@ -283,8 +283,8 @@ func TestAddTransaction_AllTransactionTypes(t *testing.T) {
 			_, err := core.AddTransaction(AddTransactionRequest{
 				Symbol:          "TEST",
 				TransactionType: tt.txType,
-				Quantity:        tt.qty,
-				Price:           tt.price,
+				Quantity:        NewAmount(tt.qty),
+				Price:           NewAmount(tt.price),
 				Currency:        "CNY",
 				AccountID:       "test-account",
 				AssetType:       "stock",
@@ -308,8 +308,8 @@ func TestAddTransaction_CashLinking(t *testing.T) {
 	_, err := core.AddTransaction(AddTransactionRequest{
 		Symbol:          "CASH",
 		TransactionType: "TRANSFER_IN",
-		Quantity:        100000,
-		Price:           1,
+		Quantity:        NewAmountFromInt(100000),
+		Price:           NewAmountFromInt(1),
 		Currency:        "CNY",
 		AccountID:       "test-account",
 		AssetType:       "cash",
@@ -320,12 +320,12 @@ func TestAddTransaction_CashLinking(t *testing.T) {
 	_, err = core.AddTransaction(AddTransactionRequest{
 		Symbol:          "600000",
 		TransactionType: "BUY",
-		Quantity:        100,
-		Price:           10,
+		Quantity:        NewAmountFromInt(100),
+		Price:           NewAmountFromInt(10),
 		Currency:        "CNY",
 		AccountID:       "test-account",
 		AssetType:       "stock",
-		Commission:      5,
+		Commission:      NewAmountFromInt(5),
 		LinkCash:        true,
 	})
 	assertNoError(t, err, "BUY with cash linking")
@@ -341,12 +341,12 @@ func TestAddTransaction_CashLinking(t *testing.T) {
 	_, err = core.AddTransaction(AddTransactionRequest{
 		Symbol:          "600000",
 		TransactionType: "SELL",
-		Quantity:        50,
-		Price:           12,
+		Quantity:        NewAmountFromInt(50),
+		Price:           NewAmountFromInt(12),
 		Currency:        "CNY",
 		AccountID:       "test-account",
 		AssetType:       "stock",
-		Commission:      5,
+		Commission:      NewAmountFromInt(5),
 		LinkCash:        true,
 	})
 	assertNoError(t, err, "SELL with cash linking")
@@ -369,8 +369,8 @@ func TestAddTransaction_SymbolNormalization(t *testing.T) {
 	id, err := core.AddTransaction(AddTransactionRequest{
 		Symbol:          "aapl",
 		TransactionType: "BUY",
-		Quantity:        100,
-		Price:           150,
+		Quantity:        NewAmountFromInt(100),
+		Price:           NewAmountFromInt(150),
 		Currency:        "USD",
 		AccountID:       "test-account",
 		AssetType:       "stock",
@@ -392,16 +392,16 @@ func TestAddTransaction_TotalAmountOverride(t *testing.T) {
 	testAccount(t, core, "test-account", "Test Account")
 
 	// Provide explicit total amount that differs from qty*price
-	totalAmt := 1600.0
+	ta := NewAmount(1600.0)
 	id, err := core.AddTransaction(AddTransactionRequest{
 		Symbol:          "AAPL",
 		TransactionType: "BUY",
-		Quantity:        100,
-		Price:           15, // 100 * 15 = 1500, but we override to 1600
+		Quantity:        NewAmountFromInt(100),
+		Price:           NewAmountFromInt(15), // 100 * 15 = 1500, but we override to 1600
 		Currency:        "USD",
 		AccountID:       "test-account",
 		AssetType:       "stock",
-		TotalAmount:     &totalAmt,
+		TotalAmount:     &ta,
 	})
 	assertNoError(t, err, "add with total amount override")
 
@@ -420,8 +420,8 @@ func TestAddTransaction_DefaultCurrency(t *testing.T) {
 	id, err := core.AddTransaction(AddTransactionRequest{
 		Symbol:          "600000",
 		TransactionType: "BUY",
-		Quantity:        100,
-		Price:           10,
+		Quantity:        NewAmountFromInt(100),
+		Price:           NewAmountFromInt(10),
 		AccountID:       "test-account",
 	})
 	assertNoError(t, err, "add without currency")
@@ -581,8 +581,8 @@ func TestGetCurrentShares(t *testing.T) {
 	_, err = core.AddTransaction(AddTransactionRequest{
 		Symbol:          "AAPL",
 		TransactionType: "SPLIT",
-		Quantity:        70,
-		Price:           0,
+		Quantity:        NewAmountFromInt(70),
+		Price:           NewAmountFromInt(0),
 		Currency:        "USD",
 		AccountID:       "test-account",
 		AssetType:       "stock",

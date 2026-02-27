@@ -6,7 +6,7 @@ func TestOperationLogs(t *testing.T) {
 	core, cleanup := setupTestDB(t)
 	defer cleanup()
 
-	val := 123.45
+	val := NewAmount(123.45)
 	logID, err := core.AddOperationLog(OperationLog{
 		Operation:    "PRICE_UPDATE",
 		Symbol:       stringPtr("AAPL"),

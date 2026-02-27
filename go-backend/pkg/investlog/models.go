@@ -32,10 +32,10 @@ type Transaction struct {
 	Name                *string `json:"name"`
 	AssetType           string  `json:"asset_type"`
 	TransactionType     string  `json:"transaction_type"`
-	Quantity            float64 `json:"quantity"`
-	Price               float64 `json:"price"`
-	TotalAmount         float64 `json:"total_amount"`
-	Commission          float64 `json:"commission"`
+	Quantity            Amount  `json:"quantity"`
+	Price               Amount  `json:"price"`
+	TotalAmount         Amount  `json:"total_amount"`
+	Commission          Amount  `json:"commission"`
 	Currency            string  `json:"currency"`
 	AccountID           string  `json:"account_id"`
 	AccountName         *string `json:"account_name"`
@@ -52,16 +52,16 @@ type AddTransactionRequest struct {
 	TransactionTime *string
 	Symbol          string
 	TransactionType string
-	Quantity        float64
-	Price           float64
+	Quantity        Amount
+	Price           Amount
 	AccountID       string
 	AssetType       string
-	Commission      float64
+	Commission      Amount
 	Currency        string
 	AccountName     *string
 	Notes           *string
 	Tags            *string
-	TotalAmount     *float64
+	TotalAmount     *Amount
 	LinkCash        bool
 }
 
@@ -69,21 +69,21 @@ type AddTransactionRequest struct {
 type TransferRequest struct {
 	TransactionDate string
 	Symbol          string
-	Quantity        float64
+	Quantity        Amount
 	FromAccountID   string
 	ToAccountID     string
 	FromCurrency    string
 	ToCurrency      string
-	Commission      float64
+	Commission      Amount
 	AssetType       string
 	Notes           *string
 }
 
 // TransferResult returns the IDs of the paired transactions.
 type TransferResult struct {
-	TransferOutID int64   `json:"transfer_out_id"`
-	TransferInID  int64   `json:"transfer_in_id"`
-	ExchangeRate  float64 `json:"exchange_rate,omitempty"`
+	TransferOutID int64  `json:"transfer_out_id"`
+	TransferInID  int64  `json:"transfer_in_id"`
+	ExchangeRate  Amount `json:"exchange_rate,omitempty"`
 }
 
 // Holding represents a current holding snapshot.
@@ -93,16 +93,16 @@ type Holding struct {
 	AccountID   string  `json:"account_id"`
 	Currency    string  `json:"currency"`
 	AssetType   string  `json:"asset_type"`
-	TotalShares float64 `json:"total_shares"`
-	TotalCost   float64 `json:"total_cost"`
-	AvgCost     float64 `json:"avg_cost"`
+	TotalShares Amount  `json:"total_shares"`
+	TotalCost   Amount  `json:"total_cost"`
+	AvgCost     Amount  `json:"avg_cost"`
 }
 
 // AllocationEntry represents allocation summary per asset type.
 type AllocationEntry struct {
 	AssetType  string  `json:"asset_type"`
 	Label      string  `json:"label"`
-	Amount     float64 `json:"amount"`
+	Amount     Amount  `json:"amount"`
 	Percent    float64 `json:"percent"`
 	MinPercent float64 `json:"min_percent"`
 	MaxPercent float64 `json:"max_percent"`
@@ -111,7 +111,7 @@ type AllocationEntry struct {
 
 // CurrencyAllocation holds allocation data for a currency.
 type CurrencyAllocation struct {
-	Total       float64           `json:"total"`
+	Total       Amount            `json:"total"`
 	Allocations []AllocationEntry `json:"allocations"`
 }
 
@@ -128,13 +128,13 @@ type SymbolHolding struct {
 	AutoUpdate     int      `json:"auto_update"`
 	AccountID      string   `json:"account_id"`
 	AccountName    string   `json:"account_name"`
-	TotalShares    float64  `json:"total_shares"`
-	AvgCost        float64  `json:"avg_cost"`
-	CostBasis      float64  `json:"cost_basis"`
-	LatestPrice    *float64 `json:"latest_price"`
+	TotalShares    Amount   `json:"total_shares"`
+	AvgCost        Amount   `json:"avg_cost"`
+	CostBasis      Amount   `json:"cost_basis"`
+	LatestPrice    *Amount  `json:"latest_price"`
 	PriceUpdatedAt *string  `json:"price_updated_at"`
-	MarketValue    float64  `json:"market_value"`
-	UnrealizedPnL  *float64 `json:"unrealized_pnl"`
+	MarketValue    Amount   `json:"market_value"`
+	UnrealizedPnL  *Amount  `json:"unrealized_pnl"`
 	PnlPercent     *float64 `json:"pnl_percent"`
 	Percent        float64  `json:"percent"`
 }
@@ -147,9 +147,9 @@ type SymbolHoldingsByAccount struct {
 
 // SymbolHoldingsCurrency aggregates symbol holdings for a currency.
 type SymbolHoldingsCurrency struct {
-	TotalCost        float64                            `json:"total_cost"`
-	TotalMarketValue float64                            `json:"total_market_value"`
-	TotalPnL         float64                            `json:"total_pnl"`
+	TotalCost        Amount                             `json:"total_cost"`
+	TotalMarketValue Amount                             `json:"total_market_value"`
+	TotalPnL         Amount                             `json:"total_pnl"`
 	Symbols          []SymbolHolding                    `json:"symbols"`
 	ByAccount        map[string]SymbolHoldingsByAccount `json:"by_account"`
 }
@@ -164,21 +164,21 @@ type AccountSymbolHolding struct {
 	DisplayName    string  `json:"display_name"`
 	AssetType      string  `json:"asset_type"`
 	AssetTypeLabel string  `json:"asset_type_label"`
-	MarketValue    float64 `json:"market_value"`
-	TotalShares    float64 `json:"total_shares"`
+	MarketValue    Amount  `json:"market_value"`
+	TotalShares    Amount  `json:"total_shares"`
 	Percent        float64 `json:"percent"`
 }
 
 // AccountHoldings aggregates holdings for a single account.
 type AccountHoldings struct {
 	AccountName      string                 `json:"account_name"`
-	TotalMarketValue float64                `json:"total_market_value"`
+	TotalMarketValue Amount                 `json:"total_market_value"`
 	Symbols          []AccountSymbolHolding `json:"symbols"`
 }
 
 // CurrencyAccountHoldings aggregates account holdings for a currency.
 type CurrencyAccountHoldings struct {
-	TotalMarketValue float64                    `json:"total_market_value"`
+	TotalMarketValue Amount                     `json:"total_market_value"`
 	Accounts         map[string]AccountHoldings `json:"accounts"`
 }
 
@@ -196,12 +196,12 @@ type AllocationSetting struct {
 
 // ExchangeRateSetting represents a maintained FX rate.
 type ExchangeRateSetting struct {
-	ID           int64   `json:"id"`
-	FromCurrency string  `json:"from_currency"`
-	ToCurrency   string  `json:"to_currency"`
-	Rate         float64 `json:"rate"`
-	Source       string  `json:"source"`
-	UpdatedAt    string  `json:"updated_at"`
+	ID           int64  `json:"id"`
+	FromCurrency string `json:"from_currency"`
+	ToCurrency   string `json:"to_currency"`
+	Rate         Amount `json:"rate"`
+	Source       string `json:"source"`
+	UpdatedAt    string `json:"updated_at"`
 }
 
 // AssetType represents a dynamic asset type.
@@ -234,35 +234,35 @@ type Symbol struct {
 
 // LatestPrice represents the last fetched price for a symbol.
 type LatestPrice struct {
-	Symbol    string  `json:"symbol"`
-	Currency  string  `json:"currency"`
-	Price     float64 `json:"price"`
-	UpdatedAt string  `json:"updated_at"`
+	Symbol    string `json:"symbol"`
+	Currency  string `json:"currency"`
+	Price     Amount `json:"price"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 // OperationLog represents an audit log record.
 type OperationLog struct {
-	ID           int64    `json:"id"`
-	Operation    string   `json:"operation_type"`
-	Symbol       *string  `json:"symbol"`
-	Currency     *string  `json:"currency"`
-	Details      *string  `json:"details"`
-	OldValue     *float64 `json:"old_value"`
-	NewValue     *float64 `json:"new_value"`
-	PriceFetched *float64 `json:"price_fetched"`
-	CreatedAt    *string  `json:"created_at"`
+	ID           int64   `json:"id"`
+	Operation    string  `json:"operation_type"`
+	Symbol       *string `json:"symbol"`
+	Currency     *string `json:"currency"`
+	Details      *string `json:"details"`
+	OldValue     *Amount `json:"old_value"`
+	NewValue     *Amount `json:"new_value"`
+	PriceFetched *Amount `json:"price_fetched"`
+	CreatedAt    *string `json:"created_at"`
 }
 
 // PortfolioPoint represents a cumulative portfolio history point.
 type PortfolioPoint struct {
-	Date  string  `json:"date"`
-	Value float64 `json:"value"`
+	Date  string `json:"date"`
+	Value Amount `json:"value"`
 }
 
 // PriceResult represents a fetch price result.
 type PriceResult struct {
-	Price   *float64 `json:"price"`
-	Message string   `json:"message"`
+	Price   *Amount `json:"price"`
+	Message string  `json:"message"`
 }
 
 // Time helpers.

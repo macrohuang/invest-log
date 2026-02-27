@@ -3,7 +3,7 @@ package investlog
 import "database/sql"
 
 // UpdateLatestPrice inserts or updates a latest price.
-func (c *Core) UpdateLatestPrice(symbol, currency string, price float64) error {
+func (c *Core) UpdateLatestPrice(symbol, currency string, price Amount) error {
 	symbol = normalizeSymbol(symbol)
 	currency = normalizeCurrency(currency)
 	_, err := c.db.Exec(`

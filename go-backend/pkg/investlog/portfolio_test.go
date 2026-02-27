@@ -15,8 +15,8 @@ func TestGetPortfolioHistory(t *testing.T) {
 		TransactionDate: "2024-01-01",
 		Symbol:          "AAA",
 		TransactionType: "BUY",
-		Quantity:        10,
-		Price:           10,
+		Quantity:        NewAmountFromInt(10),
+		Price:           NewAmountFromInt(10),
 		Currency:        "USD",
 		AccountID:       "acct",
 		AssetType:       "stock",
@@ -28,8 +28,8 @@ func TestGetPortfolioHistory(t *testing.T) {
 		TransactionDate: "2024-01-02",
 		Symbol:          "AAA",
 		TransactionType: "SELL",
-		Quantity:        5,
-		Price:           12,
+		Quantity:        NewAmountFromInt(5),
+		Price:           NewAmountFromInt(12),
 		Currency:        "USD",
 		AccountID:       "acct",
 		AssetType:       "stock",
@@ -41,8 +41,8 @@ func TestGetPortfolioHistory(t *testing.T) {
 		TransactionDate: "2024-01-03",
 		Symbol:          "AAA",
 		TransactionType: "BUY",
-		Quantity:        2,
-		Price:           20,
+		Quantity:        NewAmountFromInt(2),
+		Price:           NewAmountFromInt(20),
 		Currency:        "USD",
 		AccountID:       "acct",
 		AssetType:       "stock",
@@ -58,13 +58,13 @@ func TestGetPortfolioHistory(t *testing.T) {
 	if len(points) != 3 {
 		t.Fatalf("expected 3 points, got %d", len(points))
 	}
-	if dateOnly(points[0].Date) != "2024-01-01" || points[0].Value != 100 {
+	if dateOnly(points[0].Date) != "2024-01-01" || points[0].Value.InexactFloat64() != 100 {
 		t.Fatalf("unexpected first point: %+v", points[0])
 	}
-	if dateOnly(points[1].Date) != "2024-01-02" || points[1].Value != 40 {
+	if dateOnly(points[1].Date) != "2024-01-02" || points[1].Value.InexactFloat64() != 40 {
 		t.Fatalf("unexpected second point: %+v", points[1])
 	}
-	if dateOnly(points[2].Date) != "2024-01-03" || points[2].Value != 80 {
+	if dateOnly(points[2].Date) != "2024-01-03" || points[2].Value.InexactFloat64() != 80 {
 		t.Fatalf("unexpected third point: %+v", points[2])
 	}
 }

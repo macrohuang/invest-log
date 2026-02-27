@@ -330,7 +330,7 @@ func (c *Core) buildHoldingsAnalysisPromptInput(currency string) (*holdingsAnaly
 				Symbol:    item.Symbol,
 				WeightPct: item.Percent,
 				PnLPct:    item.PnlPercent,
-				AvgCost:   item.AvgCost,
+				AvgCost:   item.AvgCost.InexactFloat64(),
 			})
 		}
 

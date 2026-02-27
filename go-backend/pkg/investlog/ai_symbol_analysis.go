@@ -348,9 +348,9 @@ func (c *Core) buildSymbolContext(symbol, currency string) (*symbolContextData, 
 			assetType = strings.TrimSpace(item.AssetType)
 		}
 
-		totalShares += item.TotalShares
-		totalCostBasis += item.CostBasis
-		totalMarketValue += item.MarketValue
+		totalShares += item.TotalShares.InexactFloat64()
+		totalCostBasis += item.CostBasis.InexactFloat64()
+		totalMarketValue += item.MarketValue.InexactFloat64()
 
 		accountName := strings.TrimSpace(item.AccountName)
 		if accountName == "" {
@@ -382,8 +382,8 @@ func (c *Core) buildSymbolContext(symbol, currency string) (*symbolContextData, 
 		pnlPercent = round2((totalMarketValue - totalCostBasis) / totalCostBasis * 100)
 	}
 	positionPercent := 0.0
-	if currData.TotalMarketValue > 0 {
-		positionPercent = round2(totalMarketValue / currData.TotalMarketValue * 100)
+	if currData.TotalMarketValue.IsPositive() {
+		positionPercent = round2(totalMarketValue / currData.TotalMarketValue.InexactFloat64() * 100)
 	}
 
 	ctx := &symbolContextData{
@@ -398,7 +398,7 @@ func (c *Core) buildSymbolContext(symbol, currency string) (*symbolContextData, 
 		MarketValue:              round2(totalMarketValue),
 		PnLPercent:               pnlPercent,
 		PositionPercent:          positionPercent,
-		CurrencyTotalMarketValue: round2(currData.TotalMarketValue),
+		CurrencyTotalMarketValue: round2(currData.TotalMarketValue.InexactFloat64()),
 		AccountNames:             accountNames,
 	}
 	if len(accountNames) > 0 {

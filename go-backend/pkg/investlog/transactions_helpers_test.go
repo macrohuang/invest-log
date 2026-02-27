@@ -21,8 +21,8 @@ func TestGetCurrentSharesHelper(t *testing.T) {
 		TransactionDate: "2024-01-01",
 		Symbol:          "AAA",
 		TransactionType: "BUY",
-		Quantity:        5,
-		Price:           10,
+		Quantity:        NewAmountFromInt(5),
+		Price:           NewAmountFromInt(10),
 		Currency:        "USD",
 		AccountID:       "acct",
 		AssetType:       "stock",
@@ -35,16 +35,16 @@ func TestGetCurrentSharesHelper(t *testing.T) {
 	if err != nil {
 		t.Fatalf("getCurrentShares: %v", err)
 	}
-	if shares != 5 {
-		t.Fatalf("expected 5 shares, got %.2f", shares)
+	if shares.InexactFloat64() != 5 {
+		t.Fatalf("expected 5 shares, got %v", shares)
 	}
 
 	shares, err = core.getCurrentShares("MISSING", "USD", "acct")
 	if err != nil {
 		t.Fatalf("getCurrentShares missing: %v", err)
 	}
-	if shares != 0 {
-		t.Fatalf("expected 0 shares, got %.2f", shares)
+	if !shares.IsZero() {
+		t.Fatalf("expected 0 shares, got %v", shares)
 	}
 }
 
@@ -61,11 +61,11 @@ func TestInsertTransactionTxError(t *testing.T) {
 	_, err = core.insertTransactionTx(tx, AddTransactionRequest{
 		TransactionDate: "2024-01-01",
 		TransactionType: "BUY",
-		Quantity:        1,
-		Price:           1,
+		Quantity:        NewAmountFromInt(1),
+		Price:           NewAmountFromInt(1),
 		Currency:        "USD",
 		AccountID:       "acct",
-	}, 1, 1)
+	}, 1, NewAmountFromInt(1))
 	if err == nil {
 		t.Fatalf("expected error from insertTransactionTx")
 	}
@@ -85,8 +85,8 @@ func TestGetTransactionOptionalFields(t *testing.T) {
 		TransactionTime: &timeStr,
 		Symbol:          "AAA",
 		TransactionType: "BUY",
-		Quantity:        1,
-		Price:           10,
+		Quantity:        NewAmountFromInt(1),
+		Price:           NewAmountFromInt(10),
 		Currency:        "USD",
 		AccountID:       "acct",
 		AccountName:     &accountName,

@@ -1,21 +1,23 @@
 package api
 
+import "investlog/pkg/investlog"
+
 type addTransactionPayload struct {
-	TransactionDate string   `json:"transaction_date"`
-	TransactionTime *string  `json:"transaction_time"`
-	Symbol          string   `json:"symbol"`
-	TransactionType string   `json:"transaction_type"`
-	Quantity        float64  `json:"quantity"`
-	Price           float64  `json:"price"`
-	AccountID       string   `json:"account_id"`
-	AssetType       string   `json:"asset_type"`
-	Commission      float64  `json:"commission"`
-	Currency        string   `json:"currency"`
-	AccountName     *string  `json:"account_name"`
-	Notes           *string  `json:"notes"`
-	Tags            *string  `json:"tags"`
-	TotalAmount     *float64 `json:"total_amount"`
-	LinkCash        bool     `json:"link_cash"`
+	TransactionDate string                `json:"transaction_date"`
+	TransactionTime *string               `json:"transaction_time"`
+	Symbol          string                `json:"symbol"`
+	TransactionType string                `json:"transaction_type"`
+	Quantity        investlog.Amount      `json:"quantity"`
+	Price           investlog.Amount      `json:"price"`
+	AccountID       string                `json:"account_id"`
+	AssetType       string                `json:"asset_type"`
+	Commission      investlog.Amount      `json:"commission"`
+	Currency        string                `json:"currency"`
+	AccountName     *string               `json:"account_name"`
+	Notes           *string               `json:"notes"`
+	Tags            *string               `json:"tags"`
+	TotalAmount     *investlog.Amount     `json:"total_amount"`
+	LinkCash        bool                  `json:"link_cash"`
 }
 
 type pricePayload struct {
@@ -25,9 +27,9 @@ type pricePayload struct {
 }
 
 type manualPricePayload struct {
-	Symbol   string  `json:"symbol"`
-	Currency string  `json:"currency"`
-	Price    float64 `json:"price"`
+	Symbol   string           `json:"symbol"`
+	Currency string           `json:"currency"`
+	Price    investlog.Amount `json:"price"`
 }
 
 type updateAllPricesPayload struct {
@@ -59,13 +61,13 @@ type aiSymbolAnalysisPayload struct {
 }
 
 type addAccountPayload struct {
-	AccountID         string  `json:"account_id"`
-	AccountName       string  `json:"account_name"`
-	Broker            *string `json:"broker"`
-	AccountType       *string `json:"account_type"`
-	InitialBalanceCNY float64 `json:"initial_balance_cny"`
-	InitialBalanceUSD float64 `json:"initial_balance_usd"`
-	InitialBalanceHKD float64 `json:"initial_balance_hkd"`
+	AccountID         string           `json:"account_id"`
+	AccountName       string           `json:"account_name"`
+	Broker            *string          `json:"broker"`
+	AccountType       *string          `json:"account_type"`
+	InitialBalanceCNY investlog.Amount `json:"initial_balance_cny"`
+	InitialBalanceUSD investlog.Amount `json:"initial_balance_usd"`
+	InitialBalanceHKD investlog.Amount `json:"initial_balance_hkd"`
 }
 
 type assetTypePayload struct {
@@ -94,9 +96,9 @@ type allocationPayload struct {
 }
 
 type exchangeRatePayload struct {
-	FromCurrency string  `json:"from_currency"`
-	ToCurrency   string  `json:"to_currency"`
-	Rate         float64 `json:"rate"`
+	FromCurrency string           `json:"from_currency"`
+	ToCurrency   string           `json:"to_currency"`
+	Rate         investlog.Amount `json:"rate"`
 }
 
 type symbolUpdatePayload struct {
@@ -116,16 +118,16 @@ type updateSymbolAutoUpdatePayload struct {
 }
 
 type transferPayload struct {
-	TransactionDate string  `json:"transaction_date"`
-	Symbol          string  `json:"symbol"`
-	Quantity        float64 `json:"quantity"`
-	FromAccountID   string  `json:"from_account_id"`
-	ToAccountID     string  `json:"to_account_id"`
-	FromCurrency    string  `json:"from_currency"`
-	ToCurrency      string  `json:"to_currency"`
-	Commission      float64 `json:"commission"`
-	AssetType       string  `json:"asset_type"`
-	Notes           *string `json:"notes"`
+	TransactionDate string           `json:"transaction_date"`
+	Symbol          string           `json:"symbol"`
+	Quantity        investlog.Amount `json:"quantity"`
+	FromAccountID   string           `json:"from_account_id"`
+	ToAccountID     string           `json:"to_account_id"`
+	FromCurrency    string           `json:"from_currency"`
+	ToCurrency      string           `json:"to_currency"`
+	Commission      investlog.Amount `json:"commission"`
+	AssetType       string           `json:"asset_type"`
+	Notes           *string          `json:"notes"`
 }
 
 type storageSwitchPayload struct {

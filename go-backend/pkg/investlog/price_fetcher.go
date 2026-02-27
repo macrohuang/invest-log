@@ -157,11 +157,15 @@ func newPriceFetcher(opts priceFetcherOptions) *priceFetcher {
 
 // FetchPrice fetches latest price with fallback.
 func (c *Core) FetchPrice(symbol, currency, assetType string) (PriceResult, error) {
-	price, message, err := c.price.fetch(symbol, currency, assetType)
+	priceF, message, err := c.price.fetch(symbol, currency, assetType)
 	if err != nil {
 		return PriceResult{Price: nil, Message: message}, err
 	}
-	return PriceResult{Price: price, Message: message}, nil
+	if priceF != nil {
+		a := NewAmount(*priceF)
+		return PriceResult{Price: &a, Message: message}, nil
+	}
+	return PriceResult{Price: nil, Message: message}, nil
 }
 
 func (pf *priceFetcher) fetch(symbol, currency, assetType string) (*float64, string, error) {

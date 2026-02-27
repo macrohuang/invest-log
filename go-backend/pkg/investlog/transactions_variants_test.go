@@ -11,7 +11,7 @@ func TestAddTransactionVariants(t *testing.T) {
 	// INCOME should map to CASH.
 	if _, err := core.AddTransaction(AddTransactionRequest{
 		TransactionType: "INCOME",
-		Quantity:        100,
+		Quantity:        NewAmountFromInt(100),
 		Currency:        "USD",
 		AccountID:       "acct",
 	}); err != nil {
@@ -19,13 +19,13 @@ func TestAddTransactionVariants(t *testing.T) {
 	}
 
 	// DIVIDEND with total amount override.
-	total := 123.45
+	total := NewAmount(123.45)
 	if _, err := core.AddTransaction(AddTransactionRequest{
 		TransactionDate: "2024-01-02",
 		Symbol:          "AAA",
 		TransactionType: "DIVIDEND",
-		Quantity:        0,
-		Price:           0,
+		Quantity:        Amount{},
+		Price:           Amount{},
 		Currency:        "USD",
 		AccountID:       "acct",
 		AssetType:       "stock",
@@ -39,8 +39,8 @@ func TestAddTransactionVariants(t *testing.T) {
 		TransactionDate: "2024-01-03",
 		Symbol:          "AAA",
 		TransactionType: "SPLIT",
-		Quantity:        -2,
-		Price:           0,
+		Quantity:        NewAmount(-2),
+		Price:           Amount{},
 		Currency:        "USD",
 		AccountID:       "acct",
 		AssetType:       "stock",
@@ -49,12 +49,12 @@ func TestAddTransactionVariants(t *testing.T) {
 	}
 
 	// ADJUST with custom total amount.
-	adj := 10.0
+	adj := NewAmount(10.0)
 	if _, err := core.AddTransaction(AddTransactionRequest{
 		TransactionDate: "2024-01-04",
 		Symbol:          "AAA",
 		TransactionType: "ADJUST",
-		Quantity:        0,
+		Quantity:        Amount{},
 		Price:           adj,
 		Currency:        "USD",
 		AccountID:       "acct",
@@ -69,8 +69,8 @@ func TestAddTransactionVariants(t *testing.T) {
 		TransactionDate: "2024-01-05",
 		Symbol:          "BBB",
 		TransactionType: "BUY",
-		Quantity:        1,
-		Price:           10,
+		Quantity:        NewAmountFromInt(1),
+		Price:           NewAmountFromInt(10),
 		Currency:        "USD",
 		AccountID:       "acct",
 		AssetType:       "stock",
@@ -91,8 +91,8 @@ func TestAddTransactionVariants(t *testing.T) {
 		TransactionDate: "2024-01-06",
 		Symbol:          "CCC",
 		TransactionType: "TRANSFER_OUT",
-		Quantity:        1,
-		Price:           1,
+		Quantity:        NewAmountFromInt(1),
+		Price:           NewAmountFromInt(1),
 		Currency:        "USD",
 		AccountID:       "acct",
 		AssetType:       "stock",

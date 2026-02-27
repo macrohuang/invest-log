@@ -13,7 +13,7 @@ func (c *Core) Transfer(req TransferRequest) (*TransferResult, error) {
 	if req.Symbol == "" {
 		return nil, errors.New("symbol required")
 	}
-	if req.Quantity <= 0 {
+	if !req.Quantity.IsPositive() {
 		return nil, errors.New("quantity must be positive")
 	}
 	if req.FromAccountID == "" {
@@ -53,8 +53,8 @@ func (c *Core) Transfer(req TransferRequest) (*TransferResult, error) {
 	if err != nil {
 		return nil, fmt.Errorf("check source holdings: %w", err)
 	}
-	if req.Quantity > currentShares {
-		return nil, fmt.Errorf("insufficient holdings: trying to transfer %.4f but only have %.4f", req.Quantity, currentShares)
+	if req.Quantity.GreaterThan(currentShares.Decimal) {
+		return nil, fmt.Errorf("insufficient holdings: trying to transfer %s but only have %s", req.Quantity.Round(4).String(), currentShares.Round(4).String())
 	}
 
 	// Get avg cost from source
@@ -75,17 +75,18 @@ func (c *Core) Transfer(req TransferRequest) (*TransferResult, error) {
 
 	// --- 4. Calculate transfer parameters ---
 	outPrice := avgCost
-	outTotalAmount := avgCost * req.Quantity
+	outTotalAmount := Amount{avgCost.Mul(req.Quantity.Decimal)}
 
-	var inQuantity, inPrice, inTotalAmount float64
+	exchangeRateDecimal := NewAmount(exchangeRate)
+	var inQuantity, inPrice, inTotalAmount Amount
 	if isCash {
-		inQuantity = req.Quantity * exchangeRate
-		inPrice = 1.0
+		inQuantity = Amount{req.Quantity.Mul(exchangeRateDecimal.Decimal)}
+		inPrice = NewAmountFromInt(1)
 		inTotalAmount = inQuantity
 	} else {
 		inQuantity = req.Quantity
-		inPrice = avgCost * exchangeRate
-		inTotalAmount = outTotalAmount * exchangeRate
+		inPrice = Amount{avgCost.Mul(exchangeRateDecimal.Decimal)}
+		inTotalAmount = Amount{outTotalAmount.Mul(exchangeRateDecimal.Decimal)}
 	}
 
 	// --- 5. DB transaction: insert paired records ---
@@ -145,7 +146,7 @@ func (c *Core) Transfer(req TransferRequest) (*TransferResult, error) {
 		Price:           inPrice,
 		AccountID:       req.ToAccountID,
 		AssetType:       req.AssetType,
-		Commission:      0,
+		Commission:      NewAmountFromInt(0),
 		Currency:        req.ToCurrency,
 		Notes:           inNotes,
 	}
@@ -169,16 +170,16 @@ func (c *Core) Transfer(req TransferRequest) (*TransferResult, error) {
 		TransferInID:  inID,
 	}
 	if crossCurrency {
-		result.ExchangeRate = exchangeRate
+		result.ExchangeRate = NewAmount(exchangeRate)
 	}
 	return result, nil
 }
 
 // getCurrentAvgCost returns the weighted average cost for a symbol in a specific account and currency.
-func (c *Core) getCurrentAvgCost(symbol, currency, accountID string) (float64, error) {
+func (c *Core) getCurrentAvgCost(symbol, currency, accountID string) (Amount, error) {
 	holdings, err := c.GetHoldings("")
 	if err != nil {
-		return 0, err
+		return Amount{}, err
 	}
 	sym := normalizeSymbol(symbol)
 	cur := normalizeCurrency(currency)
@@ -187,5 +188,5 @@ func (c *Core) getCurrentAvgCost(symbol, currency, accountID string) (float64, e
 			return h.AvgCost, nil
 		}
 	}
-	return 0, nil
+	return Amount{}, nil
 }

@@ -12,7 +12,7 @@ func (c *Core) GetPortfolioHistory(limit int) ([]PortfolioPoint, error) {
 		return nil, err
 	}
 
-	byDate := map[string]float64{}
+	byDate := map[string]Amount{}
 	for _, t := range transactions {
 		if t.TransactionType != "BUY" && t.TransactionType != "SELL" {
 			continue
@@ -22,9 +22,9 @@ func (c *Core) GetPortfolioHistory(limit int) ([]PortfolioPoint, error) {
 			continue
 		}
 		if t.TransactionType == "BUY" {
-			byDate[date] += t.TotalAmount
+			byDate[date] = Amount{byDate[date].Add(t.TotalAmount.Decimal)}
 		} else if t.TransactionType == "SELL" {
-			byDate[date] -= t.TotalAmount
+			byDate[date] = Amount{byDate[date].Sub(t.TotalAmount.Decimal)}
 		}
 	}
 
@@ -35,9 +35,9 @@ func (c *Core) GetPortfolioHistory(limit int) ([]PortfolioPoint, error) {
 	sort.Strings(dates)
 
 	var cumulative []PortfolioPoint
-	var running float64
+	var running Amount
 	for _, d := range dates {
-		running += byDate[d]
+		running = Amount{running.Add(byDate[d].Decimal)}
 		cumulative = append(cumulative, PortfolioPoint{Date: d, Value: running})
 	}
 	return cumulative, nil

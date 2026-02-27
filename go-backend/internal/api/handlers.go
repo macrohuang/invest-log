@@ -369,20 +369,20 @@ func (h *handler) addAccount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	balances := map[string]float64{
+	balances := map[string]investlog.Amount{
 		"CNY": payload.InitialBalanceCNY,
 		"USD": payload.InitialBalanceUSD,
 		"HKD": payload.InitialBalanceHKD,
 	}
 	for currency, amount := range balances {
-		if amount > 0 {
+		if amount.IsPositive() {
 			_, _ = h.core.AddTransaction(investlog.AddTransactionRequest{
 				TransactionDate: investlog.TodayISOInShanghai(),
 				Symbol:          "CASH",
 				TransactionType: "TRANSFER_IN",
 				AssetType:       "cash",
 				Quantity:        amount,
-				Price:           1.0,
+				Price:           investlog.NewAmountFromInt(1),
 				AccountID:       payload.AccountID,
 				Currency:        currency,
 				Notes:           ptrString("Initial balance"),
@@ -501,7 +501,7 @@ func (h *handler) setExchangeRate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	_, err := h.core.SetExchangeRate(payload.FromCurrency, payload.ToCurrency, payload.Rate, "manual")
+	_, err := h.core.SetExchangeRate(payload.FromCurrency, payload.ToCurrency, payload.Rate.InexactFloat64(), "manual")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return

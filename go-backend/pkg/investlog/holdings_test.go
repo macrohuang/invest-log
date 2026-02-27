@@ -98,12 +98,12 @@ func TestGetHoldings_WithCommission(t *testing.T) {
 	_, err := core.AddTransaction(AddTransactionRequest{
 		Symbol:          "AAPL",
 		TransactionType: "BUY",
-		Quantity:        100,
-		Price:           100,
+		Quantity:        NewAmountFromInt(100),
+		Price:           NewAmountFromInt(100),
 		Currency:        "USD",
 		AccountID:       "test-account",
 		AssetType:       "stock",
-		Commission:      10,
+		Commission:      NewAmountFromInt(10),
 	})
 	assertNoError(t, err, "buy with commission")
 
@@ -129,8 +129,8 @@ func TestGetHoldings_SplitDoesNotAffectCost(t *testing.T) {
 	_, err := core.AddTransaction(AddTransactionRequest{
 		Symbol:          "AAPL",
 		TransactionType: "SPLIT",
-		Quantity:        100, // Adds 100 shares
-		Price:           0,
+		Quantity:        NewAmountFromInt(100), // Adds 100 shares
+		Price:           NewAmountFromInt(0),
 		Currency:        "USD",
 		AccountID:       "test-account",
 		AssetType:       "stock",
@@ -157,8 +157,8 @@ func TestGetHoldings_CashHandling(t *testing.T) {
 	_, err := core.AddTransaction(AddTransactionRequest{
 		Symbol:          "CASH",
 		TransactionType: "TRANSFER_IN",
-		Quantity:        10000,
-		Price:           1,
+		Quantity:        NewAmountFromInt(10000),
+		Price:           NewAmountFromInt(1),
 		Currency:        "CNY",
 		AccountID:       "test-account",
 		AssetType:       "cash",
@@ -226,7 +226,7 @@ func TestGetHoldings_ZeroSharesExcluded(t *testing.T) {
 	// Holdings with 0 shares should be excluded (HAVING total_shares > 0 OR total_cost != 0)
 	// But cost after full sell may not be 0, so we need to check
 	for _, h := range holdings {
-		if h.Symbol == "AAPL" && h.TotalShares == 0 && h.TotalCost == 0 {
+		if h.Symbol == "AAPL" && h.TotalShares.IsZero() && h.TotalCost.IsZero() {
 			t.Error("zero share/cost holdings should be excluded")
 		}
 	}
@@ -242,8 +242,8 @@ func TestGetHoldingsBySymbol(t *testing.T) {
 	testBuyTransaction(t, core, "GOOGL", 10, 2000, "USD", "test-account")
 
 	// Update prices for PnL calculation
-	assertNoError(t, core.UpdateLatestPrice("AAPL", "USD", 160), "set AAPL price")
-	assertNoError(t, core.UpdateLatestPrice("GOOGL", "USD", 2100), "set GOOGL price")
+	assertNoError(t, core.UpdateLatestPrice("AAPL", "USD", NewAmountFromInt(160)), "set AAPL price")
+	assertNoError(t, core.UpdateLatestPrice("GOOGL", "USD", NewAmountFromInt(2100)), "set GOOGL price")
 
 	result, err := core.GetHoldingsBySymbol()
 	assertNoError(t, err, "get holdings by symbol")
@@ -290,8 +290,8 @@ func TestGetHoldingsByCurrency(t *testing.T) {
 	_, err := core.AddTransaction(AddTransactionRequest{
 		Symbol:          "CASH",
 		TransactionType: "TRANSFER_IN",
-		Quantity:        5000,
-		Price:           1,
+		Quantity:        NewAmountFromInt(5000),
+		Price:           NewAmountFromInt(1),
 		Currency:        "USD",
 		AccountID:       "test-account",
 		AssetType:       "cash",
@@ -299,7 +299,7 @@ func TestGetHoldingsByCurrency(t *testing.T) {
 	assertNoError(t, err, "add cash")
 
 	// Set price for AAPL
-	assertNoError(t, core.UpdateLatestPrice("AAPL", "USD", 150), "set price")
+	assertNoError(t, core.UpdateLatestPrice("AAPL", "USD", NewAmountFromInt(150)), "set price")
 
 	result, err := core.GetHoldingsByCurrency()
 	assertNoError(t, err, "get holdings by currency")
@@ -350,7 +350,7 @@ func TestGetHoldingsByCurrency_AllocationWarnings(t *testing.T) {
 
 	// Add holdings that violate the rule
 	testBuyTransaction(t, core, "AAPL", 100, 100, "USD", "test-account")
-	assertNoError(t, core.UpdateLatestPrice("AAPL", "USD", 100), "set price")
+	assertNoError(t, core.UpdateLatestPrice("AAPL", "USD", NewAmountFromInt(100)), "set price")
 
 	// Stock is 100% (exceeds max 80%)
 	result, err := core.GetHoldingsByCurrency()
@@ -378,8 +378,8 @@ func TestAdjustAssetValue(t *testing.T) {
 	_, err := core.AddTransaction(AddTransactionRequest{
 		Symbol:          "GOLD",
 		TransactionType: "BUY",
-		Quantity:        10,
-		Price:           500,
+		Quantity:        NewAmountFromInt(10),
+		Price:           NewAmountFromInt(500),
 		Currency:        "CNY",
 		AccountID:       "test-account",
 		AssetType:       "metal",
@@ -388,7 +388,7 @@ func TestAdjustAssetValue(t *testing.T) {
 
 	// Current value: 10 * 500 = 5000
 	holdings, _ := core.GetHoldings("")
-	var currentValue float64
+	var currentValue Amount
 	for _, h := range holdings {
 		if h.Symbol == "GOLD" {
 			currentValue = h.TotalCost
@@ -398,7 +398,7 @@ func TestAdjustAssetValue(t *testing.T) {
 	assertFloatEquals(t, currentValue, 5000, "initial gold value")
 
 	// Adjust to new value 6000
-	_, err = core.AdjustAssetValue("GOLD", 6000, "CNY", "test-account", "metal", nil)
+	_, err = core.AdjustAssetValue("GOLD", NewAmountFromInt(6000), "CNY", "test-account", "metal", nil)
 	assertNoError(t, err, "adjust value")
 
 	// Check adjusted value
@@ -421,8 +421,8 @@ func TestGetHoldingsByCurrencyAndAccount(t *testing.T) {
 	testBuyTransaction(t, core, "AAPL", 100, 150, "USD", "account1")
 	testBuyTransaction(t, core, "GOOGL", 10, 2000, "USD", "account2")
 
-	assertNoError(t, core.UpdateLatestPrice("AAPL", "USD", 150), "set AAPL price")
-	assertNoError(t, core.UpdateLatestPrice("GOOGL", "USD", 2000), "set GOOGL price")
+	assertNoError(t, core.UpdateLatestPrice("AAPL", "USD", NewAmountFromInt(150)), "set AAPL price")
+	assertNoError(t, core.UpdateLatestPrice("GOOGL", "USD", NewAmountFromInt(2000)), "set GOOGL price")
 
 	result, err := core.GetHoldingsByCurrencyAndAccount()
 	assertNoError(t, err, "get holdings by currency and account")
@@ -462,8 +462,8 @@ func TestGetHoldings_MultipleAssetTypes(t *testing.T) {
 	_, err := core.AddTransaction(AddTransactionRequest{
 		Symbol:          "BOND01",
 		TransactionType: "BUY",
-		Quantity:        50,
-		Price:           100,
+		Quantity:        NewAmountFromInt(50),
+		Price:           NewAmountFromInt(100),
 		Currency:        "USD",
 		AccountID:       "test-account",
 		AssetType:       "bond",
@@ -473,8 +473,8 @@ func TestGetHoldings_MultipleAssetTypes(t *testing.T) {
 	_, err = core.AddTransaction(AddTransactionRequest{
 		Symbol:          "GOLD",
 		TransactionType: "BUY",
-		Quantity:        10,
-		Price:           500,
+		Quantity:        NewAmountFromInt(10),
+		Price:           NewAmountFromInt(500),
 		Currency:        "USD",
 		AccountID:       "test-account",
 		AssetType:       "metal",

@@ -49,16 +49,16 @@ func (c *Core) GetOperationLogs(limit, offset int) ([]OperationLog, error) {
 			log.Details = &details.String
 		}
 		if oldValue.Valid {
-			val := oldValue.Float64
-			log.OldValue = &val
+			a := NewAmount(oldValue.Float64)
+			log.OldValue = &a
 		}
 		if newValue.Valid {
-			val := newValue.Float64
-			log.NewValue = &val
+			a := NewAmount(newValue.Float64)
+			log.NewValue = &a
 		}
 		if priceFetched.Valid {
-			val := priceFetched.Float64
-			log.PriceFetched = &val
+			a := NewAmount(priceFetched.Float64)
+			log.PriceFetched = &a
 		}
 		if createdAt.Valid {
 			log.CreatedAt = &createdAt.String

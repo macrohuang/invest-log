@@ -48,7 +48,7 @@ func TestMethodsOnClosedDBReturnError(t *testing.T) {
 	if _, err := core.UpdateSymbolAutoUpdate("AAA", 1); err == nil {
 		t.Fatalf("expected error from UpdateSymbolAutoUpdate")
 	}
-	if err := core.ManualUpdatePrice("AAA", "USD", 1.0); err == nil {
+	if err := core.ManualUpdatePrice("AAA", "USD", NewAmount(1.0)); err == nil {
 		t.Fatalf("expected error from ManualUpdatePrice")
 	}
 }

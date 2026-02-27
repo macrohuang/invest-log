@@ -131,7 +131,7 @@ func (c *Core) UpdatePriceJSON(payloadJSON string) (string, error) {
 }
 
 // ManualUpdatePrice updates price with provided values.
-func (c *Core) ManualUpdatePrice(symbol, currency string, price float64) error {
+func (c *Core) ManualUpdatePrice(symbol, currency string, price investlog.Amount) error {
 	return c.core.ManualUpdatePrice(symbol, currency, price)
 }
 
@@ -156,21 +156,21 @@ type transactionFilterPayload struct {
 }
 
 type transactionPayload struct {
-	TransactionDate string   `json:"transaction_date"`
-	TransactionTime *string  `json:"transaction_time"`
-	Symbol          string   `json:"symbol"`
-	TransactionType string   `json:"transaction_type"`
-	Quantity        float64  `json:"quantity"`
-	Price           float64  `json:"price"`
-	AccountID       string   `json:"account_id"`
-	AssetType       string   `json:"asset_type"`
-	Commission      float64  `json:"commission"`
-	Currency        string   `json:"currency"`
-	AccountName     *string  `json:"account_name"`
-	Notes           *string  `json:"notes"`
-	Tags            *string  `json:"tags"`
-	TotalAmount     *float64 `json:"total_amount"`
-	LinkCash        bool     `json:"link_cash"`
+	TransactionDate string            `json:"transaction_date"`
+	TransactionTime *string           `json:"transaction_time"`
+	Symbol          string            `json:"symbol"`
+	TransactionType string            `json:"transaction_type"`
+	Quantity        investlog.Amount  `json:"quantity"`
+	Price           investlog.Amount  `json:"price"`
+	AccountID       string            `json:"account_id"`
+	AssetType       string            `json:"asset_type"`
+	Commission      investlog.Amount  `json:"commission"`
+	Currency        string            `json:"currency"`
+	AccountName     *string           `json:"account_name"`
+	Notes           *string           `json:"notes"`
+	Tags            *string           `json:"tags"`
+	TotalAmount     *investlog.Amount `json:"total_amount"`
+	LinkCash        bool              `json:"link_cash"`
 }
 
 type pricePayload struct {

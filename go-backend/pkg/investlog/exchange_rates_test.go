@@ -27,16 +27,16 @@ func TestGetExchangeRates_Defaults(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing USD/CNY rate")
 	}
-	if usd.Rate <= 0 {
-		t.Fatalf("invalid USD/CNY rate: %.6f", usd.Rate)
+	if !usd.Rate.IsPositive() {
+		t.Fatalf("invalid USD/CNY rate: %v", usd.Rate)
 	}
 
 	hkd, ok := lookup["HKD_CNY"]
 	if !ok {
 		t.Fatalf("missing HKD/CNY rate")
 	}
-	if hkd.Rate <= 0 {
-		t.Fatalf("invalid HKD/CNY rate: %.6f", hkd.Rate)
+	if !hkd.Rate.IsPositive() {
+		t.Fatalf("invalid HKD/CNY rate: %v", hkd.Rate)
 	}
 }
 

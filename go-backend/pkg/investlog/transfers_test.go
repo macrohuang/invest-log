@@ -15,7 +15,7 @@ func TestTransfer_SameCurrency_Securities(t *testing.T) {
 
 	result, err := core.Transfer(TransferRequest{
 		Symbol:        "AAPL",
-		Quantity:      40,
+		Quantity:      NewAmountFromInt(40),
 		FromAccountID: "acct-a",
 		ToAccountID:   "acct-b",
 		FromCurrency:  "USD",
@@ -25,8 +25,8 @@ func TestTransfer_SameCurrency_Securities(t *testing.T) {
 	if result.TransferOutID == 0 || result.TransferInID == 0 {
 		t.Fatalf("expected non-zero IDs, got out=%d in=%d", result.TransferOutID, result.TransferInID)
 	}
-	if result.ExchangeRate != 0 {
-		t.Errorf("same currency transfer should have zero exchange_rate, got %f", result.ExchangeRate)
+	if !result.ExchangeRate.IsZero() {
+		t.Errorf("same currency transfer should have zero exchange_rate, got %v", result.ExchangeRate)
 	}
 
 	// Verify source holdings: 60 shares remain, cost = 60*150 = 9000
@@ -69,8 +69,8 @@ func TestTransfer_SameCurrency_Cash(t *testing.T) {
 	_, err := core.AddTransaction(AddTransactionRequest{
 		Symbol:          "CASH",
 		TransactionType: "TRANSFER_IN",
-		Quantity:        10000,
-		Price:           1,
+		Quantity:        NewAmountFromInt(10000),
+		Price:           NewAmountFromInt(1),
 		AccountID:       "acct-a",
 		AssetType:       "cash",
 		Currency:        "CNY",
@@ -79,7 +79,7 @@ func TestTransfer_SameCurrency_Cash(t *testing.T) {
 
 	result, err := core.Transfer(TransferRequest{
 		Symbol:        "CASH",
-		Quantity:      3000,
+		Quantity:      NewAmountFromInt(3000),
 		FromAccountID: "acct-a",
 		ToAccountID:   "acct-b",
 		FromCurrency:  "CNY",
@@ -119,8 +119,8 @@ func TestTransfer_CrossCurrency_Cash(t *testing.T) {
 	_, err = core.AddTransaction(AddTransactionRequest{
 		Symbol:          "CASH",
 		TransactionType: "TRANSFER_IN",
-		Quantity:        1000,
-		Price:           1,
+		Quantity:        NewAmountFromInt(1000),
+		Price:           NewAmountFromInt(1),
 		AccountID:       "acct-a",
 		AssetType:       "cash",
 		Currency:        "USD",
@@ -129,7 +129,7 @@ func TestTransfer_CrossCurrency_Cash(t *testing.T) {
 
 	result, err := core.Transfer(TransferRequest{
 		Symbol:        "CASH",
-		Quantity:      500,
+		Quantity:      NewAmountFromInt(500),
 		FromAccountID: "acct-a",
 		ToAccountID:   "acct-b",
 		FromCurrency:  "USD",
@@ -138,8 +138,8 @@ func TestTransfer_CrossCurrency_Cash(t *testing.T) {
 	})
 	assertNoError(t, err, "Transfer cross-currency cash")
 
-	if !floatEquals(result.ExchangeRate, 7.2, 0.001) {
-		t.Errorf("expected exchange_rate=7.2, got %f", result.ExchangeRate)
+	if !floatEquals(result.ExchangeRate.InexactFloat64(), 7.2, 0.001) {
+		t.Errorf("expected exchange_rate=7.2, got %v", result.ExchangeRate)
 	}
 
 	holdings, err := core.GetHoldings("")
@@ -174,7 +174,7 @@ func TestTransfer_CrossCurrency_Securities(t *testing.T) {
 	// Transfer 50 shares from USD account to HKD account
 	result, err := core.Transfer(TransferRequest{
 		Symbol:        "STOCK",
-		Quantity:      50,
+		Quantity:      NewAmountFromInt(50),
 		FromAccountID: "acct-a",
 		ToAccountID:   "acct-b",
 		FromCurrency:  "USD",
@@ -184,8 +184,8 @@ func TestTransfer_CrossCurrency_Securities(t *testing.T) {
 
 	// Exchange rate USD→HKD = 7.2/0.9 = 8.0
 	expectedRate := 7.2 / 0.9
-	if !floatEquals(result.ExchangeRate, expectedRate, 0.001) {
-		t.Errorf("expected exchange_rate=%.4f, got %.4f", expectedRate, result.ExchangeRate)
+	if !floatEquals(result.ExchangeRate.InexactFloat64(), expectedRate, 0.001) {
+		t.Errorf("expected exchange_rate=%.4f, got %.4f", expectedRate, result.ExchangeRate.InexactFloat64())
 	}
 
 	holdings, err := core.GetHoldings("")
@@ -216,11 +216,11 @@ func TestTransfer_WithCommission(t *testing.T) {
 
 	result, err := core.Transfer(TransferRequest{
 		Symbol:        "AAPL",
-		Quantity:      50,
+		Quantity:      NewAmountFromInt(50),
 		FromAccountID: "acct-a",
 		ToAccountID:   "acct-b",
 		FromCurrency:  "USD",
-		Commission:    25,
+		Commission:    NewAmountFromInt(25),
 	})
 	assertNoError(t, err, "Transfer with commission")
 
@@ -244,7 +244,7 @@ func TestTransfer_InsufficientShares(t *testing.T) {
 
 	_, err := core.Transfer(TransferRequest{
 		Symbol:        "AAPL",
-		Quantity:      200, // only have 100
+		Quantity:      NewAmountFromInt(200), // only have 100
 		FromAccountID: "acct-a",
 		ToAccountID:   "acct-b",
 		FromCurrency:  "USD",
@@ -261,7 +261,7 @@ func TestTransfer_SameAccount(t *testing.T) {
 
 	_, err := core.Transfer(TransferRequest{
 		Symbol:        "AAPL",
-		Quantity:      10,
+		Quantity:      NewAmountFromInt(10),
 		FromAccountID: "acct-a",
 		ToAccountID:   "acct-a",
 		FromCurrency:  "USD",
@@ -279,7 +279,7 @@ func TestTransfer_InvalidCurrency(t *testing.T) {
 
 	_, err := core.Transfer(TransferRequest{
 		Symbol:        "AAPL",
-		Quantity:      10,
+		Quantity:      NewAmountFromInt(10),
 		FromAccountID: "acct-a",
 		ToAccountID:   "acct-b",
 		FromCurrency:  "EUR",
@@ -297,7 +297,7 @@ func TestTransfer_LinkedTransactionID(t *testing.T) {
 
 	result, err := core.Transfer(TransferRequest{
 		Symbol:        "AAPL",
-		Quantity:      30,
+		Quantity:      NewAmountFromInt(30),
 		FromAccountID: "acct-a",
 		ToAccountID:   "acct-b",
 		FromCurrency:  "USD",
@@ -327,7 +327,7 @@ func TestTransfer_DeleteCascade(t *testing.T) {
 
 	result, err := core.Transfer(TransferRequest{
 		Symbol:        "AAPL",
-		Quantity:      30,
+		Quantity:      NewAmountFromInt(30),
 		FromAccountID: "acct-a",
 		ToAccountID:   "acct-b",
 		FromCurrency:  "USD",
@@ -376,8 +376,8 @@ func TestTransfer_OldTransferNoCostImpact(t *testing.T) {
 	_, err := core.AddTransaction(AddTransactionRequest{
 		Symbol:          "AAPL",
 		TransactionType: "TRANSFER_IN",
-		Quantity:        50,
-		Price:           100,
+		Quantity:        NewAmountFromInt(50),
+		Price:           NewAmountFromInt(100),
 		AccountID:       "acct-a",
 		AssetType:       "stock",
 		Currency:        "USD",
@@ -407,22 +407,22 @@ func TestTransfer_MissingFields(t *testing.T) {
 	}{
 		{
 			name:    "missing symbol",
-			req:     TransferRequest{Quantity: 10, FromAccountID: "a", ToAccountID: "b", FromCurrency: "USD"},
+			req:     TransferRequest{Quantity: NewAmountFromInt(10), FromAccountID: "a", ToAccountID: "b", FromCurrency: "USD"},
 			wantErr: "symbol required",
 		},
 		{
 			name:    "zero quantity",
-			req:     TransferRequest{Symbol: "AAPL", Quantity: 0, FromAccountID: "a", ToAccountID: "b", FromCurrency: "USD"},
+			req:     TransferRequest{Symbol: "AAPL", Quantity: Amount{}, FromAccountID: "a", ToAccountID: "b", FromCurrency: "USD"},
 			wantErr: "quantity must be positive",
 		},
 		{
 			name:    "missing from_account",
-			req:     TransferRequest{Symbol: "AAPL", Quantity: 10, ToAccountID: "b", FromCurrency: "USD"},
+			req:     TransferRequest{Symbol: "AAPL", Quantity: NewAmountFromInt(10), ToAccountID: "b", FromCurrency: "USD"},
 			wantErr: "from_account_id required",
 		},
 		{
 			name:    "missing to_account",
-			req:     TransferRequest{Symbol: "AAPL", Quantity: 10, FromAccountID: "a", FromCurrency: "USD"},
+			req:     TransferRequest{Symbol: "AAPL", Quantity: NewAmountFromInt(10), FromAccountID: "a", FromCurrency: "USD"},
 			wantErr: "to_account_id required",
 		},
 	}
@@ -452,7 +452,7 @@ func TestTransfer_CostBasisInHoldings(t *testing.T) {
 	// Transfer 80 shares: cost transferred = 80 * 150 = 12000
 	_, err := core.Transfer(TransferRequest{
 		Symbol:        "STOCK",
-		Quantity:      80,
+		Quantity:      NewAmountFromInt(80),
 		FromAccountID: "acct-a",
 		ToAccountID:   "acct-b",
 		FromCurrency:  "USD",
