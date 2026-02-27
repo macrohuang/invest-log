@@ -23,6 +23,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     if #available(macOS 11.0, *) {
       clearWebViewWebsiteData()
     }
+    setupMenu()
     setupWindow()
     loadLoadingScreen()
     startBackend()
@@ -114,6 +115,33 @@ class AppDelegate: NSObject, NSApplicationDelegate {
   private func loadApp() {
     let url = URL(string: "http://\(host):\(port)/")!
     webView.load(URLRequest(url: url))
+  }
+
+  private func setupMenu() {
+    let mainMenu = NSMenu()
+
+    // Application menu (first item is always the app menu on macOS)
+    let appMenuItem = NSMenuItem()
+    mainMenu.addItem(appMenuItem)
+    let appMenu = NSMenu()
+    appMenuItem.submenu = appMenu
+    appMenu.addItem(withTitle: "Quit Invest Log", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+
+    // Edit menu — routes standard edit commands through the responder chain to WKWebView
+    let editMenuItem = NSMenuItem()
+    mainMenu.addItem(editMenuItem)
+    let editMenu = NSMenu(title: "Edit")
+    editMenuItem.submenu = editMenu
+    editMenu.addItem(withTitle: "Undo", action: #selector(UndoManager.undo), keyEquivalent: "z")
+    editMenu.addItem(withTitle: "Redo", action: #selector(UndoManager.redo), keyEquivalent: "Z")
+    editMenu.addItem(NSMenuItem.separator())
+    editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+    editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+    editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+    editMenu.addItem(NSMenuItem.separator())
+    editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+
+    NSApp.mainMenu = mainMenu
   }
 
   private func showFatalError(_ message: String) {
