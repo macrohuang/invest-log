@@ -46,6 +46,7 @@ type aiHoldingsAnalysisPayload struct {
 	AdviceStyle     string `json:"advice_style"`
 	AllowNewSymbols *bool  `json:"allow_new_symbols"`
 	StrategyPrompt  string `json:"strategy_prompt"`
+	AnalysisType    string `json:"analysis_type"`
 }
 
 type aiSymbolAnalysisPayload struct {

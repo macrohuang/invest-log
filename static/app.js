@@ -2,6 +2,7 @@ const state = {
   apiBase: '',
   privacy: false,
   aiAnalysisByCurrency: {},
+  aiAnalysisHistoryByCurrency: {}, // { currency: HoldingsAnalysisResult[] }
   holdingsFilters: {}, // { currency: { accountIds: [], symbols: [] } }
 };
 
@@ -508,11 +509,16 @@ function renderAIAnalysisCard(result, currency) {
   const riskLevel = result.risk_level ? escapeHtml(String(result.risk_level)) : 'unknown';
   const summary = result.overall_summary ? escapeHtml(String(result.overall_summary)) : '—';
   const disclaimer = result.disclaimer ? escapeHtml(String(result.disclaimer)) : 'For reference only.';
+  const typeLabel = formatAnalysisTypeLabel(result.analysis_type);
+  const symbolRefsCount = Array.isArray(result.symbol_refs) ? result.symbol_refs.length : 0;
+  const symbolRefsBadge = symbolRefsCount > 0
+    ? `<span class="tag other" title="引用了 ${symbolRefsCount} 个标的深度分析">含${symbolRefsCount}标的分析</span>`
+    : '';
 
   return `
     <div class="card ai-analysis-card" data-ai-analysis-card="${currency}">
       <div class="ai-analysis-head">
-        <h4>AI Analysis</h4>
+        <h4>AI Analysis <span class="tag other">${typeLabel}</span>${symbolRefsBadge}</h4>
         <div class="section-sub">Model: ${model} · Generated: ${generatedAt}</div>
       </div>
       <div class="ai-summary">
@@ -528,6 +534,49 @@ function renderAIAnalysisCard(result, currency) {
         ${recommendationMarkup}
       </div>
       <div class="section-sub">${disclaimer}</div>
+    </div>
+  `;
+}
+
+function formatAnalysisTypeLabel(type) {
+  if (type === 'weekly') return '周报';
+  if (type === 'monthly') return '月报';
+  return '临时分析';
+}
+
+function renderAIAnalysisHistory(history, currency) {
+  if (!Array.isArray(history) || history.length === 0) return '';
+
+  const items = history.map((result) => {
+    const generatedAt = result.generated_at
+      ? escapeHtml(formatDateTimeInDisplayTimezone(result.generated_at))
+      : '—';
+    const typeLabel = formatAnalysisTypeLabel(result.analysis_type);
+    const riskLevel = result.risk_level ? escapeHtml(String(result.risk_level)) : 'unknown';
+    const summary = result.overall_summary ? escapeHtml(String(result.overall_summary)) : '—';
+    const model = result.model ? escapeHtml(String(result.model)) : '—';
+    const id = result.id || 0;
+    const symbolRefsCount = Array.isArray(result.symbol_refs) ? result.symbol_refs.length : 0;
+    const symbolRefsBadge = symbolRefsCount > 0
+      ? `<span class="tag other">含${symbolRefsCount}标的</span>`
+      : '';
+    return `
+      <details class="ai-history-item" data-history-id="${id}">
+        <summary class="ai-history-summary">
+          <span class="tag other">${typeLabel}</span>${symbolRefsBadge}
+          <span class="section-sub">${generatedAt}</span>
+          <span class="ai-history-risk">风险: ${riskLevel}</span>
+        </summary>
+        <div class="ai-history-body section-sub">${summary}</div>
+        <div class="section-sub" style="margin-top:4px">Model: ${model}</div>
+      </details>
+    `;
+  }).join('');
+
+  return `
+    <div class="ai-history-section">
+      <div class="ai-history-title section-sub">历史分析记录</div>
+      ${items}
     </div>
   `;
 }
@@ -1040,6 +1089,18 @@ async function renderHoldings() {
       return;
     }
 
+    // Load saved analysis history in parallel for currencies that have no in-memory result.
+    await Promise.all(currencies.map(async (curr) => {
+      if (state.aiAnalysisByCurrency[curr]) return;
+      try {
+        const history = await fetchJSON(`/api/ai/holdings-analysis/history?currency=${encodeURIComponent(curr)}&limit=6`);
+        if (Array.isArray(history) && history.length > 0) {
+          state.aiAnalysisByCurrency[curr] = history[0];
+          state.aiAnalysisHistoryByCurrency[curr] = history.slice(1);
+        }
+      } catch (_) { /* ignore */ }
+    }));
+
     const tabButtons = currencies.map((currency) => `
       <button class="tab-btn" type="button" data-holdings-tab="${currency}">${currency}</button>
     `).join('');
@@ -1160,7 +1221,14 @@ async function renderHoldings() {
               </div>
               <div class="actions">
                 <button class="btn secondary" data-action="update-all" data-currency="${currency}" ${canUpdateAll ? '' : 'disabled title="No auto-sync symbols"'}>Update all</button>
-                <button class="btn tertiary" data-action="ai-analyze" data-currency="${currency}">AI Analyze</button>
+                <div class="ai-analyze-group">
+                  <select class="btn ai-type-select" data-ai-type-currency="${currency}" title="Analysis type">
+                    <option value="adhoc">临时分析</option>
+                    <option value="weekly">周报</option>
+                    <option value="monthly">月报</option>
+                  </select>
+                  <button class="btn tertiary" data-action="ai-analyze" data-currency="${currency}">AI</button>
+                </div>
               </div>
             </div>
             <table class="table" data-holdings-table>
@@ -1209,6 +1277,7 @@ async function renderHoldings() {
               <tbody>${rows || '<tr><td colspan="8" style="text-align:center; padding: 20px;">No positions match filters.</td></tr>'}</tbody>
             </table>
             ${renderAIAnalysisCard(aiResult, currency)}
+            ${renderAIAnalysisHistory(state.aiAnalysisHistoryByCurrency[currency] || [], currency)}
           </div>
         </div>
       `;
@@ -1437,16 +1506,26 @@ function bindHoldingsActions() {
           showToast(`${symbol} saved`);
         }
         if (action === 'ai-analyze') {
+          const typeSelect = document.querySelector(`[data-ai-type-currency="${currency}"]`);
+          const analysisType = typeSelect ? typeSelect.value : 'adhoc';
           btn.disabled = true;
           btn.textContent = 'Analyzing...';
           try {
-            const analyzed = await runAIHoldingsAnalysis(currency);
+            const analyzed = await runAIHoldingsAnalysis(currency, analysisType);
             if (analyzed) {
+              // Refresh history from server so the new result appears in history.
+              try {
+                const history = await fetchJSON(`/api/ai/holdings-analysis/history?currency=${encodeURIComponent(currency)}&limit=6`);
+                if (Array.isArray(history) && history.length > 0) {
+                  state.aiAnalysisByCurrency[currency] = history[0];
+                  state.aiAnalysisHistoryByCurrency[currency] = history.slice(1);
+                }
+              } catch (_) { /* ignore */ }
               showToast(`${currency} analysis ready`);
             }
           } finally {
             btn.disabled = false;
-            btn.textContent = 'AI Analyze';
+            btn.textContent = 'AI';
           }
         }
         renderHoldings();
@@ -1476,7 +1555,7 @@ function bindHoldingsActions() {
   });
 }
 
-async function runAIHoldingsAnalysis(currency) {
+async function runAIHoldingsAnalysis(currency, analysisType) {
   const settings = loadAIAnalysisSettings();
 
   const normalizedSettings = {
@@ -1511,6 +1590,7 @@ async function runAIHoldingsAnalysis(currency) {
       advice_style: normalizedSettings.adviceStyle,
       allow_new_symbols: normalizedSettings.allowNewSymbols,
       strategy_prompt: normalizedSettings.strategyPrompt,
+      analysis_type: analysisType || 'adhoc',
     }),
   });
 

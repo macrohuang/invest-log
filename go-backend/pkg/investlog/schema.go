@@ -257,6 +257,24 @@ func initDatabase(db *sql.DB) error {
 		}
 	}
 
+	if err := exec(tx, `
+		CREATE TABLE IF NOT EXISTS holdings_analyses (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			currency TEXT NOT NULL,
+			model TEXT NOT NULL,
+			analysis_type TEXT NOT NULL DEFAULT 'adhoc',
+			risk_level TEXT,
+			overall_summary TEXT,
+			key_findings TEXT,
+			recommendations TEXT,
+			disclaimer TEXT,
+			symbol_refs TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)
+	`); err != nil {
+		return err
+	}
+
 	indexes := []string{
 		"CREATE INDEX IF NOT EXISTS idx_symbol_id ON transactions(symbol_id)",
 		"CREATE INDEX IF NOT EXISTS idx_date ON transactions(transaction_date)",
@@ -266,6 +284,7 @@ func initDatabase(db *sql.DB) error {
 		"CREATE INDEX IF NOT EXISTS idx_symbols_asset_type ON symbols(asset_type)",
 		"CREATE INDEX IF NOT EXISTS idx_linked_txn ON transactions(linked_transaction_id)",
 		"CREATE INDEX IF NOT EXISTS idx_symbol_analyses_lookup ON symbol_analyses(symbol, currency, created_at DESC)",
+		"CREATE INDEX IF NOT EXISTS idx_holdings_analyses_lookup ON holdings_analyses(currency, created_at DESC)",
 	}
 	for _, idx := range indexes {
 		if err := exec(tx, idx); err != nil {
