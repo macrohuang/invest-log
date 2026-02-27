@@ -940,6 +940,8 @@ function buildSymbolPieItems(symbols, limit = 8) {
     amount: s.market_value,
     pnl: s.unrealized_pnl ?? null,
     cost: (s.avg_cost || 0) * (s.total_shares || 0),
+    _symbol: s.symbol,
+    _accountId: s.account_id,
   }));
   if (rest.length) {
     const otherValue = rest.reduce((sum, s) => sum + s.market_value, 0);
@@ -2217,7 +2219,7 @@ function groupSymbolsByAccount(symbols, totalMarketValue) {
       displayName: s.display_name || s.symbol,
       marketValue: s.market_value || 0,
       percent: s.percent || 0,
-      pnl: s.unrealized_pnl || 0,
+      pnl: s.unrealized_pnl ?? null,
       pieKey: `${s.symbol}-${accountId}`,
     });
   });
@@ -2309,7 +2311,9 @@ function renderAccountGroupList(accountGroups, currency, pieId) {
 
   return accountGroups.map((group, index) => {
     const rows = group.symbols.map((s) => {
-      const pnlClass = s.pnl >= 0 ? 'positive' : 'negative';
+      const hasPnl = s.pnl !== null && s.pnl !== undefined;
+      const pnlClass = hasPnl ? (s.pnl >= 0 ? 'positive' : 'negative') : '';
+      const pnlDisplay = hasPnl ? formatMoneyPlain(s.pnl) : '—';
       return `
         <div class="symbol-row" data-pie-id="${pieId}" data-symbol-key="${escapeHtml(s.pieKey)}">
           <div class="symbol-info">
@@ -2318,7 +2322,7 @@ function renderAccountGroupList(accountGroups, currency, pieId) {
           </div>
           <div class="symbol-value num" data-sensitive>${formatMoneyPlain(s.marketValue)}</div>
           <div class="symbol-percent num">${formatPercent(s.percent)}</div>
-          <div class="symbol-pnl num ${pnlClass}" data-sensitive>${formatMoneyPlain(s.pnl)}</div>
+          <div class="symbol-pnl num ${pnlClass}" data-sensitive>${pnlDisplay}</div>
         </div>
       `;
     }).join('');
@@ -2478,23 +2482,18 @@ async function renderCharts() {
 
     const currencyBlocks = currencies.map((currency) => {
       const data = bySymbol[currency] || {};
-      const symbols = data.symbols || [];
-      const totalMarketValue = data.total_market_value !== undefined && data.total_market_value !== null
-        ? data.total_market_value
-        : symbols.reduce((sum, s) => sum + (s.market_value || 0), 0);
+      // 过滤零持仓标的，与 Holdings 页面保持一致（Holdings 也过滤 total_shares <= 0）
+      const symbols = (data.symbols || []).filter((s) => (s.total_shares || 0) > 0);
+      const totalMarketValue = symbols.reduce((sum, s) => sum + (s.market_value || 0), 0);
 
       const pieId = `pie-${currency}`;
 
       // 构建环图数据项，添加 key 用于高亮关联
-      const pieItems = buildSymbolPieItems(symbols, 8).map((item) => {
-        const matchingSymbol = symbols.find((s) => s.display_name === item.label || s.symbol === item.label);
-        return {
-          ...item,
-          key: matchingSymbol ? `${matchingSymbol.symbol}-${matchingSymbol.account_id}` : item.label,
-          pnl: matchingSymbol ? (matchingSymbol.unrealized_pnl ?? null) : item.pnl,
-          cost: matchingSymbol ? (matchingSymbol.avg_cost || 0) * (matchingSymbol.total_shares || 0) : item.cost,
-        };
-      });
+      // 使用 _symbol/_accountId 精确匹配，避免同名标的跨账户时 key 错乱
+      const pieItems = buildSymbolPieItems(symbols, 8).map((item) => ({
+        ...item,
+        key: item._symbol ? `${item._symbol}-${item._accountId || 'unknown'}` : item.label,
+      }));
 
       // 渲染 SVG 环图
       const pieChart = renderInteractivePieChart({
