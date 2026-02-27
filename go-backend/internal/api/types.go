@@ -73,6 +73,19 @@ type assetTypePayload struct {
 	Label string `json:"label"`
 }
 
+type aiAllocationAdvicePayload struct {
+	BaseURL         string   `json:"base_url"`
+	APIKey          string   `json:"api_key"`
+	Model           string   `json:"model"`
+	AgeRange        string   `json:"age_range"`
+	InvestGoal      string   `json:"invest_goal"`
+	RiskTolerance   string   `json:"risk_tolerance"`
+	Horizon         string   `json:"horizon"`
+	ExperienceLevel string   `json:"experience_level"`
+	Currencies      []string `json:"currencies"`
+	CustomPrompt    string   `json:"custom_prompt"`
+}
+
 type allocationPayload struct {
 	Currency   string  `json:"currency"`
 	AssetType  string  `json:"asset_type"`

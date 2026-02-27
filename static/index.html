@@ -64,6 +64,21 @@
     </div>
   </div>
 
+  <div id="ai-advisor-overlay" class="prompt-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="ai-advisor-title">
+    <div class="ai-advisor-box">
+      <div class="ai-advisor-header">
+        <h3 id="ai-advisor-title">AI 配置建议</h3>
+        <button class="ai-advisor-close" id="ai-advisor-close" type="button" aria-label="关闭">✕</button>
+      </div>
+      <div class="ai-advisor-steps" id="ai-advisor-steps" aria-label="步骤进度"></div>
+      <div id="ai-advisor-step-content" class="ai-advisor-step-content"></div>
+      <div class="ai-advisor-footer">
+        <button class="btn secondary" id="ai-advisor-prev" type="button">上一步</button>
+        <button class="btn primary" id="ai-advisor-next" type="button">下一步</button>
+      </div>
+    </div>
+  </div>
+
   <script src="app.js" defer></script>
 </body>
 </html>

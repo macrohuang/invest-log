@@ -250,6 +250,37 @@ func (h *handler) analyzeHoldingsWithAI(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (h *handler) getAIAllocationAdvice(w http.ResponseWriter, r *http.Request) {
+	var payload aiAllocationAdvicePayload
+	if err := decodeJSON(r, &payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	result, err := h.core.GetAllocationAdvice(investlog.AllocationAdviceRequest{
+		BaseURL:         payload.BaseURL,
+		APIKey:          payload.APIKey,
+		Model:           payload.Model,
+		AgeRange:        payload.AgeRange,
+		InvestGoal:      payload.InvestGoal,
+		RiskTolerance:   payload.RiskTolerance,
+		Horizon:         payload.Horizon,
+		ExperienceLevel: payload.ExperienceLevel,
+		Currencies:      payload.Currencies,
+		CustomPrompt:    payload.CustomPrompt,
+	})
+	if err != nil {
+		h.logger.Error("ai allocation advice failed",
+			"model", payload.Model,
+			"base_url", payload.BaseURL,
+			"err", err,
+		)
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (h *handler) analyzeSymbolWithAI(w http.ResponseWriter, r *http.Request) {
 	var payload aiSymbolAnalysisPayload
 	if err := decodeJSON(r, &payload); err != nil {

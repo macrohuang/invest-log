@@ -86,6 +86,7 @@ func NewRouter(core *investlog.Core) http.Handler {
 	r.Post("/api/prices/manual", h.manualUpdatePrice)
 	r.Post("/api/prices/update-all", h.updateAllPrices)
 	r.Post("/api/ai/holdings-analysis", h.analyzeHoldingsWithAI)
+	r.Post("/api/ai/allocation-advice", h.getAIAllocationAdvice)
 	r.Post("/api/ai/symbol-analysis", h.analyzeSymbolWithAI)
 	r.Get("/api/ai/symbol-analysis", h.getSymbolAnalysis)
 	r.Get("/api/ai/symbol-analysis/history", h.getSymbolAnalysisHistory)

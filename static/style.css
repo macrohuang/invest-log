@@ -1774,3 +1774,258 @@ select.btn.trade-select {
     animation: none;
   }
 }
+
+/* ── AI Advisor Modal ──────────────────────────────────────────── */
+
+.ai-advisor-box {
+  background: var(--card);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  width: 520px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 64px);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow-y: auto;
+}
+
+.ai-advisor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.ai-advisor-header h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.ai-advisor-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 16px;
+  padding: 4px 8px;
+  border-radius: var(--radius);
+  line-height: 1;
+}
+
+.ai-advisor-close:hover {
+  background: var(--surface);
+  color: var(--ink-0);
+}
+
+.ai-advisor-steps {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  flex-wrap: wrap;
+}
+
+.advisor-step {
+  padding: 3px 8px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--surface);
+  font-weight: 500;
+}
+
+.advisor-step-active {
+  background: rgba(240, 108, 59, 0.18);
+  color: var(--ink-0);
+}
+
+.advisor-step-done {
+  background: var(--surface);
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.advisor-step-sep {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.ai-advisor-step-content {
+  flex: 1;
+  min-height: 200px;
+}
+
+.ai-advisor-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.radio-group,
+.checkbox-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.radio-label,
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--ink-0);
+}
+
+.radio-label input,
+.checkbox-label input {
+  accent-color: var(--accent);
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.ai-advisor-footer {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+/* Loading state */
+.ai-advisor-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 32px 16px;
+  text-align: center;
+}
+
+.loading-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Results */
+.ai-advisor-results {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.advice-meta {
+  font-size: 11px;
+}
+
+.advice-summary {
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.advice-rationale {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.advice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.advice-currency-block {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.advice-currency-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--surface);
+  font-size: 13px;
+}
+
+.advice-entries {
+  padding: 4px 0;
+}
+
+.advice-entry {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.advice-entry:last-child {
+  border-bottom: none;
+}
+
+.advice-entry-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.advice-label {
+  font-weight: 600;
+  font-size: 13px;
+  flex: 1;
+  min-width: 0;
+}
+
+.advice-range {
+  font-size: 13px;
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.advice-apply-btn {
+  font-size: 12px;
+  padding: 3px 10px;
+  white-space: nowrap;
+}
+
+.advice-disclaimer {
+  font-size: 11px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+
+/* Card-level action row */
+.card-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+
+/* Allocation tab toolbar */
+.alloc-tab-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.alloc-tab-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 4px;
+}
