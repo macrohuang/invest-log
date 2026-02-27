@@ -1,4 +1,0 @@
-interface:
-  display_name: "意图驱动交付"
-  short_description: "基于开发意图推进MRD、设计、开发、测试与提交的端到端流程"
-  default_prompt: "根据我的开发意图，按分支创建、需求澄清、技术设计、开发、测试、覆盖率与提交确认的流程执行。"
