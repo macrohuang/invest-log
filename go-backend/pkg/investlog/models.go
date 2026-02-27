@@ -204,6 +204,17 @@ type ExchangeRateSetting struct {
 	UpdatedAt    string `json:"updated_at"`
 }
 
+// AISettings represents persisted AI analysis configuration (excluding API key).
+type AISettings struct {
+	BaseURL         string `json:"base_url"`
+	Model           string `json:"model"`
+	RiskProfile     string `json:"risk_profile"`
+	Horizon         string `json:"horizon"`
+	AdviceStyle     string `json:"advice_style"`
+	AllowNewSymbols bool   `json:"allow_new_symbols"`
+	StrategyPrompt  string `json:"strategy_prompt"`
+}
+
 // AssetType represents a dynamic asset type.
 type AssetType struct {
 	ID        int64  `json:"id"`

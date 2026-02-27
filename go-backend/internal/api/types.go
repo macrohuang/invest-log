@@ -3,21 +3,21 @@ package api
 import "investlog/pkg/investlog"
 
 type addTransactionPayload struct {
-	TransactionDate string                `json:"transaction_date"`
-	TransactionTime *string               `json:"transaction_time"`
-	Symbol          string                `json:"symbol"`
-	TransactionType string                `json:"transaction_type"`
-	Quantity        investlog.Amount      `json:"quantity"`
-	Price           investlog.Amount      `json:"price"`
-	AccountID       string                `json:"account_id"`
-	AssetType       string                `json:"asset_type"`
-	Commission      investlog.Amount      `json:"commission"`
-	Currency        string                `json:"currency"`
-	AccountName     *string               `json:"account_name"`
-	Notes           *string               `json:"notes"`
-	Tags            *string               `json:"tags"`
-	TotalAmount     *investlog.Amount     `json:"total_amount"`
-	LinkCash        bool                  `json:"link_cash"`
+	TransactionDate string            `json:"transaction_date"`
+	TransactionTime *string           `json:"transaction_time"`
+	Symbol          string            `json:"symbol"`
+	TransactionType string            `json:"transaction_type"`
+	Quantity        investlog.Amount  `json:"quantity"`
+	Price           investlog.Amount  `json:"price"`
+	AccountID       string            `json:"account_id"`
+	AssetType       string            `json:"asset_type"`
+	Commission      investlog.Amount  `json:"commission"`
+	Currency        string            `json:"currency"`
+	AccountName     *string           `json:"account_name"`
+	Notes           *string           `json:"notes"`
+	Tags            *string           `json:"tags"`
+	TotalAmount     *investlog.Amount `json:"total_amount"`
+	LinkCash        bool              `json:"link_cash"`
 }
 
 type pricePayload struct {
@@ -47,6 +47,16 @@ type aiHoldingsAnalysisPayload struct {
 	AllowNewSymbols *bool  `json:"allow_new_symbols"`
 	StrategyPrompt  string `json:"strategy_prompt"`
 	AnalysisType    string `json:"analysis_type"`
+}
+
+type aiSettingsPayload struct {
+	BaseURL         string `json:"base_url"`
+	Model           string `json:"model"`
+	RiskProfile     string `json:"risk_profile"`
+	Horizon         string `json:"horizon"`
+	AdviceStyle     string `json:"advice_style"`
+	AllowNewSymbols *bool  `json:"allow_new_symbols"`
+	StrategyPrompt  string `json:"strategy_prompt"`
 }
 
 type aiSymbolAnalysisPayload struct {

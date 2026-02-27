@@ -272,6 +272,43 @@ func (h *handler) getHoldingsAnalysisHistory(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, results)
 }
 
+func (h *handler) getAISettings(w http.ResponseWriter, r *http.Request) {
+	settings, err := h.core.GetAISettings()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, settings)
+}
+
+func (h *handler) setAISettings(w http.ResponseWriter, r *http.Request) {
+	var payload aiSettingsPayload
+	if err := decodeJSON(r, &payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	allowNewSymbols := true
+	if payload.AllowNewSymbols != nil {
+		allowNewSymbols = *payload.AllowNewSymbols
+	}
+
+	settings, err := h.core.SetAISettings(investlog.AISettings{
+		BaseURL:         payload.BaseURL,
+		Model:           payload.Model,
+		RiskProfile:     payload.RiskProfile,
+		Horizon:         payload.Horizon,
+		AdviceStyle:     payload.AdviceStyle,
+		AllowNewSymbols: allowNewSymbols,
+		StrategyPrompt:  payload.StrategyPrompt,
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, settings)
+}
+
 func (h *handler) getAIAllocationAdvice(w http.ResponseWriter, r *http.Request) {
 	var payload aiAllocationAdvicePayload
 	if err := decodeJSON(r, &payload); err != nil {

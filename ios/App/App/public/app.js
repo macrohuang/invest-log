@@ -2,10 +2,17 @@ const state = {
   apiBase: '',
   privacy: false,
   aiAnalysisByCurrency: {},
+  aiAnalysisHistoryByCurrency: {}, // { currency: HoldingsAnalysisResult[] }
   holdingsFilters: {}, // { currency: { accountIds: [], symbols: [] } }
+  aiSettings: null,
+  aiSettingsLoaded: false,
 };
 
+// Tracks which filter popover is open across re-renders: { filterType, currency } | null
+let _openPopover = null;
+
 const aiAnalysisSettingsKey = 'aiHoldingsAnalysisSettings';
+const aiAnalysisAPIKeyStorageKey = 'aiHoldingsAnalysisApiKey';
 
 const view = document.getElementById('view');
 const toastEl = document.getElementById('toast');
@@ -126,6 +133,13 @@ function init() {
     localStorage.setItem('privacyMode', state.privacy ? '1' : '0');
   });
 
+  // Persistent outside-click handler: closes open filter popovers across re-renders.
+  document.addEventListener('click', () => {
+    if (!_openPopover) return;
+    view.querySelectorAll('.filter-popover.show').forEach(p => p.classList.remove('show'));
+    _openPopover = null;
+  });
+
   window.addEventListener('hashchange', renderRoute);
   renderRoute();
   updateConnectionStatus();
@@ -199,48 +213,177 @@ function getRouteQuery() {
   return new URLSearchParams(hash.slice(queryIndex + 1));
 }
 
-function loadAIAnalysisSettings() {
+function defaultAIAnalysisSettings() {
+  return {
+    baseUrl: 'https://api.openai.com/v1',
+    model: '',
+    riskProfile: 'balanced',
+    horizon: 'medium',
+    adviceStyle: 'balanced',
+    allowNewSymbols: true,
+    strategyPrompt: '',
+  };
+}
+
+function normalizeChoice(value, allowed, fallback) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return allowed.includes(normalized) ? normalized : fallback;
+}
+
+function normalizeAIAnalysisSettings(raw) {
+  const defaults = defaultAIAnalysisSettings();
+  const source = raw && typeof raw === 'object' ? raw : {};
+
+  const baseUrlRaw = source.baseUrl || source.base_url || defaults.baseUrl;
+  const baseUrl = trimTrailingSlash(String(baseUrlRaw || '').trim()) || defaults.baseUrl;
+  const model = String(source.model || '').trim();
+  const riskProfile = normalizeChoice(source.riskProfile || source.risk_profile, ['conservative', 'balanced', 'aggressive'], defaults.riskProfile);
+  const horizon = normalizeChoice(source.horizon, ['short', 'medium', 'long'], defaults.horizon);
+  const adviceStyle = normalizeChoice(source.adviceStyle || source.advice_style, ['conservative', 'balanced', 'aggressive'], defaults.adviceStyle);
+  const strategyPrompt = String(source.strategyPrompt || source.strategy_prompt || '').trim();
+
+  let allowNewSymbols = defaults.allowNewSymbols;
+  if (typeof source.allowNewSymbols === 'boolean') {
+    allowNewSymbols = source.allowNewSymbols;
+  } else if (typeof source.allow_new_symbols === 'boolean') {
+    allowNewSymbols = source.allow_new_symbols;
+  }
+
+  return {
+    baseUrl,
+    model,
+    riskProfile,
+    horizon,
+    adviceStyle,
+    allowNewSymbols,
+    strategyPrompt,
+  };
+}
+
+function loadLegacyAIAnalysisSettings() {
   try {
     const raw = localStorage.getItem(aiAnalysisSettingsKey);
     if (!raw) {
-      return {
-        baseUrl: 'https://api.openai.com/v1',
-        model: '',
-        apiKey: '',
-        riskProfile: 'balanced',
-        horizon: 'medium',
-        adviceStyle: 'balanced',
-        allowNewSymbols: true,
-        strategyPrompt: '',
-      };
+      return null;
     }
     const parsed = JSON.parse(raw);
-    return {
-      baseUrl: parsed.baseUrl || 'https://api.openai.com/v1',
-      model: parsed.model || '',
-      apiKey: parsed.apiKey || '',
-      riskProfile: parsed.riskProfile || 'balanced',
-      horizon: parsed.horizon || 'medium',
-      adviceStyle: parsed.adviceStyle || 'balanced',
-      allowNewSymbols: parsed.allowNewSymbols !== false,
-      strategyPrompt: parsed.strategyPrompt || '',
-    };
+    if (!parsed || typeof parsed !== 'object') {
+      return null;
+    }
+    return parsed;
   } catch (err) {
-    return {
-      baseUrl: 'https://api.openai.com/v1',
-      model: '',
-      apiKey: '',
-      riskProfile: 'balanced',
-      horizon: 'medium',
-      adviceStyle: 'balanced',
-      allowNewSymbols: true,
-      strategyPrompt: '',
-    };
+    return null;
   }
 }
 
-function saveAIAnalysisSettings(settings) {
-  localStorage.setItem(aiAnalysisSettingsKey, JSON.stringify(settings));
+function getAIAnalysisAPIKey(legacySettings) {
+  const stored = (localStorage.getItem(aiAnalysisAPIKeyStorageKey) || '').trim();
+  if (stored) {
+    return stored;
+  }
+
+  const fallback = legacySettings && legacySettings.apiKey
+    ? String(legacySettings.apiKey).trim()
+    : '';
+  if (fallback) {
+    localStorage.setItem(aiAnalysisAPIKeyStorageKey, fallback);
+  }
+  return fallback;
+}
+
+function setAIAnalysisAPIKey(apiKey) {
+  const normalized = String(apiKey || '').trim();
+  if (!normalized) {
+    localStorage.removeItem(aiAnalysisAPIKeyStorageKey);
+    return '';
+  }
+  localStorage.setItem(aiAnalysisAPIKeyStorageKey, normalized);
+  return normalized;
+}
+
+function isDefaultAIAnalysisSettings(settings) {
+  const defaults = defaultAIAnalysisSettings();
+  return settings.baseUrl === defaults.baseUrl &&
+    settings.model === defaults.model &&
+    settings.riskProfile === defaults.riskProfile &&
+    settings.horizon === defaults.horizon &&
+    settings.adviceStyle === defaults.adviceStyle &&
+    settings.allowNewSymbols === defaults.allowNewSymbols &&
+    settings.strategyPrompt === defaults.strategyPrompt;
+}
+
+async function persistAIAnalysisSettings(settings) {
+  const normalized = normalizeAIAnalysisSettings(settings);
+  const saved = await fetchJSON('/api/ai-settings', {
+    method: 'PUT',
+    body: JSON.stringify({
+      base_url: normalized.baseUrl,
+      model: normalized.model,
+      risk_profile: normalized.riskProfile,
+      horizon: normalized.horizon,
+      advice_style: normalized.adviceStyle,
+      allow_new_symbols: normalized.allowNewSymbols,
+      strategy_prompt: normalized.strategyPrompt,
+    }),
+  });
+  return normalizeAIAnalysisSettings(saved || normalized);
+}
+
+async function loadAIAnalysisSettings(options = {}) {
+  const forceRefresh = !!options.forceRefresh;
+  const legacySettings = loadLegacyAIAnalysisSettings();
+  const apiKey = getAIAnalysisAPIKey(legacySettings);
+
+  if (!forceRefresh && state.aiSettingsLoaded && state.aiSettings) {
+    return {
+      ...state.aiSettings,
+      apiKey,
+    };
+  }
+
+  let normalized = defaultAIAnalysisSettings();
+  let loadedFromServer = false;
+  try {
+    const remote = await fetchJSON('/api/ai-settings');
+    normalized = normalizeAIAnalysisSettings(remote);
+    loadedFromServer = true;
+  } catch (err) {
+    if (legacySettings) {
+      normalized = normalizeAIAnalysisSettings(legacySettings);
+    }
+  }
+
+  if (loadedFromServer && legacySettings) {
+    const legacyNormalized = normalizeAIAnalysisSettings(legacySettings);
+    if (isDefaultAIAnalysisSettings(normalized) && !isDefaultAIAnalysisSettings(legacyNormalized)) {
+      try {
+        normalized = await persistAIAnalysisSettings(legacyNormalized);
+      } catch (err) {
+        // Keep server settings when migration write fails.
+      }
+    }
+    localStorage.removeItem(aiAnalysisSettingsKey);
+  }
+
+  state.aiSettings = normalized;
+  state.aiSettingsLoaded = true;
+  return {
+    ...normalized,
+    apiKey,
+  };
+}
+
+async function saveAIAnalysisSettings(settings) {
+  const normalized = normalizeAIAnalysisSettings(settings);
+  const saved = await persistAIAnalysisSettings(normalized);
+  state.aiSettings = saved;
+  state.aiSettingsLoaded = true;
+  const apiKey = setAIAnalysisAPIKey(settings && settings.apiKey ? settings.apiKey : '');
+  localStorage.removeItem(aiAnalysisSettingsKey);
+  return {
+    ...saved,
+    apiKey,
+  };
 }
 
 function formatActionLabel(action) {
@@ -498,11 +641,16 @@ function renderAIAnalysisCard(result, currency) {
   const riskLevel = result.risk_level ? escapeHtml(String(result.risk_level)) : 'unknown';
   const summary = result.overall_summary ? escapeHtml(String(result.overall_summary)) : '—';
   const disclaimer = result.disclaimer ? escapeHtml(String(result.disclaimer)) : 'For reference only.';
+  const typeLabel = formatAnalysisTypeLabel(result.analysis_type);
+  const symbolRefsCount = Array.isArray(result.symbol_refs) ? result.symbol_refs.length : 0;
+  const symbolRefsBadge = symbolRefsCount > 0
+    ? `<span class="tag other" title="引用了 ${symbolRefsCount} 个标的深度分析">含${symbolRefsCount}标的分析</span>`
+    : '';
 
   return `
     <div class="card ai-analysis-card" data-ai-analysis-card="${currency}">
       <div class="ai-analysis-head">
-        <h4>AI Analysis</h4>
+        <h4>AI Analysis <span class="tag other">${typeLabel}</span>${symbolRefsBadge}</h4>
         <div class="section-sub">Model: ${model} · Generated: ${generatedAt}</div>
       </div>
       <div class="ai-summary">
@@ -518,6 +666,49 @@ function renderAIAnalysisCard(result, currency) {
         ${recommendationMarkup}
       </div>
       <div class="section-sub">${disclaimer}</div>
+    </div>
+  `;
+}
+
+function formatAnalysisTypeLabel(type) {
+  if (type === 'weekly') return '周报';
+  if (type === 'monthly') return '月报';
+  return '临时分析';
+}
+
+function renderAIAnalysisHistory(history, currency) {
+  if (!Array.isArray(history) || history.length === 0) return '';
+
+  const items = history.map((result) => {
+    const generatedAt = result.generated_at
+      ? escapeHtml(formatDateTimeInDisplayTimezone(result.generated_at))
+      : '—';
+    const typeLabel = formatAnalysisTypeLabel(result.analysis_type);
+    const riskLevel = result.risk_level ? escapeHtml(String(result.risk_level)) : 'unknown';
+    const summary = result.overall_summary ? escapeHtml(String(result.overall_summary)) : '—';
+    const model = result.model ? escapeHtml(String(result.model)) : '—';
+    const id = result.id || 0;
+    const symbolRefsCount = Array.isArray(result.symbol_refs) ? result.symbol_refs.length : 0;
+    const symbolRefsBadge = symbolRefsCount > 0
+      ? `<span class="tag other">含${symbolRefsCount}标的</span>`
+      : '';
+    return `
+      <details class="ai-history-item" data-history-id="${id}">
+        <summary class="ai-history-summary">
+          <span class="tag other">${typeLabel}</span>${symbolRefsBadge}
+          <span class="section-sub">${generatedAt}</span>
+          <span class="ai-history-risk">风险: ${riskLevel}</span>
+        </summary>
+        <div class="ai-history-body section-sub">${summary}</div>
+        <div class="section-sub" style="margin-top:4px">Model: ${model}</div>
+      </details>
+    `;
+  }).join('');
+
+  return `
+    <div class="ai-history-section">
+      <div class="ai-history-title section-sub">历史分析记录</div>
+      ${items}
     </div>
   `;
 }
@@ -564,6 +755,93 @@ function showToast(message) {
   toastEl.textContent = message;
   toastEl.classList.add('show');
   setTimeout(() => toastEl.classList.remove('show'), 2600);
+}
+
+/**
+ * Custom prompt modal to replace window.prompt(), which is blocked in WKWebView.
+ * Returns a Promise that resolves with the entered string, or null if cancelled.
+ */
+function showPromptModal(label) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('prompt-overlay');
+    const labelEl = document.getElementById('prompt-label');
+    const input = document.getElementById('prompt-input');
+    const okBtn = document.getElementById('prompt-ok');
+    const cancelBtn = document.getElementById('prompt-cancel');
+
+    labelEl.textContent = label;
+    input.value = '';
+    overlay.classList.remove('hidden');
+    input.focus();
+
+    function cleanup() {
+      overlay.classList.add('hidden');
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      input.removeEventListener('keydown', onKeydown);
+    }
+
+    function onOk() {
+      cleanup();
+      resolve(input.value.trim() || null);
+    }
+
+    function onCancel() {
+      cleanup();
+      resolve(null);
+    }
+
+    function onKeydown(e) {
+      if (e.key === 'Enter') onOk();
+      if (e.key === 'Escape') onCancel();
+    }
+
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    input.addEventListener('keydown', onKeydown);
+  });
+}
+
+/**
+ * Custom confirm modal to replace window.confirm(), which is blocked in WKWebView.
+ * Returns a Promise that resolves with true (confirmed) or false (cancelled).
+ */
+function showConfirmModal(message) {
+  return new Promise((resolve) => {
+    const overlay = document.getElementById('confirm-overlay');
+    const messageEl = document.getElementById('confirm-message');
+    const okBtn = document.getElementById('confirm-ok');
+    const cancelBtn = document.getElementById('confirm-cancel');
+
+    messageEl.textContent = message;
+    overlay.classList.remove('hidden');
+
+    function cleanup() {
+      overlay.classList.add('hidden');
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      document.removeEventListener('keydown', onKeydown);
+    }
+
+    function onOk() {
+      cleanup();
+      resolve(true);
+    }
+
+    function onCancel() {
+      cleanup();
+      resolve(false);
+    }
+
+    function onKeydown(e) {
+      if (e.key === 'Enter') onOk();
+      if (e.key === 'Escape') onCancel();
+    }
+
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    document.addEventListener('keydown', onKeydown);
+  });
 }
 
 function updateConnectionStatus() {
@@ -792,6 +1070,10 @@ function buildSymbolPieItems(symbols, limit = 8) {
     label: s.display_name || s.symbol,
     value: s.market_value,
     amount: s.market_value,
+    pnl: s.unrealized_pnl ?? null,
+    cost: (s.avg_cost || 0) * (s.total_shares || 0),
+    _symbol: s.symbol,
+    _accountId: s.account_id,
   }));
   if (rest.length) {
     const otherValue = rest.reduce((sum, s) => sum + s.market_value, 0);
@@ -800,6 +1082,8 @@ function buildSymbolPieItems(symbols, limit = 8) {
         label: 'Other',
         value: otherValue,
         amount: otherValue,
+        pnl: null,
+        cost: null,
       });
     }
   }
@@ -939,6 +1223,18 @@ async function renderHoldings() {
       return;
     }
 
+    // Load saved analysis history in parallel for currencies that have no in-memory result.
+    await Promise.all(currencies.map(async (curr) => {
+      if (state.aiAnalysisByCurrency[curr]) return;
+      try {
+        const history = await fetchJSON(`/api/ai/holdings-analysis/history?currency=${encodeURIComponent(curr)}&limit=6`);
+        if (Array.isArray(history) && history.length > 0) {
+          state.aiAnalysisByCurrency[curr] = history[0];
+          state.aiAnalysisHistoryByCurrency[curr] = history.slice(1);
+        }
+      } catch (_) { /* ignore */ }
+    }));
+
     const tabButtons = currencies.map((currency) => `
       <button class="tab-btn" type="button" data-holdings-tab="${currency}">${currency}</button>
     `).join('');
@@ -955,6 +1251,7 @@ async function renderHoldings() {
 
       // Apply filtering
       const filteredSymbols = allSymbols.filter(s => {
+        if ((s.total_shares || 0) <= 0) return false;
         const matchesAccount = !activeFilters.accountIds.length || activeFilters.accountIds.includes(String(s.account_id || ''));
         const matchesSymbol = !activeFilters.symbols.length || activeFilters.symbols.includes(String(s.symbol || ''));
         return matchesAccount && matchesSymbol;
@@ -1058,7 +1355,14 @@ async function renderHoldings() {
               </div>
               <div class="actions">
                 <button class="btn secondary" data-action="update-all" data-currency="${currency}" ${canUpdateAll ? '' : 'disabled title="No auto-sync symbols"'}>Update all</button>
-                <button class="btn tertiary" data-action="ai-analyze" data-currency="${currency}">AI Analyze</button>
+                <div class="ai-analyze-group">
+                  <select class="btn ai-type-select" data-ai-type-currency="${currency}" title="Analysis type">
+                    <option value="adhoc">临时分析</option>
+                    <option value="weekly">周报</option>
+                    <option value="monthly">月报</option>
+                  </select>
+                  <button class="btn tertiary" data-action="ai-analyze" data-currency="${currency}">AI</button>
+                </div>
               </div>
             </div>
             <table class="table" data-holdings-table>
@@ -1076,7 +1380,6 @@ async function renderHoldings() {
                         `).join('')}
                       </div>
                       <div class="filter-actions">
-                        <button class="btn" data-filter-action="apply">Apply</button>
                         <button class="btn secondary" data-filter-action="clear">Reset</button>
                       </div>
                     </div>
@@ -1093,7 +1396,6 @@ async function renderHoldings() {
                         `).join('')}
                       </div>
                       <div class="filter-actions">
-                        <button class="btn" data-filter-action="apply">Apply</button>
                         <button class="btn secondary" data-filter-action="clear">Reset</button>
                       </div>
                     </div>
@@ -1109,6 +1411,7 @@ async function renderHoldings() {
               <tbody>${rows || '<tr><td colspan="8" style="text-align:center; padding: 20px;">No positions match filters.</td></tr>'}</tbody>
             </table>
             ${renderAIAnalysisCard(aiResult, currency)}
+            ${renderAIAnalysisHistory(state.aiAnalysisHistoryByCurrency[currency] || [], currency)}
           </div>
         </div>
       `;
@@ -1132,53 +1435,63 @@ async function renderHoldings() {
 }
 
 function initHoldingsFilters() {
-  const triggers = view.querySelectorAll('.filter-trigger');
-  triggers.forEach((trigger) => {
+  // Restore open popover state after re-render.
+  if (_openPopover) {
+    const { filterType, currency } = _openPopover;
+    const toRestore = view.querySelector(
+      `.filter-popover[data-filter-type="${filterType}"][data-currency="${currency}"]`
+    );
+    if (toRestore) {
+      toRestore.classList.add('show');
+    } else {
+      _openPopover = null;
+    }
+  }
+
+  // Toggle popover on trigger click.
+  view.querySelectorAll('.filter-trigger').forEach((trigger) => {
     trigger.addEventListener('click', (e) => {
-      e.stopPropagation();
+      e.stopPropagation(); // prevent document listener from closing it immediately
       const popover = trigger.nextElementSibling;
-      const isShow = popover.classList.contains('show');
-      
-      // Close all other popovers
+      const isAlreadyOpen = popover.classList.contains('show');
       view.querySelectorAll('.filter-popover.show').forEach(p => p.classList.remove('show'));
-      
-      if (!isShow) {
-        popover.classList.add('show');
-      }
-    });
-  });
-
-  // Handle Apply button
-  view.querySelectorAll('[data-filter-action="apply"]').forEach((btn) => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const popover = btn.closest('.filter-popover');
-      const currency = popover.dataset.currency;
-      const type = popover.dataset.filterType;
-      const checked = Array.from(popover.querySelectorAll('input:checked')).map(i => i.value);
-      
-      if (!state.holdingsFilters[currency]) {
-        state.holdingsFilters[currency] = { accountIds: [], symbols: [] };
-      }
-      
-      if (type === 'account') {
-        state.holdingsFilters[currency].accountIds = checked;
+      if (isAlreadyOpen) {
+        _openPopover = null;
       } else {
-        state.holdingsFilters[currency].symbols = checked;
+        popover.classList.add('show');
+        _openPopover = { filterType: popover.dataset.filterType, currency: popover.dataset.currency };
       }
-      
-      renderHoldings();
     });
   });
 
-  // Handle Reset button
+  // Live-apply on checkbox change.
+  view.querySelectorAll('.filter-popover').forEach((popover) => {
+    popover.querySelectorAll('input[type="checkbox"]').forEach((checkbox) => {
+      checkbox.addEventListener('change', (e) => {
+        e.stopPropagation();
+        const currency = popover.dataset.currency;
+        const type = popover.dataset.filterType;
+        const checked = Array.from(popover.querySelectorAll('input:checked')).map(i => i.value);
+        if (!state.holdingsFilters[currency]) {
+          state.holdingsFilters[currency] = { accountIds: [], symbols: [] };
+        }
+        if (type === 'account') {
+          state.holdingsFilters[currency].accountIds = checked;
+        } else {
+          state.holdingsFilters[currency].symbols = checked;
+        }
+        renderHoldings(); // _openPopover already set from trigger click; will be restored after render
+      });
+    });
+  });
+
+  // Handle Reset button: clear filter and keep popover open.
   view.querySelectorAll('[data-filter-action="clear"]').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       e.stopPropagation();
       const popover = btn.closest('.filter-popover');
       const currency = popover.dataset.currency;
       const type = popover.dataset.filterType;
-      
       if (state.holdingsFilters[currency]) {
         if (type === 'account') {
           state.holdingsFilters[currency].accountIds = [];
@@ -1186,15 +1499,11 @@ function initHoldingsFilters() {
           state.holdingsFilters[currency].symbols = [];
         }
       }
-      
-      renderHoldings();
+      renderHoldings(); // _openPopover already set from trigger click; will be restored after render
     });
   });
 
-  // Close popovers on click outside
-  document.addEventListener('click', () => {
-    view.querySelectorAll('.filter-popover.show').forEach(p => p.classList.remove('show'));
-  }, { once: true });
+  // Note: document click listener is registered once in init(), not here.
 }
 
 function initHoldingsTabs() {
@@ -1317,7 +1626,7 @@ function bindHoldingsActions() {
           showToast(`${symbol} updated`);
         }
         if (action === 'manual') {
-          const value = window.prompt(`Manual price for ${symbol} (${currency})`);
+          const value = await showPromptModal(`Manual price for ${symbol} (${currency})`);
           if (!value) return;
           const price = Number(value);
           if (Number.isNaN(price)) {
@@ -1331,16 +1640,26 @@ function bindHoldingsActions() {
           showToast(`${symbol} saved`);
         }
         if (action === 'ai-analyze') {
+          const typeSelect = document.querySelector(`[data-ai-type-currency="${currency}"]`);
+          const analysisType = typeSelect ? typeSelect.value : 'adhoc';
           btn.disabled = true;
           btn.textContent = 'Analyzing...';
           try {
-            const analyzed = await runAIHoldingsAnalysis(currency);
+            const analyzed = await runAIHoldingsAnalysis(currency, analysisType);
             if (analyzed) {
+              // Refresh history from server so the new result appears in history.
+              try {
+                const history = await fetchJSON(`/api/ai/holdings-analysis/history?currency=${encodeURIComponent(currency)}&limit=6`);
+                if (Array.isArray(history) && history.length > 0) {
+                  state.aiAnalysisByCurrency[currency] = history[0];
+                  state.aiAnalysisHistoryByCurrency[currency] = history.slice(1);
+                }
+              } catch (_) { /* ignore */ }
               showToast(`${currency} analysis ready`);
             }
           } finally {
             btn.disabled = false;
-            btn.textContent = 'AI Analyze';
+            btn.textContent = 'AI';
           }
         }
         renderHoldings();
@@ -1370,8 +1689,8 @@ function bindHoldingsActions() {
   });
 }
 
-async function runAIHoldingsAnalysis(currency) {
-  const settings = loadAIAnalysisSettings();
+async function runAIHoldingsAnalysis(currency, analysisType) {
+  const settings = await loadAIAnalysisSettings();
 
   const normalizedSettings = {
     baseUrl: (settings.baseUrl || 'https://api.openai.com/v1').trim(),
@@ -1391,8 +1710,6 @@ async function runAIHoldingsAnalysis(currency) {
     return false;
   }
 
-  saveAIAnalysisSettings(normalizedSettings);
-
   const result = await fetchJSON('/api/ai/holdings-analysis', {
     method: 'POST',
     body: JSON.stringify({
@@ -1405,6 +1722,7 @@ async function runAIHoldingsAnalysis(currency) {
       advice_style: normalizedSettings.adviceStyle,
       allow_new_symbols: normalizedSettings.allowNewSymbols,
       strategy_prompt: normalizedSettings.strategyPrompt,
+      analysis_type: analysisType || 'adhoc',
     }),
   });
 
@@ -1492,7 +1810,7 @@ async function renderSymbolAnalysis() {
 }
 
 async function runSymbolAnalysis(symbol, currency) {
-  const settings = loadAIAnalysisSettings();
+  const settings = await loadAIAnalysisSettings();
   const normalizedSettings = {
     baseUrl: (settings.baseUrl || 'https://api.openai.com/v1').trim(),
     model: (settings.model || '').trim(),
@@ -1990,7 +2308,7 @@ async function renderTransactions() {
     view.querySelectorAll('button[data-action="delete"]').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const id = btn.dataset.id;
-        if (!confirm('Delete this transaction?')) return;
+        if (!await showConfirmModal('Delete this transaction?')) return;
         try {
           await fetchJSON(`/api/transactions/${id}`, { method: 'DELETE' });
           showToast('Deleted');
@@ -2031,7 +2349,7 @@ function groupSymbolsByAccount(symbols, totalMarketValue) {
       displayName: s.display_name || s.symbol,
       marketValue: s.market_value || 0,
       percent: s.percent || 0,
-      pnl: s.unrealized_pnl || 0,
+      pnl: s.unrealized_pnl ?? null,
       pieKey: `${s.symbol}-${accountId}`,
     });
   });
@@ -2082,12 +2400,16 @@ function renderInteractivePieChart({ items, totalLabel, totalValue, currency, pi
     const d = `M ${x1} ${y1} A ${outerRadius} ${outerRadius} 0 ${largeArc} 1 ${x2} ${y2} L ${x3} ${y3} A ${innerRadius} ${innerRadius} 0 ${largeArc} 0 ${x4} ${y4} Z`;
 
     const segKey = seg.key || seg.label || '';
+    const pnlAttr = seg.pnl !== null && seg.pnl !== undefined ? seg.pnl : '';
+    const costAttr = seg.cost !== null && seg.cost !== undefined ? seg.cost : '';
     return `<path d="${d}" fill="${seg.color}"
                   data-pie-id="${pieId}"
                   data-symbol-key="${escapeHtml(segKey)}"
                   data-label="${escapeHtml(seg.label)}"
                   data-value="${seg.value || 0}"
                   data-percent="${seg.percent || 0}"
+                  data-pnl="${pnlAttr}"
+                  data-cost="${costAttr}"
                   class="pie-sector"/>`;
   }).join('');
 
@@ -2119,7 +2441,9 @@ function renderAccountGroupList(accountGroups, currency, pieId) {
 
   return accountGroups.map((group, index) => {
     const rows = group.symbols.map((s) => {
-      const pnlClass = s.pnl >= 0 ? 'positive' : 'negative';
+      const hasPnl = s.pnl !== null && s.pnl !== undefined;
+      const pnlClass = hasPnl ? (s.pnl >= 0 ? 'positive' : 'negative') : '';
+      const pnlDisplay = hasPnl ? formatMoneyPlain(s.pnl) : '—';
       return `
         <div class="symbol-row" data-pie-id="${pieId}" data-symbol-key="${escapeHtml(s.pieKey)}">
           <div class="symbol-info">
@@ -2128,7 +2452,7 @@ function renderAccountGroupList(accountGroups, currency, pieId) {
           </div>
           <div class="symbol-value num" data-sensitive>${formatMoneyPlain(s.marketValue)}</div>
           <div class="symbol-percent num">${formatPercent(s.percent)}</div>
-          <div class="symbol-pnl num ${pnlClass}" data-sensitive>${formatMoneyPlain(s.pnl)}</div>
+          <div class="symbol-pnl num ${pnlClass}" data-sensitive>${pnlDisplay}</div>
         </div>
       `;
     }).join('');
@@ -2177,16 +2501,37 @@ function highlightPieSector(pieId, symbolKey) {
       const label = sector.dataset.label || '';
       const value = Number(sector.dataset.value || 0);
       const percent = Number(sector.dataset.percent || 0);
+      const pnlRaw = sector.dataset.pnl;
+      const costRaw = sector.dataset.cost;
+      const hasPnl = pnlRaw !== '' && pnlRaw !== undefined;
+      const pnl = hasPnl ? Number(pnlRaw) : null;
+      const cost = costRaw !== '' && costRaw !== undefined ? Number(costRaw) : null;
+      const pnlPercent = hasPnl && cost !== null && cost > 0 ? (pnl / cost) * 100 : null;
+      const pnlClass = pnl !== null && pnl >= 0 ? 'positive' : 'negative';
+
+      const pnlRows = hasPnl ? `
+        <div class="tooltip-row">
+          <span>盈亏</span>
+          <span class="${pnlClass}" data-sensitive>${formatMoneyPlain(pnl)}</span>
+        </div>
+        ${pnlPercent !== null ? `
+        <div class="tooltip-row">
+          <span>盈亏率</span>
+          <span class="${pnlClass}">${formatPercent(pnlPercent)}</span>
+        </div>` : ''}
+      ` : '';
+
       tooltip.innerHTML = `
         <div class="tooltip-name">${escapeHtml(label)}</div>
         <div class="tooltip-row">
-          <span>Value</span>
-          <span data-sensitive>${formatMoneyPlain(value)}</span>
-        </div>
-        <div class="tooltip-row">
-          <span>Percent</span>
+          <span>占比</span>
           <span>${formatPercent(percent)}</span>
         </div>
+        <div class="tooltip-row">
+          <span>市值</span>
+          <span data-sensitive>${formatMoneyPlain(value)}</span>
+        </div>
+        ${pnlRows}
       `;
       tooltip.style.display = 'block';
     }
@@ -2205,6 +2550,21 @@ function highlightPieSector(pieId, symbolKey) {
  * 绑定Charts页面交互事件
  */
 function bindChartsInteractions() {
+  // 环图扇区：鼠标悬停高亮并显示tooltip
+  view.querySelectorAll('.pie-sector[data-symbol-key]').forEach((sector) => {
+    sector.addEventListener('mouseenter', () => {
+      const pieId = sector.dataset.pieId;
+      const symbolKey = sector.dataset.symbolKey;
+      highlightPieSector(pieId, symbolKey);
+    });
+    sector.addEventListener('mouseleave', () => {
+      const pieId = sector.dataset.pieId;
+      highlightPieSector(pieId, null);
+      const tooltip = document.querySelector(`.pie-tooltip[data-pie-id="${pieId}"]`);
+      if (tooltip) tooltip.style.display = 'none';
+    });
+  });
+
   // 标的行点击
   view.querySelectorAll('.symbol-row[data-symbol-key]').forEach((row) => {
     row.addEventListener('click', () => {
@@ -2252,21 +2612,18 @@ async function renderCharts() {
 
     const currencyBlocks = currencies.map((currency) => {
       const data = bySymbol[currency] || {};
-      const symbols = data.symbols || [];
-      const totalMarketValue = data.total_market_value !== undefined && data.total_market_value !== null
-        ? data.total_market_value
-        : symbols.reduce((sum, s) => sum + (s.market_value || 0), 0);
+      // 过滤零持仓标的，与 Holdings 页面保持一致（Holdings 也过滤 total_shares <= 0）
+      const symbols = (data.symbols || []).filter((s) => (s.total_shares || 0) > 0);
+      const totalMarketValue = symbols.reduce((sum, s) => sum + (s.market_value || 0), 0);
 
       const pieId = `pie-${currency}`;
 
       // 构建环图数据项，添加 key 用于高亮关联
-      const pieItems = buildSymbolPieItems(symbols, 8).map((item) => {
-        const matchingSymbol = symbols.find((s) => s.display_name === item.label || s.symbol === item.label);
-        return {
-          ...item,
-          key: matchingSymbol ? `${matchingSymbol.symbol}-${matchingSymbol.account_id}` : item.label,
-        };
-      });
+      // 使用 _symbol/_accountId 精确匹配，避免同名标的跨账户时 key 错乱
+      const pieItems = buildSymbolPieItems(symbols, 8).map((item) => ({
+        ...item,
+        key: item._symbol ? `${item._symbol}-${item._accountId || 'unknown'}` : item.label,
+      }));
 
       // 渲染 SVG 环图
       const pieChart = renderInteractivePieChart({
@@ -3045,14 +3402,15 @@ async function renderSettings() {
   `;
 
   try {
-    const [accounts, assetTypes, allocationSettings, exchangeRates, symbols, holdings, storageInfo] = await Promise.all([
+    const [accounts, assetTypes, allocationSettings, exchangeRates, symbols, holdings, storageInfo, aiSettings] = await Promise.all([
       fetchJSON('/api/accounts'),
       fetchJSON('/api/asset-types'),
       fetchJSON('/api/allocation-settings'),
       fetchJSON('/api/exchange-rates'),
       fetchJSON('/api/symbols'),
       fetchJSON('/api/holdings'),
-      fetchJSON('/api/storage')
+      fetchJSON('/api/storage'),
+      loadAIAnalysisSettings({ forceRefresh: true }),
     ]);
 
     const settingsMap = {};
@@ -3080,7 +3438,6 @@ async function renderSettings() {
       </div>
     `;
 
-    const aiSettings = loadAIAnalysisSettings();
     const aiAnalysisSection = `
       <div class="card">
         <h3>AI Analysis</h3>
@@ -3296,7 +3653,6 @@ async function renderSettings() {
             <div class="allocation-controls">
               <input type="number" step="0.1" value="${setting.min_percent}" data-alloc-min data-currency="${currency}" data-asset="${escapeHtml(a.code)}">
               <input type="number" step="0.1" value="${setting.max_percent}" data-alloc-max data-currency="${currency}" data-asset="${escapeHtml(a.code)}">
-              <button class="btn secondary" data-alloc-save data-currency="${currency}" data-asset="${escapeHtml(a.code)}">Save</button>
             </div>
           </div>
         `;
@@ -3305,7 +3661,10 @@ async function renderSettings() {
         <div class="card">
           <h3>${currency} Allocation Targets</h3>
           <div class="section-sub">Set min/max percentage bands for ${currency}.</div>
-          <div class="list">${rows}</div>
+          <div class="list">${rows || '<div class="section-sub">No asset types.</div>'}</div>
+          <div class="card-actions">
+            <button class="btn" data-alloc-save-all data-currency="${currency}">Save ${currency}</button>
+          </div>
         </div>
       `;
     }).join('');
@@ -3468,7 +3827,7 @@ async function renderSettings() {
       {
         key: 'allocations',
         label: 'Allocations',
-        content: `<div class="grid three">${allocationCards}</div>`,
+        content: `<div class="alloc-tab-wrap"><div class="alloc-tab-actions"><button class="btn secondary" id="ai-advisor-btn" type="button">✨ AI 建议</button></div><div class="grid three">${allocationCards}</div></div>`,
       },
       {
         key: 'symbols',
@@ -3505,7 +3864,7 @@ async function renderSettings() {
     `;
 
     initSettingsTabs();
-    bindSettingsActions();
+    bindSettingsActions(assetTypes);
   } catch (err) {
     view.innerHTML = renderEmptyState('Unable to load settings.');
   }
@@ -3540,7 +3899,7 @@ function initSettingsTabs() {
   setActive(initial);
 }
 
-function bindSettingsActions() {
+function bindSettingsActions(assetTypes) {
   const saveApi = document.getElementById('save-api');
   if (saveApi) {
     saveApi.addEventListener('click', () => {
@@ -3561,7 +3920,8 @@ function bindSettingsActions() {
 
   const saveAIAnalysis = document.getElementById('save-ai-analysis');
   if (saveAIAnalysis) {
-    saveAIAnalysis.addEventListener('click', () => {
+    saveAIAnalysis.addEventListener('click', async () => {
+      if (saveAIAnalysis.disabled) return;
       const baseUrlInput = document.getElementById('ai-base-url');
       const modelInput = document.getElementById('ai-model');
       const apiKeyInput = document.getElementById('ai-api-key');
@@ -3582,11 +3942,18 @@ function bindSettingsActions() {
         strategyPrompt: strategyPromptInput && strategyPromptInput.value ? strategyPromptInput.value.trim() : '',
       };
 
-      saveAIAnalysisSettings(settings);
-      if (!settings.model || !settings.apiKey) {
-        showToast('Saved. Set model and API key before running analysis');
-      } else {
-        showToast('AI settings saved');
+      saveAIAnalysis.disabled = true;
+      try {
+        const saved = await saveAIAnalysisSettings(settings);
+        if (!saved.model || !saved.apiKey) {
+          showToast('Saved. Set model and API key before running analysis');
+        } else {
+          showToast('AI settings saved');
+        }
+      } catch (err) {
+        showToast('Save failed');
+      } finally {
+        saveAIAnalysis.disabled = false;
       }
     });
   }
@@ -3679,7 +4046,7 @@ function bindSettingsActions() {
     btn.addEventListener('click', async () => {
       if (btn.disabled) return;
       const accountID = btn.dataset.account;
-      if (!confirm('Delete this account?')) return;
+      if (!await showConfirmModal('Delete this account?')) return;
       try {
         await fetchJSON(`/api/accounts/${accountID}`, { method: 'DELETE' });
         showToast('Account deleted');
@@ -3712,7 +4079,7 @@ function bindSettingsActions() {
     btn.addEventListener('click', async () => {
       if (btn.disabled) return;
       const code = btn.dataset.asset;
-      if (!confirm('Delete this asset type?')) return;
+      if (!await showConfirmModal('Delete this asset type?')) return;
       try {
         await fetchJSON(`/api/asset-types/${code}`, { method: 'DELETE' });
         showToast('Asset type deleted');
@@ -3723,30 +4090,44 @@ function bindSettingsActions() {
     });
   });
 
-  view.querySelectorAll('button[data-alloc-save]').forEach((btn) => {
+  view.querySelectorAll('button[data-alloc-save-all]').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const currency = btn.dataset.currency;
-      const asset = btn.dataset.asset;
-      const minInput = view.querySelector(`input[data-alloc-min][data-currency="${currency}"][data-asset="${asset}"]`);
-      const maxInput = view.querySelector(`input[data-alloc-max][data-currency="${currency}"][data-asset="${asset}"]`);
-      if (!minInput || !maxInput) return;
-      const payload = {
-        currency,
-        asset_type: asset,
-        min_percent: Number(minInput.value || 0),
-        max_percent: Number(maxInput.value || 100),
-      };
+      const minInputs = Array.from(view.querySelectorAll(`input[data-alloc-min][data-currency="${currency}"]`));
+      if (minInputs.length === 0) return;
+      btn.disabled = true;
+      const originalText = btn.textContent;
+      btn.textContent = 'Saving…';
       try {
-        await fetchJSON('/api/allocation-settings', {
-          method: 'PUT',
-          body: JSON.stringify(payload),
-        });
-        showToast('Allocation updated');
+        await Promise.all(minInputs.map((minInput) => {
+          const asset = minInput.dataset.asset;
+          const maxInput = view.querySelector(`input[data-alloc-max][data-currency="${currency}"][data-asset="${asset}"]`);
+          return fetchJSON('/api/allocation-settings', {
+            method: 'PUT',
+            body: JSON.stringify({
+              currency,
+              asset_type: asset,
+              min_percent: Number(minInput.value || 0),
+              max_percent: Number(maxInput ? maxInput.value : 100),
+            }),
+          });
+        }));
+        showToast(`${currency} allocations saved`);
       } catch (err) {
-        showToast('Update failed');
+        showToast('Save failed');
+      } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
       }
     });
   });
+
+  const aiAdvisorBtn = view.querySelector('#ai-advisor-btn');
+  if (aiAdvisorBtn) {
+    aiAdvisorBtn.addEventListener('click', () => {
+      showAIAdvisorModal(assetTypes);
+    });
+  }
 
   view.querySelectorAll('button[data-fx-save]').forEach((btn) => {
     btn.addEventListener('click', async () => {
@@ -3912,6 +4293,352 @@ function bindSettingsActions() {
       }
     });
   });
+}
+
+function showAIAdvisorModal(assetTypes) {
+  const overlay = document.getElementById('ai-advisor-overlay');
+  const stepsEl = document.getElementById('ai-advisor-steps');
+  const contentEl = document.getElementById('ai-advisor-step-content');
+  const prevBtn = document.getElementById('ai-advisor-prev');
+  const nextBtn = document.getElementById('ai-advisor-next');
+  const closeBtn = document.getElementById('ai-advisor-close');
+  if (!overlay || !contentEl) return;
+
+  let currentStep = 0;
+  let adviceResult = null;
+  let isLoading = false;
+
+  const profile = {
+    ageRange: '30s',
+    experienceLevel: 'intermediate',
+    investGoal: 'balanced',
+    riskTolerance: 'balanced',
+    horizon: 'medium',
+    currencies: ['CNY', 'USD', 'HKD'],
+    customPrompt: '',
+  };
+
+  const stepTitles = ['个人信息', '投资偏好', '配置范围', 'AI 建议'];
+
+  function renderStepIndicator() {
+    stepsEl.innerHTML = stepTitles.map((title, i) => {
+      const cls = i < currentStep ? 'advisor-step-done' : i === currentStep ? 'advisor-step-active' : 'advisor-step-pending';
+      return `<span class="advisor-step ${cls}">${escapeHtml(title)}</span>`;
+    }).join('<span class="advisor-step-sep">›</span>');
+  }
+
+  function renderStep0() {
+    const ageOptions = [['20s', '20-29岁'], ['30s', '30-39岁'], ['40s', '40-49岁'], ['50s', '50-59岁'], ['60plus', '60岁以上']];
+    const expOptions = [['beginner', '新手（< 2年）'], ['intermediate', '有一定经验（2-5年）'], ['experienced', '丰富经验（> 5年）']];
+    return `
+      <div class="ai-advisor-form">
+        <div class="field">
+          <label>年龄段</label>
+          <div class="radio-group">
+            ${ageOptions.map(([v, l]) => `
+              <label class="radio-label"><input type="radio" name="ageRange" value="${v}" ${profile.ageRange === v ? 'checked' : ''}> ${escapeHtml(l)}</label>
+            `).join('')}
+          </div>
+        </div>
+        <div class="field">
+          <label>投资经验</label>
+          <div class="radio-group">
+            ${expOptions.map(([v, l]) => `
+              <label class="radio-label"><input type="radio" name="experienceLevel" value="${v}" ${profile.experienceLevel === v ? 'checked' : ''}> ${escapeHtml(l)}</label>
+            `).join('')}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderStep1() {
+    const goalOptions = [['preserve', '资产保值（首要避免亏损）'], ['income', '稳定收益（现金流为主）'], ['growth', '资本增值（追求长期回报）'], ['balanced', '均衡（兼顾收益与安全）']];
+    const riskOptions = [['conservative', '保守（最大可接受回撤 -10%）'], ['balanced', '均衡（最大可接受回撤 -25%）'], ['aggressive', '激进（最大可接受回撤 -40%+）']];
+    const horizonOptions = [['short', '短期（1-3年）'], ['medium', '中期（3-10年）'], ['long', '长期（10年以上）']];
+    return `
+      <div class="ai-advisor-form">
+        <div class="field">
+          <label>投资目标</label>
+          <div class="radio-group">
+            ${goalOptions.map(([v, l]) => `
+              <label class="radio-label"><input type="radio" name="investGoal" value="${v}" ${profile.investGoal === v ? 'checked' : ''}> ${escapeHtml(l)}</label>
+            `).join('')}
+          </div>
+        </div>
+        <div class="field">
+          <label>风险承受能力</label>
+          <div class="radio-group">
+            ${riskOptions.map(([v, l]) => `
+              <label class="radio-label"><input type="radio" name="riskTolerance" value="${v}" ${profile.riskTolerance === v ? 'checked' : ''}> ${escapeHtml(l)}</label>
+            `).join('')}
+          </div>
+        </div>
+        <div class="field">
+          <label>投资期限</label>
+          <div class="radio-group">
+            ${horizonOptions.map(([v, l]) => `
+              <label class="radio-label"><input type="radio" name="horizon" value="${v}" ${profile.horizon === v ? 'checked' : ''}> ${escapeHtml(l)}</label>
+            `).join('')}
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderStep2() {
+    const currencyOptions = [['CNY', '人民币 CNY'], ['USD', '美元 USD'], ['HKD', '港币 HKD']];
+    return `
+      <div class="ai-advisor-form">
+        <div class="field">
+          <label>需要建议的币种</label>
+          <div class="radio-group">
+            ${currencyOptions.map(([v, l]) => `
+              <label class="radio-label"><input type="checkbox" name="currencies" value="${v}" ${profile.currencies.includes(v) ? 'checked' : ''}> ${escapeHtml(l)}</label>
+            `).join('')}
+          </div>
+        </div>
+        <div class="field">
+          <label>补充说明（可选）</label>
+          <textarea id="ai-advisor-custom" rows="3" placeholder="例如：偏向科技股，希望保留20%以上现金，不考虑加密货币…">${escapeHtml(profile.customPrompt)}</textarea>
+          <div class="section-sub">将作为额外偏好传递给 AI，不填则基于标准模型建议。</div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderStep3Loading() {
+    return `
+      <div class="ai-advisor-loading">
+        <div class="loading-spinner"></div>
+        <p>AI 正在分析您的投资画像，生成配置建议…</p>
+        <div class="section-sub">通常需要 10-30 秒，请稍候</div>
+      </div>
+    `;
+  }
+
+  function renderStep3Results(result) {
+    if (!result) {
+      return `<div class="section-sub" style="padding:16px">未能获取建议，请检查 AI 配置后重试。</div>`;
+    }
+    const model = result.model ? escapeHtml(String(result.model)) : '—';
+    const summary = result.summary ? escapeHtml(String(result.summary)) : '—';
+    const rationale = result.rationale ? escapeHtml(String(result.rationale)) : '';
+    const disclaimer = result.disclaimer ? escapeHtml(String(result.disclaimer)) : '仅供参考，不构成投资建议。';
+    const allocs = Array.isArray(result.allocations) ? result.allocations : [];
+
+    const groupByCurrency = {};
+    allocs.forEach((a) => {
+      const cur = String(a.currency || '').toUpperCase();
+      if (!groupByCurrency[cur]) groupByCurrency[cur] = [];
+      groupByCurrency[cur].push(a);
+    });
+
+    const currencyBlocks = Object.keys(groupByCurrency).sort().map((cur) => {
+      const items = groupByCurrency[cur].map((a) => `
+        <div class="advice-entry">
+          <div class="advice-entry-head">
+            <span class="advice-label">${escapeHtml(a.label || a.asset_type)}</span>
+            <span class="advice-range">${Number(a.min_percent).toFixed(1)}% – ${Number(a.max_percent).toFixed(1)}%</span>
+            <button class="btn secondary advice-apply-btn" type="button"
+              data-apply-currency="${escapeHtml(String(a.currency))}"
+              data-apply-asset="${escapeHtml(String(a.asset_type))}"
+              data-apply-min="${Number(a.min_percent)}"
+              data-apply-max="${Number(a.max_percent)}">应用</button>
+          </div>
+          <div class="section-sub">${escapeHtml(String(a.rationale || ''))}</div>
+        </div>
+      `).join('');
+      return `
+        <div class="advice-currency-block">
+          <div class="advice-currency-header">
+            <strong>${escapeHtml(cur)}</strong>
+            <button class="btn secondary" type="button" data-apply-all-currency="${escapeHtml(cur)}">全部应用</button>
+          </div>
+          <div class="advice-entries">${items}</div>
+        </div>
+      `;
+    }).join('');
+
+    return `
+      <div class="ai-advisor-results">
+        <div class="section-sub advice-meta">模型: ${model}</div>
+        <div class="advice-summary"><strong>建议摘要：</strong>${summary}</div>
+        ${rationale ? `<div class="advice-rationale section-sub">${rationale}</div>` : ''}
+        <div class="advice-list">${currencyBlocks || '<div class="section-sub">无配置建议返回。</div>'}</div>
+        <div class="advice-disclaimer section-sub">${disclaimer}</div>
+      </div>
+    `;
+  }
+
+  function collectCurrentStep() {
+    if (currentStep === 0) {
+      const ageEl = contentEl.querySelector('input[name="ageRange"]:checked');
+      const expEl = contentEl.querySelector('input[name="experienceLevel"]:checked');
+      if (ageEl) profile.ageRange = ageEl.value;
+      if (expEl) profile.experienceLevel = expEl.value;
+    } else if (currentStep === 1) {
+      const goalEl = contentEl.querySelector('input[name="investGoal"]:checked');
+      const riskEl = contentEl.querySelector('input[name="riskTolerance"]:checked');
+      const horizEl = contentEl.querySelector('input[name="horizon"]:checked');
+      if (goalEl) profile.investGoal = goalEl.value;
+      if (riskEl) profile.riskTolerance = riskEl.value;
+      if (horizEl) profile.horizon = horizEl.value;
+    } else if (currentStep === 2) {
+      const checked = Array.from(contentEl.querySelectorAll('input[name="currencies"]:checked')).map((el) => el.value);
+      if (checked.length > 0) profile.currencies = checked;
+      const customEl = contentEl.querySelector('#ai-advisor-custom');
+      if (customEl) profile.customPrompt = customEl.value.trim();
+    }
+  }
+
+  function applyAdviceEntry(currency, asset, min, max) {
+    const minInput = document.querySelector(`input[data-alloc-min][data-currency="${currency}"][data-asset="${asset}"]`);
+    const maxInput = document.querySelector(`input[data-alloc-max][data-currency="${currency}"][data-asset="${asset}"]`);
+    if (minInput) minInput.value = min;
+    if (maxInput) maxInput.value = max;
+  }
+
+  function attachResultHandlers() {
+    contentEl.querySelectorAll('.advice-apply-btn').forEach((applyBtn) => {
+      applyBtn.addEventListener('click', () => {
+        const { applyCurrency, applyAsset, applyMin, applyMax } = applyBtn.dataset;
+        applyAdviceEntry(applyCurrency, applyAsset, applyMin, applyMax);
+        applyBtn.textContent = '已应用';
+        applyBtn.disabled = true;
+        showToast(`已应用 ${applyCurrency} ${applyAsset} 配置`);
+      });
+    });
+    contentEl.querySelectorAll('button[data-apply-all-currency]').forEach((applyAllBtn) => {
+      applyAllBtn.addEventListener('click', () => {
+        const currency = applyAllBtn.dataset.applyAllCurrency;
+        const entries = Array.isArray(adviceResult && adviceResult.allocations)
+          ? adviceResult.allocations.filter((a) => String(a.currency).toUpperCase() === currency)
+          : [];
+        entries.forEach((a) => applyAdviceEntry(String(a.currency).toUpperCase(), a.asset_type, a.min_percent, a.max_percent));
+        applyAllBtn.textContent = '已应用';
+        applyAllBtn.disabled = true;
+        contentEl.querySelectorAll(`.advice-apply-btn[data-apply-currency="${currency}"]`).forEach((b) => {
+          b.textContent = '已应用';
+          b.disabled = true;
+        });
+        showToast(`已应用 ${currency} 全部配置建议`);
+      });
+    });
+  }
+
+  function renderCurrentStep() {
+    renderStepIndicator();
+    if (currentStep === 0) {
+      contentEl.innerHTML = renderStep0();
+    } else if (currentStep === 1) {
+      contentEl.innerHTML = renderStep1();
+    } else if (currentStep === 2) {
+      contentEl.innerHTML = renderStep2();
+    } else {
+      if (isLoading) {
+        contentEl.innerHTML = renderStep3Loading();
+      } else {
+        contentEl.innerHTML = renderStep3Results(adviceResult);
+        attachResultHandlers();
+      }
+    }
+
+    prevBtn.style.display = currentStep === 0 ? 'none' : '';
+    if (currentStep < 2) {
+      nextBtn.textContent = '下一步';
+      nextBtn.disabled = false;
+    } else if (currentStep === 2) {
+      nextBtn.textContent = '获取 AI 建议';
+      nextBtn.disabled = false;
+    } else {
+      nextBtn.textContent = isLoading ? '分析中…' : '重新咨询';
+      nextBtn.disabled = isLoading;
+    }
+  }
+
+  async function fetchAdvice() {
+    const settings = await loadAIAnalysisSettings();
+    const model = (settings.model || '').trim();
+    const apiKey = (settings.apiKey || '').trim();
+    if (!model || !apiKey) {
+      closeModal();
+      localStorage.setItem('activeSettingsTab', 'api');
+      showToast('请先在 Settings > API 配置 AI 模型和 API Key');
+      return;
+    }
+    isLoading = true;
+    renderCurrentStep();
+    try {
+      adviceResult = await fetchJSON('/api/ai/allocation-advice', {
+        method: 'POST',
+        body: JSON.stringify({
+          base_url: (settings.baseUrl || 'https://api.openai.com/v1').trim(),
+          api_key: apiKey,
+          model,
+          age_range: profile.ageRange,
+          invest_goal: profile.investGoal,
+          risk_tolerance: profile.riskTolerance,
+          horizon: profile.horizon,
+          experience_level: profile.experienceLevel,
+          currencies: profile.currencies,
+          custom_prompt: profile.customPrompt,
+        }),
+      });
+    } catch (err) {
+      adviceResult = null;
+      showToast('AI 建议获取失败，请检查 API 配置');
+    } finally {
+      isLoading = false;
+      renderCurrentStep();
+    }
+  }
+
+  function closeModal() {
+    overlay.classList.add('hidden');
+    prevBtn.removeEventListener('click', onPrev);
+    nextBtn.removeEventListener('click', onNext);
+    closeBtn.removeEventListener('click', closeModal);
+    document.removeEventListener('keydown', onKeydown);
+  }
+
+  function onPrev() {
+    if (currentStep > 0 && currentStep < 3) {
+      currentStep -= 1;
+      renderCurrentStep();
+    }
+  }
+
+  async function onNext() {
+    if (currentStep < 2) {
+      collectCurrentStep();
+      currentStep += 1;
+      renderCurrentStep();
+    } else if (currentStep === 2) {
+      collectCurrentStep();
+      currentStep = 3;
+      await fetchAdvice();
+    } else if (!isLoading) {
+      currentStep = 0;
+      adviceResult = null;
+      renderCurrentStep();
+    }
+  }
+
+  function onKeydown(e) {
+    if (e.key === 'Escape') closeModal();
+  }
+
+  prevBtn.addEventListener('click', onPrev);
+  nextBtn.addEventListener('click', onNext);
+  closeBtn.addEventListener('click', closeModal);
+  document.addEventListener('keydown', onKeydown);
+
+  currentStep = 0;
+  adviceResult = null;
+  isLoading = false;
+  overlay.classList.remove('hidden');
+  renderCurrentStep();
 }
 
 function registerServiceWorker() {

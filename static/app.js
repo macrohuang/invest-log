@@ -4,12 +4,15 @@ const state = {
   aiAnalysisByCurrency: {},
   aiAnalysisHistoryByCurrency: {}, // { currency: HoldingsAnalysisResult[] }
   holdingsFilters: {}, // { currency: { accountIds: [], symbols: [] } }
+  aiSettings: null,
+  aiSettingsLoaded: false,
 };
 
 // Tracks which filter popover is open across re-renders: { filterType, currency } | null
 let _openPopover = null;
 
 const aiAnalysisSettingsKey = 'aiHoldingsAnalysisSettings';
+const aiAnalysisAPIKeyStorageKey = 'aiHoldingsAnalysisApiKey';
 
 const view = document.getElementById('view');
 const toastEl = document.getElementById('toast');
@@ -210,48 +213,177 @@ function getRouteQuery() {
   return new URLSearchParams(hash.slice(queryIndex + 1));
 }
 
-function loadAIAnalysisSettings() {
+function defaultAIAnalysisSettings() {
+  return {
+    baseUrl: 'https://api.openai.com/v1',
+    model: '',
+    riskProfile: 'balanced',
+    horizon: 'medium',
+    adviceStyle: 'balanced',
+    allowNewSymbols: true,
+    strategyPrompt: '',
+  };
+}
+
+function normalizeChoice(value, allowed, fallback) {
+  const normalized = String(value || '').trim().toLowerCase();
+  return allowed.includes(normalized) ? normalized : fallback;
+}
+
+function normalizeAIAnalysisSettings(raw) {
+  const defaults = defaultAIAnalysisSettings();
+  const source = raw && typeof raw === 'object' ? raw : {};
+
+  const baseUrlRaw = source.baseUrl || source.base_url || defaults.baseUrl;
+  const baseUrl = trimTrailingSlash(String(baseUrlRaw || '').trim()) || defaults.baseUrl;
+  const model = String(source.model || '').trim();
+  const riskProfile = normalizeChoice(source.riskProfile || source.risk_profile, ['conservative', 'balanced', 'aggressive'], defaults.riskProfile);
+  const horizon = normalizeChoice(source.horizon, ['short', 'medium', 'long'], defaults.horizon);
+  const adviceStyle = normalizeChoice(source.adviceStyle || source.advice_style, ['conservative', 'balanced', 'aggressive'], defaults.adviceStyle);
+  const strategyPrompt = String(source.strategyPrompt || source.strategy_prompt || '').trim();
+
+  let allowNewSymbols = defaults.allowNewSymbols;
+  if (typeof source.allowNewSymbols === 'boolean') {
+    allowNewSymbols = source.allowNewSymbols;
+  } else if (typeof source.allow_new_symbols === 'boolean') {
+    allowNewSymbols = source.allow_new_symbols;
+  }
+
+  return {
+    baseUrl,
+    model,
+    riskProfile,
+    horizon,
+    adviceStyle,
+    allowNewSymbols,
+    strategyPrompt,
+  };
+}
+
+function loadLegacyAIAnalysisSettings() {
   try {
     const raw = localStorage.getItem(aiAnalysisSettingsKey);
     if (!raw) {
-      return {
-        baseUrl: 'https://api.openai.com/v1',
-        model: '',
-        apiKey: '',
-        riskProfile: 'balanced',
-        horizon: 'medium',
-        adviceStyle: 'balanced',
-        allowNewSymbols: true,
-        strategyPrompt: '',
-      };
+      return null;
     }
     const parsed = JSON.parse(raw);
-    return {
-      baseUrl: parsed.baseUrl || 'https://api.openai.com/v1',
-      model: parsed.model || '',
-      apiKey: parsed.apiKey || '',
-      riskProfile: parsed.riskProfile || 'balanced',
-      horizon: parsed.horizon || 'medium',
-      adviceStyle: parsed.adviceStyle || 'balanced',
-      allowNewSymbols: parsed.allowNewSymbols !== false,
-      strategyPrompt: parsed.strategyPrompt || '',
-    };
+    if (!parsed || typeof parsed !== 'object') {
+      return null;
+    }
+    return parsed;
   } catch (err) {
-    return {
-      baseUrl: 'https://api.openai.com/v1',
-      model: '',
-      apiKey: '',
-      riskProfile: 'balanced',
-      horizon: 'medium',
-      adviceStyle: 'balanced',
-      allowNewSymbols: true,
-      strategyPrompt: '',
-    };
+    return null;
   }
 }
 
-function saveAIAnalysisSettings(settings) {
-  localStorage.setItem(aiAnalysisSettingsKey, JSON.stringify(settings));
+function getAIAnalysisAPIKey(legacySettings) {
+  const stored = (localStorage.getItem(aiAnalysisAPIKeyStorageKey) || '').trim();
+  if (stored) {
+    return stored;
+  }
+
+  const fallback = legacySettings && legacySettings.apiKey
+    ? String(legacySettings.apiKey).trim()
+    : '';
+  if (fallback) {
+    localStorage.setItem(aiAnalysisAPIKeyStorageKey, fallback);
+  }
+  return fallback;
+}
+
+function setAIAnalysisAPIKey(apiKey) {
+  const normalized = String(apiKey || '').trim();
+  if (!normalized) {
+    localStorage.removeItem(aiAnalysisAPIKeyStorageKey);
+    return '';
+  }
+  localStorage.setItem(aiAnalysisAPIKeyStorageKey, normalized);
+  return normalized;
+}
+
+function isDefaultAIAnalysisSettings(settings) {
+  const defaults = defaultAIAnalysisSettings();
+  return settings.baseUrl === defaults.baseUrl &&
+    settings.model === defaults.model &&
+    settings.riskProfile === defaults.riskProfile &&
+    settings.horizon === defaults.horizon &&
+    settings.adviceStyle === defaults.adviceStyle &&
+    settings.allowNewSymbols === defaults.allowNewSymbols &&
+    settings.strategyPrompt === defaults.strategyPrompt;
+}
+
+async function persistAIAnalysisSettings(settings) {
+  const normalized = normalizeAIAnalysisSettings(settings);
+  const saved = await fetchJSON('/api/ai-settings', {
+    method: 'PUT',
+    body: JSON.stringify({
+      base_url: normalized.baseUrl,
+      model: normalized.model,
+      risk_profile: normalized.riskProfile,
+      horizon: normalized.horizon,
+      advice_style: normalized.adviceStyle,
+      allow_new_symbols: normalized.allowNewSymbols,
+      strategy_prompt: normalized.strategyPrompt,
+    }),
+  });
+  return normalizeAIAnalysisSettings(saved || normalized);
+}
+
+async function loadAIAnalysisSettings(options = {}) {
+  const forceRefresh = !!options.forceRefresh;
+  const legacySettings = loadLegacyAIAnalysisSettings();
+  const apiKey = getAIAnalysisAPIKey(legacySettings);
+
+  if (!forceRefresh && state.aiSettingsLoaded && state.aiSettings) {
+    return {
+      ...state.aiSettings,
+      apiKey,
+    };
+  }
+
+  let normalized = defaultAIAnalysisSettings();
+  let loadedFromServer = false;
+  try {
+    const remote = await fetchJSON('/api/ai-settings');
+    normalized = normalizeAIAnalysisSettings(remote);
+    loadedFromServer = true;
+  } catch (err) {
+    if (legacySettings) {
+      normalized = normalizeAIAnalysisSettings(legacySettings);
+    }
+  }
+
+  if (loadedFromServer && legacySettings) {
+    const legacyNormalized = normalizeAIAnalysisSettings(legacySettings);
+    if (isDefaultAIAnalysisSettings(normalized) && !isDefaultAIAnalysisSettings(legacyNormalized)) {
+      try {
+        normalized = await persistAIAnalysisSettings(legacyNormalized);
+      } catch (err) {
+        // Keep server settings when migration write fails.
+      }
+    }
+    localStorage.removeItem(aiAnalysisSettingsKey);
+  }
+
+  state.aiSettings = normalized;
+  state.aiSettingsLoaded = true;
+  return {
+    ...normalized,
+    apiKey,
+  };
+}
+
+async function saveAIAnalysisSettings(settings) {
+  const normalized = normalizeAIAnalysisSettings(settings);
+  const saved = await persistAIAnalysisSettings(normalized);
+  state.aiSettings = saved;
+  state.aiSettingsLoaded = true;
+  const apiKey = setAIAnalysisAPIKey(settings && settings.apiKey ? settings.apiKey : '');
+  localStorage.removeItem(aiAnalysisSettingsKey);
+  return {
+    ...saved,
+    apiKey,
+  };
 }
 
 function formatActionLabel(action) {
@@ -1558,7 +1690,7 @@ function bindHoldingsActions() {
 }
 
 async function runAIHoldingsAnalysis(currency, analysisType) {
-  const settings = loadAIAnalysisSettings();
+  const settings = await loadAIAnalysisSettings();
 
   const normalizedSettings = {
     baseUrl: (settings.baseUrl || 'https://api.openai.com/v1').trim(),
@@ -1577,8 +1709,6 @@ async function runAIHoldingsAnalysis(currency, analysisType) {
     showToast('Set AI model and API Key in Settings > API');
     return false;
   }
-
-  saveAIAnalysisSettings(normalizedSettings);
 
   const result = await fetchJSON('/api/ai/holdings-analysis', {
     method: 'POST',
@@ -1680,7 +1810,7 @@ async function renderSymbolAnalysis() {
 }
 
 async function runSymbolAnalysis(symbol, currency) {
-  const settings = loadAIAnalysisSettings();
+  const settings = await loadAIAnalysisSettings();
   const normalizedSettings = {
     baseUrl: (settings.baseUrl || 'https://api.openai.com/v1').trim(),
     model: (settings.model || '').trim(),
@@ -3272,14 +3402,15 @@ async function renderSettings() {
   `;
 
   try {
-    const [accounts, assetTypes, allocationSettings, exchangeRates, symbols, holdings, storageInfo] = await Promise.all([
+    const [accounts, assetTypes, allocationSettings, exchangeRates, symbols, holdings, storageInfo, aiSettings] = await Promise.all([
       fetchJSON('/api/accounts'),
       fetchJSON('/api/asset-types'),
       fetchJSON('/api/allocation-settings'),
       fetchJSON('/api/exchange-rates'),
       fetchJSON('/api/symbols'),
       fetchJSON('/api/holdings'),
-      fetchJSON('/api/storage')
+      fetchJSON('/api/storage'),
+      loadAIAnalysisSettings({ forceRefresh: true }),
     ]);
 
     const settingsMap = {};
@@ -3307,7 +3438,6 @@ async function renderSettings() {
       </div>
     `;
 
-    const aiSettings = loadAIAnalysisSettings();
     const aiAnalysisSection = `
       <div class="card">
         <h3>AI Analysis</h3>
@@ -3790,7 +3920,8 @@ function bindSettingsActions(assetTypes) {
 
   const saveAIAnalysis = document.getElementById('save-ai-analysis');
   if (saveAIAnalysis) {
-    saveAIAnalysis.addEventListener('click', () => {
+    saveAIAnalysis.addEventListener('click', async () => {
+      if (saveAIAnalysis.disabled) return;
       const baseUrlInput = document.getElementById('ai-base-url');
       const modelInput = document.getElementById('ai-model');
       const apiKeyInput = document.getElementById('ai-api-key');
@@ -3811,11 +3942,18 @@ function bindSettingsActions(assetTypes) {
         strategyPrompt: strategyPromptInput && strategyPromptInput.value ? strategyPromptInput.value.trim() : '',
       };
 
-      saveAIAnalysisSettings(settings);
-      if (!settings.model || !settings.apiKey) {
-        showToast('Saved. Set model and API key before running analysis');
-      } else {
-        showToast('AI settings saved');
+      saveAIAnalysis.disabled = true;
+      try {
+        const saved = await saveAIAnalysisSettings(settings);
+        if (!saved.model || !saved.apiKey) {
+          showToast('Saved. Set model and API key before running analysis');
+        } else {
+          showToast('AI settings saved');
+        }
+      } catch (err) {
+        showToast('Save failed');
+      } finally {
+        saveAIAnalysis.disabled = false;
       }
     });
   }
@@ -4420,7 +4558,7 @@ function showAIAdvisorModal(assetTypes) {
   }
 
   async function fetchAdvice() {
-    const settings = loadAIAnalysisSettings();
+    const settings = await loadAIAnalysisSettings();
     const model = (settings.model || '').trim();
     const apiKey = (settings.apiKey || '').trim();
     if (!model || !apiKey) {

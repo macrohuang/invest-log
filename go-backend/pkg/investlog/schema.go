@@ -156,6 +156,26 @@ func initDatabase(db *sql.DB) error {
 		}
 	}
 
+	if err := exec(tx, `
+		CREATE TABLE IF NOT EXISTS ai_settings (
+			id INTEGER PRIMARY KEY CHECK(id = 1),
+			base_url TEXT NOT NULL DEFAULT 'https://api.openai.com/v1',
+			model TEXT NOT NULL DEFAULT '',
+			risk_profile TEXT NOT NULL DEFAULT 'balanced',
+			horizon TEXT NOT NULL DEFAULT 'medium',
+			advice_style TEXT NOT NULL DEFAULT 'balanced',
+			allow_new_symbols INTEGER NOT NULL DEFAULT 1 CHECK(allow_new_symbols IN (0, 1)),
+			strategy_prompt TEXT NOT NULL DEFAULT '',
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)
+	`); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec("INSERT INTO ai_settings (id) VALUES (1) ON CONFLICT(id) DO NOTHING"); err != nil {
+		return err
+	}
+
 	hasAssetTypeCheck, err := allocationSettingsHasAssetTypeCheck(tx)
 	if err != nil {
 		return err

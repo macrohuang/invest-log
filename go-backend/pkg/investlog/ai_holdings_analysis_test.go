@@ -190,7 +190,7 @@ func TestBuildHoldingsAnalysisUserPrompt_ContainsStrategyPrompt(t *testing.T) {
 		AdviceStyle:     "balanced",
 		AllowNewSymbols: true,
 		StrategyPrompt:  "优先控制回撤，不新增中概股",
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("buildHoldingsAnalysisUserPrompt failed: %v", err)
 	}
