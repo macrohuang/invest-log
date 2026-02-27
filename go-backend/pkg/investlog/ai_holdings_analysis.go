@@ -3,6 +3,7 @@ package investlog
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -61,6 +62,17 @@ type HoldingsAnalysisRequest struct {
 	AdviceStyle     string
 	AllowNewSymbols bool
 	StrategyPrompt  string
+	AnalysisType    string // "adhoc", "weekly", "monthly"
+}
+
+// HoldingsSymbolRef is a brief summary of a symbol's latest AI analysis used as context.
+type HoldingsSymbolRef struct {
+	Symbol    string `json:"symbol"`
+	ID        int64  `json:"id"`
+	Rating    string `json:"rating"`
+	Action    string `json:"action"`
+	Summary   string `json:"summary"`
+	CreatedAt string `json:"created_at"`
 }
 
 // HoldingsAnalysisRecommendation contains one actionable recommendation.
@@ -111,14 +123,17 @@ func anyToString(v any) string {
 
 // HoldingsAnalysisResult is the structured response returned to clients.
 type HoldingsAnalysisResult struct {
+	ID              int64                            `json:"id,omitempty"`
 	GeneratedAt     string                           `json:"generated_at"`
 	Model           string                           `json:"model"`
 	Currency        string                           `json:"currency,omitempty"`
+	AnalysisType    string                           `json:"analysis_type,omitempty"`
 	OverallSummary  string                           `json:"overall_summary"`
 	RiskLevel       string                           `json:"risk_level"`
 	KeyFindings     []string                         `json:"key_findings"`
 	Recommendations []HoldingsAnalysisRecommendation `json:"recommendations"`
 	Disclaimer      string                           `json:"disclaimer"`
+	SymbolRefs      []HoldingsSymbolRef              `json:"symbol_refs,omitempty"`
 }
 
 type holdingsAnalysisCurrencySnapshot struct {
@@ -178,7 +193,10 @@ func (c *Core) AnalyzeHoldings(req HoldingsAnalysisRequest) (*HoldingsAnalysisRe
 		return nil, err
 	}
 
-	userPrompt, err := buildHoldingsAnalysisUserPrompt(promptInput, normalizedReq)
+	// Collect available symbol-level AI analysis for context.
+	symbolRefs := c.fetchSymbolAnalysisRefs(promptInput.Holdings)
+
+	userPrompt, err := buildHoldingsAnalysisUserPrompt(promptInput, normalizedReq, symbolRefs)
 	if err != nil {
 		return nil, err
 	}
@@ -230,13 +248,203 @@ func (c *Core) AnalyzeHoldings(req HoldingsAnalysisRequest) (*HoldingsAnalysisRe
 		GeneratedAt:     NowRFC3339InShanghai(),
 		Model:           model,
 		Currency:        normalizedReq.Currency,
+		AnalysisType:    normalizedReq.AnalysisType,
 		OverallSummary:  overallSummary,
 		RiskLevel:       riskLevel,
 		KeyFindings:     normalizeFindings(parsed.KeyFindings),
 		Recommendations: normalizeRecommendations(parsed.Recommendations),
 		Disclaimer:      disclaimer,
+		SymbolRefs:      symbolRefs,
 	}
+
+	if id, err := c.saveHoldingsAnalysis(result); err != nil {
+		c.Logger().Warn("failed to save holdings analysis", "err", err)
+	} else {
+		result.ID = id
+	}
+
 	return result, nil
+}
+
+// fetchSymbolAnalysisRefs collects the latest completed symbol analysis summary for each holding.
+func (c *Core) fetchSymbolAnalysisRefs(holdings []holdingsAnalysisCurrencySnapshot) []HoldingsSymbolRef {
+	var refs []HoldingsSymbolRef
+	seen := make(map[string]bool)
+	for _, snap := range holdings {
+		for _, item := range snap.Symbols {
+			key := item.Symbol + ":" + snap.Currency
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			analysis, err := c.GetSymbolAnalysis(item.Symbol, snap.Currency)
+			if err != nil || analysis == nil || analysis.Synthesis == nil {
+				continue
+			}
+			summary := analysis.Synthesis.OverallSummary
+			if len(summary) > 250 {
+				summary = summary[:250] + "…"
+			}
+			refs = append(refs, HoldingsSymbolRef{
+				Symbol:    item.Symbol,
+				ID:        analysis.ID,
+				Rating:    analysis.Synthesis.OverallRating,
+				Action:    analysis.Synthesis.TargetAction,
+				Summary:   summary,
+				CreatedAt: analysis.CreatedAt,
+			})
+		}
+	}
+	return refs
+}
+
+// saveHoldingsAnalysis persists a completed holdings analysis to the database.
+func (c *Core) saveHoldingsAnalysis(result *HoldingsAnalysisResult) (int64, error) {
+	findingsJSON, err := json.Marshal(result.KeyFindings)
+	if err != nil {
+		return 0, fmt.Errorf("marshal key_findings: %w", err)
+	}
+	recsJSON, err := json.Marshal(result.Recommendations)
+	if err != nil {
+		return 0, fmt.Errorf("marshal recommendations: %w", err)
+	}
+	var refsJSON []byte
+	if len(result.SymbolRefs) > 0 {
+		refsJSON, err = json.Marshal(result.SymbolRefs)
+		if err != nil {
+			return 0, fmt.Errorf("marshal symbol_refs: %w", err)
+		}
+	}
+
+	res, err := c.db.Exec(
+		`INSERT INTO holdings_analyses
+			(currency, model, analysis_type, risk_level, overall_summary, key_findings, recommendations, disclaimer, symbol_refs)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		result.Currency,
+		result.Model,
+		result.AnalysisType,
+		result.RiskLevel,
+		result.OverallSummary,
+		string(findingsJSON),
+		string(recsJSON),
+		result.Disclaimer,
+		nullableString(string(refsJSON)),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("insert holdings_analysis: %w", err)
+	}
+	return res.LastInsertId()
+}
+
+func nullableString(s string) any {
+	if s == "" || s == "null" {
+		return nil
+	}
+	return s
+}
+
+// GetHoldingsAnalysis returns the latest saved analysis for the given currency.
+func (c *Core) GetHoldingsAnalysis(currency string) (*HoldingsAnalysisResult, error) {
+	currency = strings.ToUpper(strings.TrimSpace(currency))
+	results, err := c.GetHoldingsAnalysisHistory(currency, 1)
+	if err != nil {
+		return nil, err
+	}
+	if len(results) == 0 {
+		return nil, nil
+	}
+	return &results[0], nil
+}
+
+// GetHoldingsAnalysisHistory returns up to limit recent analyses for the given currency.
+func (c *Core) GetHoldingsAnalysisHistory(currency string, limit int) ([]HoldingsAnalysisResult, error) {
+	currency = strings.ToUpper(strings.TrimSpace(currency))
+	if limit <= 0 {
+		limit = 10
+	}
+
+	var (
+		query string
+		args  []any
+	)
+	if currency != "" {
+		query = `SELECT id, currency, model, analysis_type, risk_level, overall_summary, key_findings, recommendations, disclaimer, symbol_refs, created_at
+		          FROM holdings_analyses WHERE currency = ? ORDER BY created_at DESC LIMIT ?`
+		args = []any{currency, limit}
+	} else {
+		query = `SELECT id, currency, model, analysis_type, risk_level, overall_summary, key_findings, recommendations, disclaimer, symbol_refs, created_at
+		          FROM holdings_analyses ORDER BY created_at DESC LIMIT ?`
+		args = []any{limit}
+	}
+
+	rows, err := c.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query holdings_analyses: %w", err)
+	}
+	defer rows.Close()
+
+	var results []HoldingsAnalysisResult
+	for rows.Next() {
+		var (
+			id                              int64
+			curr, model, analysisType       string
+			riskLevel, overallSummary       sql.NullString
+			keyFindingsRaw, recsRaw         sql.NullString
+			disclaimer, symbolRefsRaw       sql.NullString
+			createdAt                       string
+		)
+		if err := rows.Scan(&id, &curr, &model, &analysisType, &riskLevel, &overallSummary,
+			&keyFindingsRaw, &recsRaw, &disclaimer, &symbolRefsRaw, &createdAt); err != nil {
+			return nil, fmt.Errorf("scan holdings_analysis row: %w", err)
+		}
+
+		result := HoldingsAnalysisResult{
+			ID:           id,
+			GeneratedAt:  createdAt,
+			Model:        model,
+			Currency:     curr,
+			AnalysisType: analysisType,
+			RiskLevel:    riskLevel.String,
+			OverallSummary: overallSummary.String,
+			Disclaimer:   disclaimer.String,
+		}
+
+		if keyFindingsRaw.Valid && keyFindingsRaw.String != "" {
+			var findings []string
+			if err := json.Unmarshal([]byte(keyFindingsRaw.String), &findings); err == nil {
+				result.KeyFindings = findings
+			}
+		}
+		if result.KeyFindings == nil {
+			result.KeyFindings = []string{}
+		}
+
+		if recsRaw.Valid && recsRaw.String != "" {
+			var recs []HoldingsAnalysisRecommendation
+			if err := json.Unmarshal([]byte(recsRaw.String), &recs); err == nil {
+				result.Recommendations = recs
+			}
+		}
+		if result.Recommendations == nil {
+			result.Recommendations = []HoldingsAnalysisRecommendation{}
+		}
+
+		if symbolRefsRaw.Valid && symbolRefsRaw.String != "" {
+			var refs []HoldingsSymbolRef
+			if err := json.Unmarshal([]byte(symbolRefsRaw.String), &refs); err == nil {
+				result.SymbolRefs = refs
+			}
+		}
+
+		results = append(results, result)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if results == nil {
+		results = []HoldingsAnalysisResult{}
+	}
+	return results, nil
 }
 
 func normalizeHoldingsAnalysisRequest(req HoldingsAnalysisRequest) (HoldingsAnalysisRequest, error) {
@@ -285,6 +493,16 @@ func normalizeHoldingsAnalysisRequest(req HoldingsAnalysisRequest) (HoldingsAnal
 	}
 	normalized.AdviceStyle = adviceStyle
 	normalized.StrategyPrompt = strings.TrimSpace(req.StrategyPrompt)
+
+	analysisType, err := normalizeEnum(strings.TrimSpace(req.AnalysisType), "adhoc", map[string]struct{}{
+		"adhoc":   {},
+		"weekly":  {},
+		"monthly": {},
+	})
+	if err != nil {
+		return HoldingsAnalysisRequest{}, fmt.Errorf("invalid analysis_type: %w", err)
+	}
+	normalized.AnalysisType = analysisType
 
 	return normalized, nil
 }
@@ -343,7 +561,7 @@ func (c *Core) buildHoldingsAnalysisPromptInput(currency string) (*holdingsAnaly
 	return &holdingsAnalysisPromptInput{Holdings: holdings}, nil
 }
 
-func buildHoldingsAnalysisUserPrompt(input *holdingsAnalysisPromptInput, req HoldingsAnalysisRequest) (string, error) {
+func buildHoldingsAnalysisUserPrompt(input *holdingsAnalysisPromptInput, req HoldingsAnalysisRequest, symbolRefs []HoldingsSymbolRef) (string, error) {
 	promptInput := holdingsAnalysisPromptInput{
 		RiskProfile:     req.RiskProfile,
 		Horizon:         req.Horizon,
@@ -357,16 +575,34 @@ func buildHoldingsAnalysisUserPrompt(input *holdingsAnalysisPromptInput, req Hol
 		return "", fmt.Errorf("marshal holdings prompt input: %w", err)
 	}
 
-	prompt := fmt.Sprintf(`请基于以下输入完成分析并给出建议：
-%s
+	var sb strings.Builder
+	sb.WriteString("请基于以下输入完成分析并给出建议：\n")
+	sb.WriteString(string(payload))
+	sb.WriteString("\n\n输出要求：\n")
+	sb.WriteString("1) 必须是 JSON 对象。\n")
+	sb.WriteString("2) recommendations 中建议尽量覆盖：仓位集中风险、资产分散、回撤防御、长期价值。\n")
+	sb.WriteString("3) 允许新增标的时，可给出 add 建议并点名标的。\n")
+	sb.WriteString("4) 每条建议必须给出 theory_tag 和 rationale。\n")
+	sb.WriteString("5) 若 strategy_prompt 非空，需优先吸收为策略偏好，但不得违反风险提示原则。")
 
-输出要求：
-1) 必须是 JSON 对象。
-2) recommendations 中建议尽量覆盖：仓位集中风险、资产分散、回撤防御、长期价值。
-3) 允许新增标的时，可给出 add 建议并点名标的。
-4) 每条建议必须给出 theory_tag 和 rationale。
-5) 若 strategy_prompt 非空，需优先吸收为策略偏好，但不得违反风险提示原则。`, string(payload))
-	return prompt, nil
+	// Append analysis-type-specific focus instructions.
+	switch req.AnalysisType {
+	case "weekly":
+		sb.WriteString("\n\n分析类型：周报（Weekly）\n重点关注：\n- 近1-2周的价格催化剂和市场动量\n- 短期技术形态与成交量变化\n- 近期新闻事件对持仓的潜在影响\n- 适合本周可能的调仓时机建议")
+	case "monthly":
+		sb.WriteString("\n\n分析类型：月报（Monthly）\n重点关注：\n- 近1-3个月的组合再平衡需求\n- 基本面变化与行业轮动机会\n- 宏观经济指标对整体配置的影响\n- 月度仓位优化和风险调整建议")
+	}
+
+	// Append symbol-level analysis summaries as reference context.
+	if len(symbolRefs) > 0 {
+		refsJSON, err := json.Marshal(symbolRefs)
+		if err == nil {
+			sb.WriteString("\n\n以下是各标的的最新深度AI分析摘要（供参考，可直接引用结论）：\n")
+			sb.Write(refsJSON)
+		}
+	}
+
+	return sb.String(), nil
 }
 
 func buildAICompletionsEndpoint(baseURL string) (string, error) {

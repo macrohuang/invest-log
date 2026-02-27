@@ -884,6 +884,78 @@ select.btn.trade-select {
   flex-wrap: wrap;
 }
 
+.ai-analyze-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ai-analyze-group .ai-type-select {
+  padding: 4px 6px;
+  font-size: 12px;
+  height: 28px;
+}
+
+.ai-history-section {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(29, 31, 27, 0.08);
+}
+
+.ai-history-title {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.ai-history-item {
+  border-radius: 8px;
+  border: 1px solid rgba(29, 31, 27, 0.08);
+  margin-bottom: 6px;
+  background: rgba(255, 255, 255, 0.6);
+  overflow: hidden;
+}
+
+.ai-history-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+}
+
+.ai-history-summary::-webkit-details-marker {
+  display: none;
+}
+
+.ai-history-summary::before {
+  content: '▸';
+  font-size: 10px;
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+
+.ai-history-item[open] .ai-history-summary::before {
+  content: '▾';
+}
+
+.ai-history-risk {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.ai-history-body {
+  padding: 6px 10px 10px;
+  border-top: 1px solid rgba(29, 31, 27, 0.06);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .metric-value-group {
   display: flex;
   align-items: baseline;

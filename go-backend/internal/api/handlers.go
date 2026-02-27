@@ -236,6 +236,7 @@ func (h *handler) analyzeHoldingsWithAI(w http.ResponseWriter, r *http.Request) 
 		AdviceStyle:     payload.AdviceStyle,
 		AllowNewSymbols: allowNewSymbols,
 		StrategyPrompt:  payload.StrategyPrompt,
+		AnalysisType:    payload.AnalysisType,
 	})
 	if err != nil {
 		h.logger.Error("ai holdings analysis failed",
@@ -248,6 +249,27 @@ func (h *handler) analyzeHoldingsWithAI(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *handler) getHoldingsAnalysis(w http.ResponseWriter, r *http.Request) {
+	currency := r.URL.Query().Get("currency")
+	result, err := h.core.GetHoldingsAnalysis(currency)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *handler) getHoldingsAnalysisHistory(w http.ResponseWriter, r *http.Request) {
+	currency := r.URL.Query().Get("currency")
+	limit := parseIntDefault(r.URL.Query().Get("limit"), 10)
+	results, err := h.core.GetHoldingsAnalysisHistory(currency, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, results)
 }
 
 func (h *handler) getAIAllocationAdvice(w http.ResponseWriter, r *http.Request) {
