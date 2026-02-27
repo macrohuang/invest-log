@@ -694,10 +694,10 @@ function formatMoney(value, currency) {
     return new Intl.NumberFormat('en-US', {
       style: symbol ? 'currency' : 'decimal',
       currency: currency,
-      maximumFractionDigits: 4,
+      maximumFractionDigits: 2,
     }).format(value);
   } catch (err) {
-    return `${symbol}${value.toFixed(4)}`;
+    return `${symbol}${value.toFixed(2)}`;
   }
 }
 
@@ -708,11 +708,11 @@ function formatMoneyPlain(value) {
   try {
     return new Intl.NumberFormat('en-US', {
       style: 'decimal',
-      minimumFractionDigits: 4,
-      maximumFractionDigits: 4,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
     }).format(value);
   } catch (err) {
-    return Number(value).toFixed(4);
+    return Number(value).toFixed(2);
   }
 }
 
@@ -723,11 +723,11 @@ function formatNumber(value) {
   try {
     return new Intl.NumberFormat('en-US', {
       style: 'decimal',
-      minimumFractionDigits: 4,
-      maximumFractionDigits: 4,
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
     }).format(value);
   } catch (err) {
-    return Number(value).toFixed(4);
+    return Number(value).toFixed(2);
   }
 }
 
