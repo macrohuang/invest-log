@@ -14,6 +14,8 @@ let _openPopover = null;
 
 const aiAnalysisSettingsKey = 'aiHoldingsAnalysisSettings';
 const aiAnalysisAPIKeyStorageKey = 'aiHoldingsAnalysisApiKey';
+const defaultOpenAIBaseURL = 'https://api.openai.com/v1';
+const defaultGeminiBaseURL = 'https://generativelanguage.googleapis.com/v1beta';
 
 const view = document.getElementById('view');
 const toastEl = document.getElementById('toast');
@@ -321,7 +323,7 @@ function getRouteQuery() {
 
 function defaultAIAnalysisSettings() {
   return {
-    baseUrl: 'https://api.openai.com/v1',
+    baseUrl: defaultOpenAIBaseURL,
     model: '',
     riskProfile: 'balanced',
     horizon: 'medium',
@@ -336,13 +338,29 @@ function normalizeChoice(value, allowed, fallback) {
   return allowed.includes(normalized) ? normalized : fallback;
 }
 
+function isGeminiModel(value) {
+  return String(value || '').trim().toLowerCase().startsWith('gemini');
+}
+
+function normalizeAIBaseUrl(value, fallback = defaultOpenAIBaseURL) {
+  return trimTrailingSlash(String(value || '').trim()) || fallback;
+}
+
+function normalizeAIBaseUrlForModel(value, model) {
+  const normalizedBaseUrl = normalizeAIBaseUrl(value);
+  if (isGeminiModel(model) && normalizedBaseUrl.toLowerCase() === defaultOpenAIBaseURL) {
+    return defaultGeminiBaseURL;
+  }
+  return normalizedBaseUrl;
+}
+
 function normalizeAIAnalysisSettings(raw) {
   const defaults = defaultAIAnalysisSettings();
   const source = raw && typeof raw === 'object' ? raw : {};
 
-  const baseUrlRaw = source.baseUrl || source.base_url || defaults.baseUrl;
-  const baseUrl = trimTrailingSlash(String(baseUrlRaw || '').trim()) || defaults.baseUrl;
   const model = String(source.model || '').trim();
+  const baseUrlRaw = source.baseUrl || source.base_url || defaults.baseUrl;
+  const baseUrl = normalizeAIBaseUrlForModel(baseUrlRaw, model);
   const riskProfile = normalizeChoice(source.riskProfile || source.risk_profile, ['conservative', 'balanced', 'aggressive'], defaults.riskProfile);
   const horizon = normalizeChoice(source.horizon, ['short', 'medium', 'long'], defaults.horizon);
   const adviceStyle = normalizeChoice(source.adviceStyle || source.advice_style, ['conservative', 'balanced', 'aggressive'], defaults.adviceStyle);
@@ -1823,10 +1841,12 @@ function bindHoldingsActions() {
 
 async function runAIHoldingsAnalysis(currency, analysisType) {
   const settings = await loadAIAnalysisSettings();
+  const model = (settings.model || '').trim();
+  const baseUrl = normalizeAIBaseUrlForModel(settings.baseUrl, model);
 
   const normalizedSettings = {
-    baseUrl: (settings.baseUrl || 'https://api.openai.com/v1').trim(),
-    model: (settings.model || '').trim(),
+    baseUrl,
+    model,
     apiKey: (settings.apiKey || '').trim(),
     riskProfile: settings.riskProfile || 'balanced',
     horizon: settings.horizon || 'medium',
@@ -2115,9 +2135,11 @@ function renderSymbolAnalysisStreamingCard(streamState) {
 
 async function runSymbolAnalysis(symbol, currency, handlers = {}) {
   const settings = await loadAIAnalysisSettings();
+  const model = (settings.model || '').trim();
+  const baseUrl = normalizeAIBaseUrlForModel(settings.baseUrl, model);
   const normalizedSettings = {
-    baseUrl: (settings.baseUrl || 'https://api.openai.com/v1').trim(),
-    model: (settings.model || '').trim(),
+    baseUrl,
+    model,
     apiKey: (settings.apiKey || '').trim(),
     riskProfile: (settings.riskProfile || 'balanced').trim(),
     horizon: (settings.horizon || 'medium').trim(),
@@ -3773,12 +3795,12 @@ async function renderSettings() {
     const aiAnalysisSection = `
       <div class="card">
         <h3>AI Analysis</h3>
-        <div class="section-sub">Claude / OpenAI-compatible configuration for holdings analysis.</div>
+        <div class="section-sub">Provider base URL, model, and API key for AI analysis (Gemini supported).</div>
         <div class="form">
           <div class="form-row">
             <div class="field">
               <label>AI Base URL</label>
-              <input id="ai-base-url" type="text" placeholder="https://api.openai.com/v1" value="${escapeHtml(aiSettings.baseUrl || 'https://api.openai.com/v1')}">
+              <input id="ai-base-url" type="text" placeholder="${defaultOpenAIBaseURL}" value="${escapeHtml(aiSettings.baseUrl || defaultOpenAIBaseURL)}">
             </div>
             <div class="field">
               <label>Model</label>
@@ -4262,10 +4284,21 @@ function bindSettingsActions(assetTypes) {
       const adviceStyleInput = document.getElementById('ai-advice-style');
       const allowNewSymbolsInput = document.getElementById('ai-allow-new-symbols');
       const strategyPromptInput = document.getElementById('ai-strategy-prompt');
+      const model = modelInput && modelInput.value ? modelInput.value.trim() : '';
+      const rawBaseUrl = baseUrlInput && baseUrlInput.value ? baseUrlInput.value.trim() : '';
+      const normalizedRawBaseUrl = normalizeAIBaseUrl(rawBaseUrl);
+      const normalizedBaseUrl = normalizeAIBaseUrlForModel(rawBaseUrl, model);
+      const autoAdjustedGeminiBaseURL = isGeminiModel(model) &&
+        normalizedRawBaseUrl.toLowerCase() === defaultOpenAIBaseURL &&
+        normalizedBaseUrl === defaultGeminiBaseURL;
+
+      if (baseUrlInput) {
+        baseUrlInput.value = normalizedBaseUrl;
+      }
 
       const settings = {
-        baseUrl: trimTrailingSlash(baseUrlInput && baseUrlInput.value ? baseUrlInput.value.trim() : '') || 'https://api.openai.com/v1',
-        model: modelInput && modelInput.value ? modelInput.value.trim() : '',
+        baseUrl: normalizedBaseUrl,
+        model,
         apiKey: apiKeyInput && apiKeyInput.value ? apiKeyInput.value.trim() : '',
         riskProfile: riskProfileInput && riskProfileInput.value ? riskProfileInput.value : 'balanced',
         horizon: horizonInput && horizonInput.value ? horizonInput.value : 'medium',
@@ -4279,6 +4312,8 @@ function bindSettingsActions(assetTypes) {
         const saved = await saveAIAnalysisSettings(settings);
         if (!saved.model || !saved.apiKey) {
           showToast('Saved. Set model and API key before running analysis');
+        } else if (autoAdjustedGeminiBaseURL) {
+          showToast('AI settings saved. Gemini base URL auto-adjusted.');
         } else {
           showToast('AI settings saved');
         }
@@ -4908,6 +4943,7 @@ function showAIAdvisorModal(assetTypes) {
   async function fetchAdvice() {
     const settings = await loadAIAnalysisSettings();
     const model = (settings.model || '').trim();
+    const baseUrl = normalizeAIBaseUrlForModel(settings.baseUrl, model);
     const apiKey = (settings.apiKey || '').trim();
     if (!model || !apiKey) {
       closeModal();
@@ -4926,7 +4962,7 @@ function showAIAdvisorModal(assetTypes) {
       let streamError = '';
       adviceResult = null;
       await postSSE('/api/ai/allocation-advice/stream', {
-        base_url: (settings.baseUrl || 'https://api.openai.com/v1').trim(),
+        base_url: baseUrl,
         api_key: apiKey,
         model,
         age_range: profile.ageRange,
