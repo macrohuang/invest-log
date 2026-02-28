@@ -3,8 +3,11 @@ package investlog
 import (
 	"context"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDetectMarket(t *testing.T) {
@@ -372,6 +375,146 @@ func TestSummarizeExternalData_EmptySections(t *testing.T) {
 	result := summarizeExternalDataImpl(context.Background(), data, "http://example.com", "key", "model", slog.Default())
 	if result != "" {
 		t.Fatalf("expected empty for empty sections, got: %s", result)
+	}
+}
+
+func TestSummarizeExternalData_PromptCoversFirstFetchStructureKeywords(t *testing.T) {
+	original := aiChatCompletion
+	defer func() { aiChatCompletion = original }()
+
+	var captured aiChatCompletionRequest
+	aiChatCompletion = func(_ context.Context, req aiChatCompletionRequest) (aiChatCompletionResult, error) {
+		captured = req
+		return aiChatCompletionResult{Model: "mock", Content: "【最新动态】\n- 数据已整理"}, nil
+	}
+
+	data := &symbolExternalData{
+		Symbol:    "AAPL",
+		Market:    "us",
+		FetchedAt: time.Date(2026, 2, 28, 15, 4, 0, 0, time.UTC),
+		RawSections: []externalDataSection{
+			{Source: "Yahoo Finance Summary", Type: "financials", Content: "Revenue Growth: 12%"},
+			{Source: "Yahoo Finance News", Type: "news", Content: "New product cycle update"},
+		},
+	}
+
+	got := summarizeExternalDataImpl(context.Background(), data, "http://example.com", "k", "m", slog.Default())
+	if strings.TrimSpace(got) == "" {
+		t.Fatal("expected non-empty summarized content")
+	}
+
+	combinedPrompt := captured.SystemPrompt + "\n" + captured.UserPrompt
+	if !strings.Contains(combinedPrompt, "任务优先级") && !strings.Contains(combinedPrompt, "先抓取") {
+		t.Fatalf("expected summarize prompt to include first-fetch priority structure, got: %s", combinedPrompt)
+	}
+	for _, keyword := range []string{"近5", "近3年", "宏观政策", "产业周期", "经营"} {
+		if !strings.Contains(combinedPrompt, keyword) {
+			t.Fatalf("expected summarize prompt to include keyword %q, got: %s", keyword, combinedPrompt)
+		}
+	}
+}
+
+func TestNormalizeStructuredExternalSummary_FillsMissingSections(t *testing.T) {
+	t.Parallel()
+
+	data := &symbolExternalData{
+		Symbol:    "AAPL",
+		Market:    "us",
+		FetchedAt: time.Date(2026, 2, 28, 15, 4, 0, 0, time.UTC),
+		RawSections: []externalDataSection{
+			{Source: "Yahoo Finance Summary", Type: "financials", Content: "Revenue Growth: 12%"},
+		},
+	}
+
+	normalized := normalizeStructuredExternalSummary("【近5个季度财报】\n- Q1: Revenue +10%", data)
+	for _, header := range []string{"【近5个季度财报】", "【近3年年报】", "【行业宏观政策】", "【产业周期】", "【公司最新经营】", "【数据缺口】"} {
+		if !strings.Contains(normalized, header) {
+			t.Fatalf("expected normalized summary to contain %s, got: %s", header, normalized)
+		}
+	}
+}
+
+func TestBuildFallbackStructuredExternalSummary_CoversSections(t *testing.T) {
+	t.Parallel()
+
+	data := &symbolExternalData{
+		Symbol:    "AAPL",
+		Market:    "us",
+		FetchedAt: time.Date(2026, 2, 28, 15, 4, 0, 0, time.UTC),
+		RawSections: []externalDataSection{
+			{
+				Source: "Yahoo Finance Summary",
+				Type:   "financials",
+				Content: strings.Join([]string{
+					"Q1 revenue grew 12%",
+					"Q2 margin improved",
+					"FY2024 annual report published",
+					"policy subsidy update",
+					"industry cycle turning point",
+					"latest operation order growth",
+				}, "\n"),
+			},
+		},
+	}
+
+	got := buildFallbackStructuredExternalSummary(data)
+	for _, header := range []string{"【近5个季度财报】", "【近3年年报】", "【行业宏观政策】", "【产业周期】", "【公司最新经营】", "【数据缺口】"} {
+		if !strings.Contains(got, header) {
+			t.Fatalf("expected fallback summary to contain %s, got: %s", header, got)
+		}
+	}
+}
+
+func TestBuildAllGapSummaryAndHelpers(t *testing.T) {
+	t.Parallel()
+
+	allGap := buildAllGapSummary()
+	for _, header := range []string{"【近5个季度财报】", "【近3年年报】", "【行业宏观政策】", "【产业周期】", "【公司最新经营】", "【数据缺口】"} {
+		if !strings.Contains(allGap, header) {
+			t.Fatalf("expected all-gap summary to contain %s, got: %s", header, allGap)
+		}
+	}
+
+	lines := flattenExternalDataLines([]externalDataSection{
+		{Source: "S1", Type: "news", Content: "line1\nline2"},
+	})
+	if len(lines) < 2 {
+		t.Fatalf("expected flattened lines >=2, got %d", len(lines))
+	}
+
+	picked := pickEvidenceLines(lines, []string{"line1"}, 1)
+	if len(picked) != 1 {
+		t.Fatalf("expected pickEvidenceLines to pick 1 line, got %d", len(picked))
+	}
+	if !containsAnyLowerKeyword(strings.ToLower("Policy Update"), []string{"policy"}) {
+		t.Fatal("expected containsAnyLowerKeyword to match policy")
+	}
+}
+
+func TestHTTPGetExternal_SuccessAndStatusError(t *testing.T) {
+	t.Parallel()
+
+	okServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer okServer.Close()
+
+	body, err := httpGetExternal(context.Background(), okServer.URL, map[string]string{"X-Test": "1"})
+	if err != nil {
+		t.Fatalf("expected success, got error: %v", err)
+	}
+	if string(body) != "ok" {
+		t.Fatalf("expected body ok, got %s", string(body))
+	}
+
+	errServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	defer errServer.Close()
+
+	_, err = httpGetExternal(context.Background(), errServer.URL, nil)
+	if err == nil || !strings.Contains(err.Error(), "http status") {
+		t.Fatalf("expected http status error, got: %v", err)
 	}
 }
 

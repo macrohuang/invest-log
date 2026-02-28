@@ -2113,12 +2113,7 @@ async function renderSymbolAnalysis() {
     contentEl.innerHTML = `
       ${renderReviewModeSection(history || [])}
       ${renderSynthesisCard(latest.synthesis, latest)}
-      <div class="symbol-analysis-grid">
-        ${renderDimensionCard('macro', '宏观经济政策', latest.dimensions?.macro)}
-        ${renderDimensionCard('industry', '行业竞争格局', latest.dimensions?.industry)}
-        ${renderDimensionCard('company', '公司基本面', latest.dimensions?.company)}
-        ${renderDimensionCard('international', '国际政治经济', latest.dimensions?.international)}
-      </div>
+      ${renderDimensionsGrid(latest.dimensions)}
       ${renderSymbolAnalysisHistory(history || [])}
     `;
   } catch (err) {
@@ -2308,6 +2303,84 @@ function renderSynthesisCard(synthesis, result) {
   `;
 }
 
+function renderDimensionsGrid(dimensions) {
+  const entries = getOrderedDimensionEntries(dimensions);
+  if (!entries.length) {
+    return `
+      <div class="card dimension-card dimension-empty">
+        <h4>Framework Analysis</h4>
+        <div class="section-sub">No framework results available</div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="symbol-analysis-grid">
+      ${entries.map(([dimension, data]) => renderDimensionCard(dimension, getDimensionLabel(dimension), data)).join('')}
+    </div>
+  `;
+}
+
+function getDimensionLabel(dimension) {
+  const labelMap = {
+    dupont_roic: '杜邦分析 + ROIC拆解',
+    capital_cycle: '资本周期框架',
+    industry_s_curve: '产业生命周期与S曲线',
+    reverse_dcf: '反向DCF',
+    dynamic_moat: '动态护城河分析',
+    dcf: 'DCF自由现金流折现',
+    porter_moat: '波特五力 + 护城河',
+    expectations_investing: '预期差框架',
+    relative_valuation: '相对估值',
+    macro: '宏观经济政策',
+    industry: '行业竞争格局',
+    company: '公司基本面',
+    international: '国际政治经济',
+  };
+  return labelMap[dimension] || dimension;
+}
+
+function getOrderedDimensionEntries(dimensions) {
+  if (!dimensions || typeof dimensions !== 'object') {
+    return [];
+  }
+
+  const preferredOrder = [
+    'dupont_roic',
+    'capital_cycle',
+    'industry_s_curve',
+    'reverse_dcf',
+    'dynamic_moat',
+    'dcf',
+    'porter_moat',
+    'expectations_investing',
+    'relative_valuation',
+    'macro',
+    'industry',
+    'company',
+    'international',
+  ];
+
+  const entries = [];
+  const seen = new Set();
+  preferredOrder.forEach((key) => {
+    if (dimensions[key]) {
+      entries.push([key, dimensions[key]]);
+      seen.add(key);
+    }
+  });
+
+  Object.keys(dimensions)
+    .sort()
+    .forEach((key) => {
+      if (!seen.has(key) && dimensions[key]) {
+        entries.push([key, dimensions[key]]);
+      }
+    });
+
+  return entries;
+}
+
 function renderDimensionCard(dimension, label, data) {
   if (!data) {
     return `
@@ -2334,6 +2407,7 @@ function renderDimensionCard(dimension, label, data) {
   const opportunities = Array.isArray(data.opportunities)
     ? `<ul class="ai-findings opportunity-list">${data.opportunities.map(o => `<li>${escapeHtml(o)}</li>`).join('')}</ul>`
     : '';
+  const suggestion = data.suggestion ? `<div class="section-sub"><strong>Suggestion:</strong> ${escapeHtml(data.suggestion)}</div>` : '';
 
   return `
     <div class="card dimension-card ${ratingClass}">
@@ -2343,6 +2417,7 @@ function renderDimensionCard(dimension, label, data) {
       </div>
       <div class="section-sub">Confidence: ${escapeHtml(data.confidence || '—')}</div>
       <div class="section-sub">${escapeHtml(data.summary || '')}</div>
+      ${suggestion}
       ${data.valuation_assessment ? `<div class="section-sub"><strong>Valuation:</strong> ${escapeHtml(data.valuation_assessment)}</div>` : ''}
       <div class="ai-section"><h5>Key Points</h5>${keyPoints}</div>
       <div class="ai-section"><h5>Risks</h5>${risks}</div>
