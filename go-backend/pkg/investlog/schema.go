@@ -295,6 +295,41 @@ func initDatabase(db *sql.DB) error {
 		return err
 	}
 
+	// Migrate: rebuild holdings_analyses if the legacy result_json column exists.
+	// The original schema stored analysis output as a single JSON blob; the current
+	// schema uses individual columns. result_json had NOT NULL, so any INSERT with
+	// the new column set would fail the constraint.
+	if hasResultJSON, err := tableHasColumn(tx, "holdings_analyses", "result_json"); err != nil {
+		return err
+	} else if hasResultJSON {
+		if err := rebuildHoldingsAnalyses(tx); err != nil {
+			return err
+		}
+	}
+
+	// Migrate: add columns that were added after the initial holdings_analyses table creation.
+	holdingsAnalysesMigrations := []struct {
+		column string
+		ddl    string
+	}{
+		{"analysis_type", "ALTER TABLE holdings_analyses ADD COLUMN analysis_type TEXT NOT NULL DEFAULT 'adhoc'"},
+		{"risk_level", "ALTER TABLE holdings_analyses ADD COLUMN risk_level TEXT"},
+		{"overall_summary", "ALTER TABLE holdings_analyses ADD COLUMN overall_summary TEXT"},
+		{"key_findings", "ALTER TABLE holdings_analyses ADD COLUMN key_findings TEXT"},
+		{"recommendations", "ALTER TABLE holdings_analyses ADD COLUMN recommendations TEXT"},
+		{"disclaimer", "ALTER TABLE holdings_analyses ADD COLUMN disclaimer TEXT"},
+		{"symbol_refs", "ALTER TABLE holdings_analyses ADD COLUMN symbol_refs TEXT"},
+	}
+	for _, m := range holdingsAnalysesMigrations {
+		if hasCol, err := tableHasColumn(tx, "holdings_analyses", m.column); err != nil {
+			return err
+		} else if !hasCol {
+			if err := exec(tx, m.ddl); err != nil {
+				return err
+			}
+		}
+	}
+
 	indexes := []string{
 		"CREATE INDEX IF NOT EXISTS idx_symbol_id ON transactions(symbol_id)",
 		"CREATE INDEX IF NOT EXISTS idx_date ON transactions(transaction_date)",
@@ -653,4 +688,39 @@ func migrateTransactions(tx *sql.Tx, oldHasSymbol bool, oldHasAssetType bool) er
 	}
 
 	return rebuildTransactionsFromOld(tx, oldHasSymbol, oldHasAssetType)
+}
+
+// rebuildHoldingsAnalyses recreates the holdings_analyses table without the legacy
+// result_json column. Old rows (stored as a JSON blob) cannot be migrated to the new
+// per-column layout, so only identity columns (id, currency, model, created_at) are
+// preserved; content columns default to NULL / their column default.
+func rebuildHoldingsAnalyses(tx *sql.Tx) error {
+	if err := exec(tx, "ALTER TABLE holdings_analyses RENAME TO holdings_analyses_old"); err != nil {
+		return err
+	}
+	if err := exec(tx, `
+		CREATE TABLE holdings_analyses (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			currency TEXT NOT NULL,
+			model TEXT NOT NULL,
+			analysis_type TEXT NOT NULL DEFAULT 'adhoc',
+			risk_level TEXT,
+			overall_summary TEXT,
+			key_findings TEXT,
+			recommendations TEXT,
+			disclaimer TEXT,
+			symbol_refs TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		)
+	`); err != nil {
+		return err
+	}
+	if err := exec(tx, `
+		INSERT INTO holdings_analyses (id, currency, model, created_at)
+		SELECT id, currency, model, created_at
+		FROM holdings_analyses_old
+	`); err != nil {
+		return err
+	}
+	return exec(tx, "DROP TABLE holdings_analyses_old")
 }
