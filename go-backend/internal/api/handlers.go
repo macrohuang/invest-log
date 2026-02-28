@@ -251,6 +251,80 @@ func (h *handler) analyzeHoldingsWithAI(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (h *handler) analyzeHoldingsWithAISSE(w http.ResponseWriter, r *http.Request) {
+	var payload aiHoldingsAnalysisPayload
+	if err := decodeJSON(r, &payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	allowNewSymbols := true
+	if payload.AllowNewSymbols != nil {
+		allowNewSymbols = *payload.AllowNewSymbols
+	}
+
+	flush := func() {}
+	if flusher, ok := w.(http.Flusher); ok {
+		flush = flusher.Flush
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+
+	result, err := h.core.AnalyzeHoldingsStream(investlog.HoldingsAnalysisRequest{
+		BaseURL:         payload.BaseURL,
+		APIKey:          payload.APIKey,
+		Model:           payload.Model,
+		Currency:        payload.Currency,
+		RiskProfile:     payload.RiskProfile,
+		Horizon:         payload.Horizon,
+		AdviceStyle:     payload.AdviceStyle,
+		AllowNewSymbols: allowNewSymbols,
+		StrategyPrompt:  payload.StrategyPrompt,
+		AnalysisType:    payload.AnalysisType,
+	}, func(delta string) error {
+		if delta == "" {
+			return nil
+		}
+		if err := writeSSEEvent(w, "chunk", map[string]string{"delta": delta}); err != nil {
+			return err
+		}
+		flush()
+		return nil
+	})
+	if err != nil {
+		h.logger.Error("ai holdings stream failed",
+			"currency", payload.Currency,
+			"model", payload.Model,
+			"base_url", payload.BaseURL,
+			"err", err,
+		)
+		_ = writeSSEEvent(w, "error", map[string]string{"error": err.Error()})
+		flush()
+		return
+	}
+
+	_ = writeSSEEvent(w, "done", map[string]any{"result": result})
+	flush()
+}
+
+func writeSSEEvent(w http.ResponseWriter, event string, payload any) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write([]byte("event: " + event + "\n")); err != nil {
+		return err
+	}
+	if _, err := w.Write([]byte("data: " + string(data) + "\n\n")); err != nil {
+		return err
+	}
+	return nil
+}
+
 func (h *handler) getHoldingsAnalysis(w http.ResponseWriter, r *http.Request) {
 	currency := r.URL.Query().Get("currency")
 	result, err := h.core.GetHoldingsAnalysis(currency)

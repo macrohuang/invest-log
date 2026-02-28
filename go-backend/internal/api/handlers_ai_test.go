@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"investlog/pkg/investlog"
@@ -133,6 +134,63 @@ func TestAIHoldingsAnalysisEndpoint_PropagatesCoreError(t *testing.T) {
 	})
 	if rr.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 when no holdings, got %d", rr.Code)
+	}
+}
+
+func TestAIHoldingsAnalysisStreamEndpoint(t *testing.T) {
+	router, cleanup := setupTestRouter(t)
+	defer cleanup()
+
+	doRequest(router, http.MethodPost, "/api/accounts", map[string]any{
+		"account_id":   "acc-stream",
+		"account_name": "Stream Account",
+	})
+	doRequest(router, http.MethodPost, "/api/transactions", map[string]any{
+		"symbol":           "AAPL",
+		"transaction_type": "BUY",
+		"quantity":         10,
+		"price":            100,
+		"currency":         "USD",
+		"account_id":       "acc-stream",
+		"asset_type":       "stock",
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: content_block_delta\n"))
+		_, _ = w.Write([]byte(`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"{\"overall_summary\":\"ok\""}}` + "\n\n"))
+		_, _ = w.Write([]byte("event: content_block_delta\n"))
+		_, _ = w.Write([]byte(`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":",\"risk_level\":\"balanced\",\"key_findings\":[\"x\"],\"recommendations\":[],\"disclaimer\":\"d\"}"}}` + "\n\n"))
+		_, _ = w.Write([]byte("event: message_stop\n"))
+		_, _ = w.Write([]byte(`data: {"type":"message_stop"}` + "\n\n"))
+	}))
+	defer server.Close()
+
+	rr := doRequest(router, http.MethodPost, "/api/ai/holdings-analysis/stream", map[string]any{
+		"base_url":          server.URL,
+		"api_key":           "key",
+		"model":             "claude-3-5-sonnet-20241022",
+		"currency":          "USD",
+		"risk_profile":      "balanced",
+		"horizon":           "medium",
+		"advice_style":      "balanced",
+		"allow_new_symbols": true,
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Header().Get("Content-Type"), "text/event-stream") {
+		t.Fatalf("expected SSE content type, got %q", rr.Header().Get("Content-Type"))
+	}
+	body := rr.Body.String()
+	if !strings.Contains(body, "event: chunk") {
+		t.Fatalf("expected chunk event, got %s", body)
+	}
+	if !strings.Contains(body, "event: done") {
+		t.Fatalf("expected done event, got %s", body)
+	}
+	if !strings.Contains(body, "overall_summary") {
+		t.Fatalf("expected final result payload, got %s", body)
 	}
 }
 
