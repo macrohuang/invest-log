@@ -307,6 +307,138 @@ func TestRequestAIChatCompletion_FallbackToResponses(t *testing.T) {
 	}
 }
 
+func TestRequestAIChatCompletionStream_ClaudeSSE(t *testing.T) {
+	t.Parallel()
+
+	var receivedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		if r.Method != http.MethodPost {
+			t.Fatalf("expected POST, got %s", r.Method)
+		}
+		if got := r.Header.Get("x-api-key"); got != "key" {
+			t.Fatalf("expected x-api-key header, got %q", got)
+		}
+
+		var reqBody map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		if reqBody["model"] != "claude-3-5-sonnet-20241022" {
+			t.Fatalf("unexpected model: %v", reqBody["model"])
+		}
+		if reqBody["stream"] != true {
+			t.Fatalf("expected stream=true, got: %v", reqBody["stream"])
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: content_block_delta\n"))
+		_, _ = w.Write([]byte(`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"{\"overall_summary\":\"ok\""}}` + "\n\n"))
+		_, _ = w.Write([]byte("event: content_block_delta\n"))
+		_, _ = w.Write([]byte(`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":",\"risk_level\":\"balanced\",\"key_findings\":[\"x\"],\"recommendations\":[],\"disclaimer\":\"d\"}"}}` + "\n\n"))
+		_, _ = w.Write([]byte("event: message_stop\n"))
+		_, _ = w.Write([]byte(`data: {"type":"message_stop"}` + "\n\n"))
+	}))
+	defer server.Close()
+
+	var chunks []string
+	result, err := requestAIChatCompletionStream(context.Background(), aiChatCompletionRequest{
+		EndpointURL:  server.URL + "/v1/chat/completions",
+		APIKey:       "key",
+		Model:        "claude-3-5-sonnet-20241022",
+		SystemPrompt: "sys",
+		UserPrompt:   "user",
+	}, func(delta string) error {
+		chunks = append(chunks, delta)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if receivedPath != "/v1/messages" {
+		t.Fatalf("expected anthropic messages endpoint, got %s", receivedPath)
+	}
+	joined := strings.Join(chunks, "")
+	if joined == "" {
+		t.Fatal("expected streamed chunks")
+	}
+	if result.Content != joined {
+		t.Fatalf("expected content to equal joined chunks; content=%q chunks=%q", result.Content, joined)
+	}
+	if !strings.Contains(result.Content, "overall_summary") {
+		t.Fatalf("unexpected streamed content: %q", result.Content)
+	}
+}
+
+func TestRequestAIChatCompletionStream_NonClaudeFallsBackToSingleChunk(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"model-fallback","choices":[{"message":{"content":"{\"overall_summary\":\"ok\",\"risk_level\":\"balanced\",\"key_findings\":[],\"recommendations\":[],\"disclaimer\":\"d\"}"}}]}`))
+	}))
+	defer server.Close()
+
+	var chunks []string
+	result, err := requestAIChatCompletionStream(context.Background(), aiChatCompletionRequest{
+		EndpointURL:  server.URL,
+		APIKey:       "key",
+		Model:        "model-fallback",
+		SystemPrompt: "sys",
+		UserPrompt:   "user",
+	}, func(delta string) error {
+		chunks = append(chunks, delta)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("expected one fallback chunk, got %d", len(chunks))
+	}
+	if result.Content != chunks[0] {
+		t.Fatalf("expected chunk to equal result content, got chunk=%q content=%q", chunks[0], result.Content)
+	}
+}
+
+func TestRequestAIChatCompletion_ClaudeNonStreamingUsesSDK(t *testing.T) {
+	t.Parallel()
+
+	var receivedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"msg_1",
+			"type":"message",
+			"role":"assistant",
+			"model":"claude-3-5-sonnet-20241022",
+			"content":[{"type":"text","text":"{\"overall_summary\":\"ok\",\"risk_level\":\"balanced\",\"key_findings\":[],\"recommendations\":[],\"disclaimer\":\"d\"}"}],
+			"stop_reason":"end_turn",
+			"stop_sequence":null,
+			"usage":{"input_tokens":1,"output_tokens":1}
+		}`))
+	}))
+	defer server.Close()
+
+	result, err := requestAIChatCompletion(context.Background(), aiChatCompletionRequest{
+		EndpointURL:  server.URL + "/v1/chat/completions",
+		APIKey:       "key",
+		Model:        "claude-3-5-sonnet-20241022",
+		SystemPrompt: "sys",
+		UserPrompt:   "user",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if receivedPath != "/v1/messages" {
+		t.Fatalf("expected sdk request path /v1/messages, got %s", receivedPath)
+	}
+	if !strings.Contains(result.Content, "overall_summary") {
+		t.Fatalf("unexpected content: %q", result.Content)
+	}
+}
+
 func TestRequestAIChatCompletion_FallbackToAltChatPath(t *testing.T) {
 	t.Parallel()
 
@@ -623,6 +755,439 @@ func TestAnalyzeHoldingsEndToEndWithStub(t *testing.T) {
 	}
 	if result.Recommendations[0].Action != "reduce" {
 		t.Fatalf("unexpected action: %s", result.Recommendations[0].Action)
+	}
+}
+
+func TestAnalyzeHoldingsStreamEndToEndWithStub(t *testing.T) {
+	core, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	testAccount(t, core, "acc-stream", "Main")
+	testBuyTransaction(t, core, "AAPL", 10, 100, "USD", "acc-stream")
+
+	originalStream := aiChatCompletionStream
+	defer func() { aiChatCompletionStream = originalStream }()
+
+	fullContent := `{
+		"overall_summary":"stream ok",
+		"risk_level":"balanced",
+		"key_findings":["x"],
+		"recommendations":[{"symbol":"AAPL","action":"hold","theory_tag":"Buffett","rationale":"wait"}],
+		"disclaimer":"仅供参考"
+	}`
+
+	aiChatCompletionStream = func(ctx context.Context, req aiChatCompletionRequest, onDelta func(string) error) (aiChatCompletionResult, error) {
+		if err := onDelta(`{"overall_summary":"stream ok"`); err != nil {
+			return aiChatCompletionResult{}, err
+		}
+		if err := onDelta(`,"risk_level":"balanced","key_findings":["x"],"recommendations":[{"symbol":"AAPL","action":"hold","theory_tag":"Buffett","rationale":"wait"}],"disclaimer":"仅供参考"}`); err != nil {
+			return aiChatCompletionResult{}, err
+		}
+		return aiChatCompletionResult{
+			Model:   "mock-stream-model",
+			Content: fullContent,
+		}, nil
+	}
+
+	var streamed []string
+	result, err := core.AnalyzeHoldingsStream(HoldingsAnalysisRequest{
+		BaseURL:         "https://example.com/v1",
+		APIKey:          "key",
+		Model:           "claude-3-5-sonnet-20241022",
+		Currency:        "USD",
+		RiskProfile:     "balanced",
+		Horizon:         "medium",
+		AdviceStyle:     "balanced",
+		AllowNewSymbols: true,
+	}, func(delta string) error {
+		streamed = append(streamed, delta)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeHoldingsStream failed: %v", err)
+	}
+	if len(streamed) != 2 {
+		t.Fatalf("expected 2 streamed chunks, got %d", len(streamed))
+	}
+	if result.Model != "mock-stream-model" {
+		t.Fatalf("unexpected model: %s", result.Model)
+	}
+	if result.ID <= 0 {
+		t.Fatalf("expected saved result id, got %d", result.ID)
+	}
+}
+
+func TestAnalyzeHoldings_IncludesSymbolRefs(t *testing.T) {
+	core, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	testAccount(t, core, "acc-ref", "Main")
+	testBuyTransaction(t, core, "AAPL", 10, 100, "USD", "acc-ref")
+
+	_, err := core.db.Exec(
+		`INSERT INTO symbol_analyses (symbol, currency, model, status, synthesis, completed_at)
+		 VALUES (?, ?, ?, 'completed', ?, CURRENT_TIMESTAMP)`,
+		"AAPL",
+		"USD",
+		"mock-symbol-model",
+		`{"overall_rating":"buy","target_action":"hold","overall_summary":"这是一段用于持仓引用的标的分析摘要","disclaimer":"仅供参考"}`,
+	)
+	if err != nil {
+		t.Fatalf("insert symbol analysis seed failed: %v", err)
+	}
+
+	original := aiChatCompletion
+	defer func() { aiChatCompletion = original }()
+	aiChatCompletion = func(ctx context.Context, req aiChatCompletionRequest) (aiChatCompletionResult, error) {
+		return aiChatCompletionResult{
+			Model: "mock-model",
+			Content: `{
+				"overall_summary":"ok",
+				"risk_level":"balanced",
+				"key_findings":["x"],
+				"recommendations":[{"symbol":"AAPL","action":"hold","theory_tag":"Buffett","rationale":"wait"}],
+				"disclaimer":"仅供参考"
+			}`,
+		}, nil
+	}
+
+	result, err := core.AnalyzeHoldings(HoldingsAnalysisRequest{
+		BaseURL:         "https://example.com/v1",
+		APIKey:          "key",
+		Model:           "mock-model",
+		Currency:        "USD",
+		RiskProfile:     "balanced",
+		Horizon:         "medium",
+		AdviceStyle:     "balanced",
+		AllowNewSymbols: true,
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeHoldings failed: %v", err)
+	}
+	if len(result.SymbolRefs) != 1 {
+		t.Fatalf("expected 1 symbol ref, got %d", len(result.SymbolRefs))
+	}
+	if result.SymbolRefs[0].Symbol != "AAPL" {
+		t.Fatalf("unexpected symbol ref: %+v", result.SymbolRefs[0])
+	}
+}
+
+func TestGetHoldingsAnalysisAndHistory(t *testing.T) {
+	core, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	testAccount(t, core, "acc-history", "Main")
+	testBuyTransaction(t, core, "MSFT", 5, 200, "USD", "acc-history")
+
+	original := aiChatCompletion
+	defer func() { aiChatCompletion = original }()
+	aiChatCompletion = func(ctx context.Context, req aiChatCompletionRequest) (aiChatCompletionResult, error) {
+		return aiChatCompletionResult{
+			Model: "mock-model",
+			Content: `{
+				"overall_summary":"history ok",
+				"risk_level":"balanced",
+				"key_findings":["x"],
+				"recommendations":[{"symbol":"MSFT","action":"hold","theory_tag":"Buffett","rationale":"wait"}],
+				"disclaimer":"仅供参考"
+			}`,
+		}, nil
+	}
+
+	_, err := core.AnalyzeHoldings(HoldingsAnalysisRequest{
+		BaseURL:         "https://example.com/v1",
+		APIKey:          "key",
+		Model:           "mock-model",
+		Currency:        "USD",
+		RiskProfile:     "balanced",
+		Horizon:         "medium",
+		AdviceStyle:     "balanced",
+		AllowNewSymbols: true,
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeHoldings failed: %v", err)
+	}
+
+	latest, err := core.GetHoldingsAnalysis("USD")
+	if err != nil {
+		t.Fatalf("GetHoldingsAnalysis failed: %v", err)
+	}
+	if latest == nil || latest.Currency != "USD" {
+		t.Fatalf("expected latest USD analysis, got %+v", latest)
+	}
+
+	history, err := core.GetHoldingsAnalysisHistory("USD", 10)
+	if err != nil {
+		t.Fatalf("GetHoldingsAnalysisHistory failed: %v", err)
+	}
+	if len(history) == 0 {
+		t.Fatal("expected non-empty history")
+	}
+
+	allHistory, err := core.GetHoldingsAnalysisHistory("", 10)
+	if err != nil {
+		t.Fatalf("GetHoldingsAnalysisHistory(all) failed: %v", err)
+	}
+	if len(allHistory) == 0 {
+		t.Fatal("expected non-empty all-currency history")
+	}
+}
+
+func TestAnalyzeHoldingsStream_NilCallback(t *testing.T) {
+	core, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	testAccount(t, core, "acc-nil", "Main")
+	testBuyTransaction(t, core, "AAPL", 10, 100, "USD", "acc-nil")
+
+	originalStream := aiChatCompletionStream
+	defer func() { aiChatCompletionStream = originalStream }()
+	aiChatCompletionStream = func(ctx context.Context, req aiChatCompletionRequest, onDelta func(string) error) (aiChatCompletionResult, error) {
+		return aiChatCompletionResult{
+			Model: "mock-stream-model",
+			Content: `{
+				"overall_summary":"ok",
+				"risk_level":"balanced",
+				"key_findings":["x"],
+				"recommendations":[{"symbol":"AAPL","action":"hold","theory_tag":"Buffett","rationale":"wait"}],
+				"disclaimer":"仅供参考"
+			}`,
+		}, nil
+	}
+
+	result, err := core.AnalyzeHoldingsStream(HoldingsAnalysisRequest{
+		BaseURL:         "https://example.com/v1",
+		APIKey:          "key",
+		Model:           "claude-3-5-sonnet-20241022",
+		Currency:        "USD",
+		RiskProfile:     "balanced",
+		Horizon:         "medium",
+		AdviceStyle:     "balanced",
+		AllowNewSymbols: true,
+	}, nil)
+	if err != nil {
+		t.Fatalf("AnalyzeHoldingsStream(nil callback) failed: %v", err)
+	}
+	if result == nil || result.OverallSummary == "" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestAnalyzeHoldingsStream_CallbackReturnsError(t *testing.T) {
+	core, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	testAccount(t, core, "acc-callback", "Main")
+	testBuyTransaction(t, core, "AAPL", 10, 100, "USD", "acc-callback")
+
+	originalStream := aiChatCompletionStream
+	defer func() { aiChatCompletionStream = originalStream }()
+	aiChatCompletionStream = func(ctx context.Context, req aiChatCompletionRequest, onDelta func(string) error) (aiChatCompletionResult, error) {
+		if err := onDelta("partial"); err != nil {
+			return aiChatCompletionResult{}, err
+		}
+		return aiChatCompletionResult{}, nil
+	}
+
+	_, err := core.AnalyzeHoldingsStream(HoldingsAnalysisRequest{
+		BaseURL:         "https://example.com/v1",
+		APIKey:          "key",
+		Model:           "claude-3-5-sonnet-20241022",
+		Currency:        "USD",
+		RiskProfile:     "balanced",
+		Horizon:         "medium",
+		AdviceStyle:     "balanced",
+		AllowNewSymbols: true,
+	}, func(delta string) error {
+		return errors.New("stop from callback")
+	})
+	if err == nil || !strings.Contains(err.Error(), "stop from callback") {
+		t.Fatalf("expected callback error, got %v", err)
+	}
+}
+
+func TestRequestAIChatCompletionStream_CallbackError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: content_block_delta\n"))
+		_, _ = w.Write([]byte(`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x"}}` + "\n\n"))
+	}))
+	defer server.Close()
+
+	_, err := requestAIChatCompletionStream(context.Background(), aiChatCompletionRequest{
+		EndpointURL:  server.URL + "/v1/chat/completions",
+		APIKey:       "key",
+		Model:        "claude-3-5-sonnet-20241022",
+		SystemPrompt: "sys",
+		UserPrompt:   "user",
+	}, func(delta string) error {
+		return errors.New("stop stream")
+	})
+	if err == nil || !strings.Contains(err.Error(), "stream callback failed") {
+		t.Fatalf("expected callback error, got %v", err)
+	}
+}
+
+func TestRequestAIChatCompletionStream_NilCallbackUsesDefaultPath(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"model-nil","choices":[{"message":{"content":"{\"overall_summary\":\"ok\",\"risk_level\":\"balanced\",\"key_findings\":[],\"recommendations\":[],\"disclaimer\":\"d\"}"}}]}`))
+	}))
+	defer server.Close()
+
+	result, err := requestAIChatCompletionStream(context.Background(), aiChatCompletionRequest{
+		EndpointURL:  server.URL,
+		APIKey:       "key",
+		Model:        "model-nil",
+		SystemPrompt: "sys",
+		UserPrompt:   "user",
+	}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result.Content, "overall_summary") {
+		t.Fatalf("unexpected content: %q", result.Content)
+	}
+}
+
+func TestDecodeAIModelAndContent_FromOutputArray(t *testing.T) {
+	t.Parallel()
+
+	body := []byte(`{"model":"m-output","output":[{"content":[{"type":"text","text":"hello from output"}]}]}`)
+	model, content, err := decodeAIModelAndContent(body)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if model != "m-output" {
+		t.Fatalf("unexpected model: %s", model)
+	}
+	if content != "hello from output" {
+		t.Fatalf("unexpected content: %q", content)
+	}
+}
+
+func TestExtractOutputContentAndExtractTextVariants(t *testing.T) {
+	t.Parallel()
+
+	output := []any{
+		map[string]any{
+			"content": []any{
+				map[string]any{"text": "hello"},
+			},
+		},
+	}
+	if got := extractOutputContent(output); got != "hello" {
+		t.Fatalf("unexpected output content: %q", got)
+	}
+
+	fallbackOutput := []any{
+		map[string]any{
+			"text": "fallback text",
+		},
+	}
+	if got := extractOutputContent(fallbackOutput); got != "fallback text" {
+		t.Fatalf("unexpected fallback output content: %q", got)
+	}
+
+	mixed := []any{
+		"alpha",
+		map[string]any{"value": "beta"},
+		map[string]any{"content": "gamma"},
+		map[string]any{"content": []any{map[string]any{"text": "delta"}}},
+		map[string]any{"output_text": "epsilon"},
+	}
+	got := extractText(mixed)
+	for _, want := range []string{"alpha", "beta", "gamma", "delta", "epsilon"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("expected extractText to contain %q, got %q", want, got)
+		}
+	}
+}
+
+func TestParseAIErrorMessage(t *testing.T) {
+	t.Parallel()
+
+	msg := parseAIErrorMessage([]byte(`{"error":{"message":"bad request"}}`))
+	if msg != "bad request" {
+		t.Fatalf("unexpected error message: %q", msg)
+	}
+	msg = parseAIErrorMessage([]byte(`{"message":"fallback msg"}`))
+	if msg != "fallback msg" {
+		t.Fatalf("unexpected fallback message: %q", msg)
+	}
+	msg = parseAIErrorMessage([]byte(`not-json`))
+	if msg != "" {
+		t.Fatalf("expected empty message for invalid json, got %q", msg)
+	}
+}
+
+func TestAnyToStringAndNormalizeRecommendations(t *testing.T) {
+	t.Parallel()
+
+	if got := anyToString("abc"); got != "abc" {
+		t.Fatalf("unexpected string conversion: %q", got)
+	}
+	if got := anyToString(float64(12.5)); got != "12.5" {
+		t.Fatalf("unexpected float conversion: %q", got)
+	}
+	if got := anyToString(nil); got != "" {
+		t.Fatalf("unexpected nil conversion: %q", got)
+	}
+	if got := anyToString(true); got != "true" {
+		t.Fatalf("unexpected default conversion: %q", got)
+	}
+
+	normalized := normalizeRecommendations([]HoldingsAnalysisRecommendation{
+		{
+			Symbol:    " AAPL ",
+			Action:    "",
+			TheoryTag: "",
+			Rationale: "",
+			Priority:  " high ",
+		},
+	})
+	if len(normalized) != 1 {
+		t.Fatalf("unexpected normalized length: %d", len(normalized))
+	}
+	if normalized[0].Action != "hold" {
+		t.Fatalf("expected default action hold, got %q", normalized[0].Action)
+	}
+	if normalized[0].TheoryTag != "Malkiel" {
+		t.Fatalf("expected default theory, got %q", normalized[0].TheoryTag)
+	}
+	if normalized[0].Rationale == "" {
+		t.Fatal("expected default rationale")
+	}
+	if normalized[0].Priority != "high" {
+		t.Fatalf("expected trimmed priority, got %q", normalized[0].Priority)
+	}
+}
+
+func TestGetHoldingsAnalysisHistory_EmptyResult(t *testing.T) {
+	core, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	history, err := core.GetHoldingsAnalysisHistory("", 0)
+	if err != nil {
+		t.Fatalf("GetHoldingsAnalysisHistory failed: %v", err)
+	}
+	if history == nil {
+		t.Fatal("expected empty slice, got nil")
+	}
+	if len(history) != 0 {
+		t.Fatalf("expected empty history, got %d", len(history))
+	}
+
+	latest, err := core.GetHoldingsAnalysis("USD")
+	if err != nil {
+		t.Fatalf("GetHoldingsAnalysis failed: %v", err)
+	}
+	if latest != nil {
+		t.Fatalf("expected nil latest analysis, got %+v", latest)
 	}
 }
 
