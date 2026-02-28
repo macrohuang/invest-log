@@ -1624,7 +1624,7 @@ func TestBuildGeminiClientConfig(t *testing.T) {
 	if config.APIKey != "test-key" {
 		t.Fatalf("unexpected api key: %q", config.APIKey)
 	}
-	if config.HTTPOptions.BaseURL != "https://generativelanguage.googleapis.com/" {
+	if config.HTTPOptions.BaseURL != "https://generativelanguage.googleapis.com" {
 		t.Fatalf("unexpected base url: %q", config.HTTPOptions.BaseURL)
 	}
 	if config.HTTPOptions.APIVersion != "v1beta" {
@@ -1639,7 +1639,7 @@ func TestBuildGeminiClientConfig_FallbackFromOpenAIDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildGeminiClientConfig failed: %v", err)
 	}
-	if config.HTTPOptions.BaseURL != "https://generativelanguage.googleapis.com/" {
+	if config.HTTPOptions.BaseURL != "https://generativelanguage.googleapis.com" {
 		t.Fatalf("unexpected fallback base url: %q", config.HTTPOptions.BaseURL)
 	}
 	if config.HTTPOptions.APIVersion != "v1beta" {

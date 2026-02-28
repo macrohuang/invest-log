@@ -794,9 +794,10 @@ func requestAIByGeminiNative(ctx context.Context, req aiChatCompletionRequest, o
 		SystemInstruction: &genai.Content{
 			Parts: []*genai.Part{{Text: req.SystemPrompt}},
 		},
-		Temperature:      genai.Ptr(float32(0.2)),
-		MaxOutputTokens:  aiMaxOutputTokens,
-		ResponseMIMEType: "application/json",
+		Temperature:     genai.Ptr(float32(0.2)),
+		MaxOutputTokens: aiMaxOutputTokens,
+		// 不强制设置 ResponseMIMEType，部分镜像不支持该参数会导致请求失败。
+		// JSON 格式由 system prompt 引导输出。
 	}
 	contents := genai.Text(req.UserPrompt)
 
@@ -878,7 +879,9 @@ func buildGeminiClientConfig(endpoint, apiKey string) (*genai.ClientConfig, erro
 		APIKey:  strings.TrimSpace(apiKey),
 		Backend: genai.BackendGeminiAPI,
 		HTTPOptions: genai.HTTPOptions{
-			BaseURL:    baseURL,
+			// SDK 拼接 URL 时会在 BaseURL 和 suffix 之间固定插入 "/"，
+			// 若 BaseURL 本身有尾部斜杠则产生 "//"，导致镜像路由匹配失败（404）。
+			BaseURL:    strings.TrimRight(baseURL, "/"),
 			APIVersion: apiVersion,
 		},
 	}, nil
