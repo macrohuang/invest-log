@@ -3,6 +3,7 @@ const state = {
   privacy: false,
   aiAnalysisByCurrency: {},
   aiAnalysisHistoryByCurrency: {}, // { currency: HoldingsAnalysisResult[] }
+  aiStreamingByCurrency: {}, // { currency: { active: boolean, content: string, error: string } }
   holdingsFilters: {}, // { currency: { accountIds: [], symbols: [] } }
   aiSettings: null,
   aiSettingsLoaded: false,
@@ -195,6 +196,79 @@ async function fetchJSON(path, options = {}) {
     return null;
   }
   return response.json();
+}
+
+function parseSSEEvent(block) {
+  const normalized = String(block || '').replace(/\r/g, '');
+  const lines = normalized.split('\n');
+  let eventName = 'message';
+  const dataLines = [];
+  lines.forEach((line) => {
+    if (line.startsWith('event:')) {
+      eventName = line.slice(6).trim() || 'message';
+      return;
+    }
+    if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).trim());
+    }
+  });
+  if (!dataLines.length) {
+    return null;
+  }
+  return {
+    event: eventName,
+    data: dataLines.join('\n'),
+  };
+}
+
+async function fetchSSE(path, options = {}) {
+  if (!state.apiBase && window.location.protocol === 'file:') {
+    throw new Error('API base not set');
+  }
+
+  const response = await fetch(apiUrl(path), {
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+    ...options,
+  });
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || `Request failed: ${response.status}`);
+  }
+  if (!response.body) {
+    throw new Error('SSE response body unavailable');
+  }
+
+  const onEvent = typeof options.onEvent === 'function' ? options.onEvent : () => {};
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+
+    let separator = buffer.indexOf('\n\n');
+    while (separator !== -1) {
+      const rawEvent = buffer.slice(0, separator);
+      buffer = buffer.slice(separator + 2);
+      const parsed = parseSSEEvent(rawEvent);
+      if (parsed) {
+        await onEvent(parsed);
+      }
+      separator = buffer.indexOf('\n\n');
+    }
+  }
+
+  const tail = parseSSEEvent(buffer.trim());
+  if (tail) {
+    await onEvent(tail);
+  }
 }
 
 function setActiveRoute(routeKey) {
@@ -603,7 +677,30 @@ function renderReviewModeSection(results) {
   `;
 }
 
-function renderAIAnalysisCard(result, currency) {
+function renderAIAnalysisCard(result, currency, streamState) {
+  if (streamState && (streamState.active || (!result && (streamState.content || streamState.error)))) {
+    const streamLabel = streamState.active ? 'Streaming...' : 'Streaming Stopped';
+    const streamedContent = streamState.content
+      ? `<pre class="section-sub" style="white-space:pre-wrap; margin: 8px 0 0;">${escapeHtml(streamState.content)}</pre>`
+      : '<div class="section-sub">等待模型返回内容…</div>';
+    const errorMarkup = streamState.error
+      ? `<div class="alert" style="margin-top:8px;">${escapeHtml(streamState.error)}</div>`
+      : '';
+    return `
+      <div class="card ai-analysis-card" data-ai-analysis-card="${currency}">
+        <div class="ai-analysis-head">
+          <h4>AI Analysis <span class="tag other">${streamLabel}</span></h4>
+          <div class="section-sub">正在接收 Claude 返回的增量结果</div>
+        </div>
+        <div class="ai-section">
+          <h5>Live Output</h5>
+          ${streamedContent}
+          ${errorMarkup}
+        </div>
+      </div>
+    `;
+  }
+
   if (!result) {
     return '';
   }
@@ -1269,6 +1366,7 @@ async function renderHoldings() {
 
       const canUpdateAll = allSymbols.some((s) => s.auto_update !== 0);
       const aiResult = state.aiAnalysisByCurrency[currency] || null;
+      const streamState = state.aiStreamingByCurrency[currency] || null;
       const totalMarketValue = Number(currencyData.total_market_value ?? 0);
       const totalCost = Number(currencyData.total_cost ?? 0);
       const totalPnL = Number(currencyData.total_pnl ?? (totalMarketValue - totalCost));
@@ -1410,7 +1508,7 @@ async function renderHoldings() {
               </thead>
               <tbody>${rows || '<tr><td colspan="8" style="text-align:center; padding: 20px;">No positions match filters.</td></tr>'}</tbody>
             </table>
-            ${renderAIAnalysisCard(aiResult, currency)}
+            ${renderAIAnalysisCard(aiResult, currency, streamState)}
             ${renderAIAnalysisHistory(state.aiAnalysisHistoryByCurrency[currency] || [], currency)}
           </div>
         </div>
@@ -1710,23 +1808,85 @@ async function runAIHoldingsAnalysis(currency, analysisType) {
     return false;
   }
 
-  const result = await fetchJSON('/api/ai/holdings-analysis', {
-    method: 'POST',
-    body: JSON.stringify({
-      base_url: normalizedSettings.baseUrl,
-      api_key: normalizedSettings.apiKey,
-      model: normalizedSettings.model,
-      currency,
-      risk_profile: normalizedSettings.riskProfile,
-      horizon: normalizedSettings.horizon,
-      advice_style: normalizedSettings.adviceStyle,
-      allow_new_symbols: normalizedSettings.allowNewSymbols,
-      strategy_prompt: normalizedSettings.strategyPrompt,
-      analysis_type: analysisType || 'adhoc',
-    }),
-  });
+  state.aiStreamingByCurrency[currency] = {
+    active: true,
+    content: '',
+    error: '',
+  };
+  renderHoldings();
 
-  state.aiAnalysisByCurrency[currency] = result;
+  let pendingRender = null;
+  const scheduleRender = () => {
+    if (pendingRender !== null) {
+      return;
+    }
+    pendingRender = setTimeout(() => {
+      pendingRender = null;
+      if ((window.location.hash || '').startsWith('#/holdings')) {
+        renderHoldings();
+      }
+    }, 120);
+  };
+
+  let finalResult = null;
+  try {
+    await fetchSSE('/api/ai/holdings-analysis/stream', {
+      method: 'POST',
+      body: JSON.stringify({
+        base_url: normalizedSettings.baseUrl,
+        api_key: normalizedSettings.apiKey,
+        model: normalizedSettings.model,
+        currency,
+        risk_profile: normalizedSettings.riskProfile,
+        horizon: normalizedSettings.horizon,
+        advice_style: normalizedSettings.adviceStyle,
+        allow_new_symbols: normalizedSettings.allowNewSymbols,
+        strategy_prompt: normalizedSettings.strategyPrompt,
+        analysis_type: analysisType || 'adhoc',
+      }),
+      onEvent: async (event) => {
+        let payload = null;
+        try {
+          payload = JSON.parse(event.data);
+        } catch (err) {
+          payload = null;
+        }
+
+        if (event.event === 'chunk') {
+          const delta = payload && payload.delta ? String(payload.delta) : '';
+          if (delta) {
+            state.aiStreamingByCurrency[currency].content += delta;
+            scheduleRender();
+          }
+          return;
+        }
+
+        if (event.event === 'done') {
+          finalResult = payload && payload.result ? payload.result : null;
+          return;
+        }
+
+        if (event.event === 'error') {
+          const message = payload && payload.error ? String(payload.error) : 'AI stream failed';
+          state.aiStreamingByCurrency[currency].error = message;
+          state.aiStreamingByCurrency[currency].active = false;
+          scheduleRender();
+          throw new Error(message);
+        }
+      },
+    });
+  } finally {
+    if (pendingRender !== null) {
+      clearTimeout(pendingRender);
+    }
+  }
+
+  if (!finalResult) {
+    throw new Error('AI stream ended without final result');
+  }
+
+  state.aiAnalysisByCurrency[currency] = finalResult;
+  delete state.aiStreamingByCurrency[currency];
   return true;
 }
 
@@ -3441,7 +3601,7 @@ async function renderSettings() {
     const aiAnalysisSection = `
       <div class="card">
         <h3>AI Analysis</h3>
-        <div class="section-sub">OpenAI-compatible configuration for holdings analysis.</div>
+        <div class="section-sub">Claude / OpenAI-compatible configuration for holdings analysis.</div>
         <div class="form">
           <div class="form-row">
             <div class="field">

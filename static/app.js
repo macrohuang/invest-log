@@ -3,7 +3,7 @@ const state = {
   privacy: false,
   aiAnalysisByCurrency: {},
   aiAnalysisHistoryByCurrency: {}, // { currency: HoldingsAnalysisResult[] }
-  aiStreamingByCurrency: {}, // { currency: { active, stage, text, error } }
+  aiStreamingByCurrency: {}, // { currency: { active, stage, text, content, error } }
   holdingsFilters: {}, // { currency: { accountIds: [], symbols: [] } }
   aiSettings: null,
   aiSettingsLoaded: false,
@@ -198,96 +198,109 @@ async function fetchJSON(path, options = {}) {
   return response.json();
 }
 
-function parseSSEEventChunk(chunk, emit) {
-  const lines = chunk.split('\n');
-  let event = 'message';
+function parseSSEEvent(block) {
+  const normalized = String(block || '').replace(/\r/g, '');
+  const lines = normalized.split('\n');
+  let eventName = 'message';
   const dataLines = [];
-
   lines.forEach((line) => {
-    const trimmed = line.replace(/\r$/, '');
-    if (!trimmed) {
+    if (line.startsWith('event:')) {
+      eventName = line.slice(6).trim() || 'message';
       return;
     }
-    if (trimmed.startsWith('event:')) {
-      event = trimmed.slice(6).trim();
-      return;
-    }
-    if (trimmed.startsWith('data:')) {
-      dataLines.push(trimmed.slice(5).trimStart());
+    if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).trim());
     }
   });
-
-  const dataRaw = dataLines.join('\n');
-  if (!dataRaw) {
-    return;
+  if (!dataLines.length) {
+    return null;
   }
-
-  let payload = dataRaw;
-  try {
-    payload = JSON.parse(dataRaw);
-  } catch (_) {
-    // Keep raw string when JSON parsing fails.
-  }
-  emit(event, payload);
+  return {
+    event: eventName,
+    data: dataLines.join('\n'),
+  };
 }
 
-async function postSSE(path, payload, handlers = {}) {
+async function fetchSSE(path, options = {}) {
   if (!state.apiBase && window.location.protocol === 'file:') {
     throw new Error('API base not set');
   }
 
   const response = await fetch(apiUrl(path), {
-    method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      ...options.headers,
     },
-    body: JSON.stringify(payload),
+    ...options,
   });
-
   if (!response.ok) {
-    const text = await response.text();
-    throw new Error(text || `Request failed: ${response.status}`);
+    const message = await response.text();
+    throw new Error(message || `Request failed: ${response.status}`);
   }
-
   if (!response.body) {
-    throw new Error('Streaming response body missing');
+    throw new Error('SSE response body unavailable');
   }
 
+  const onEvent = typeof options.onEvent === 'function' ? options.onEvent : () => {};
   const reader = response.body.getReader();
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder('utf-8');
   let buffer = '';
 
-  const emit = (event, data) => {
-    if (handlers.onEvent) handlers.onEvent(event, data);
-    if (event === 'progress' && handlers.onProgress) handlers.onProgress(data);
-    if (event === 'delta' && handlers.onDelta) handlers.onDelta(data);
-    if (event === 'result' && handlers.onResult) handlers.onResult(data);
-    if (event === 'error' && handlers.onError) handlers.onError(data);
-    if (event === 'done' && handlers.onDone) handlers.onDone(data);
-  };
-
   while (true) {
-    const { done, value } = await reader.read();
+    const { value, done } = await reader.read();
     if (done) {
       break;
     }
     buffer += decoder.decode(value, { stream: true });
 
-    let sepIndex = buffer.indexOf('\n\n');
-    while (sepIndex !== -1) {
-      const rawEvent = buffer.slice(0, sepIndex);
-      buffer = buffer.slice(sepIndex + 2);
-      if (rawEvent.trim()) {
-        parseSSEEventChunk(rawEvent, emit);
+    let separator = buffer.indexOf('\n\n');
+    while (separator !== -1) {
+      const rawEvent = buffer.slice(0, separator);
+      buffer = buffer.slice(separator + 2);
+      const parsed = parseSSEEvent(rawEvent);
+      if (parsed) {
+        await onEvent(parsed);
       }
-      sepIndex = buffer.indexOf('\n\n');
+      separator = buffer.indexOf('\n\n');
     }
   }
 
-  const tail = buffer.trim();
+  const tail = parseSSEEvent(buffer.trim());
   if (tail) {
-    parseSSEEventChunk(tail, emit);
+    await onEvent(tail);
   }
+}
+
+async function postSSE(path, payload, handlers = {}) {
+  await fetchSSE(path, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+    onEvent: async (event) => {
+      let data = event.data;
+      try {
+        data = JSON.parse(event.data);
+      } catch (_) {
+        // Keep raw string when JSON parsing fails.
+      }
+
+      if (handlers.onEvent) handlers.onEvent(event.event, data);
+      if (event.event === 'progress' && handlers.onProgress) handlers.onProgress(data);
+      if (event.event === 'delta' && handlers.onDelta) handlers.onDelta(data);
+      if (event.event === 'chunk') {
+        if (handlers.onChunk) handlers.onChunk(data);
+        if (handlers.onDelta) {
+          const chunkText = data && data.delta ? String(data.delta) : '';
+          handlers.onDelta({ text: chunkText });
+        }
+      }
+      if (event.event === 'result' && handlers.onResult) handlers.onResult(data);
+      if (event.event === 'error' && handlers.onError) handlers.onError(data);
+      if (event.event === 'done') {
+        if (data && data.result && handlers.onResult) handlers.onResult(data.result);
+        if (handlers.onDone) handlers.onDone(data);
+      }
+    },
+  });
 }
 
 function setActiveRoute(routeKey) {
@@ -703,7 +716,8 @@ function renderAIStreamCard(currency) {
   }
 
   const stage = streamState.stage ? escapeHtml(String(streamState.stage)) : 'Analyzing...';
-  const text = streamState.text ? escapeHtml(String(streamState.text)) : '';
+  const rawText = streamState.text || streamState.content || '';
+  const text = rawText ? escapeHtml(String(rawText)) : '';
   const error = streamState.error ? escapeHtml(String(streamState.error)) : '';
   const statusLabel = streamState.active ? 'Streaming' : (error ? 'Failed' : 'Completed');
 
@@ -1385,6 +1399,7 @@ async function renderHoldings() {
 
       const canUpdateAll = allSymbols.some((s) => s.auto_update !== 0);
       const aiResult = state.aiAnalysisByCurrency[currency] || null;
+      const streamState = state.aiStreamingByCurrency[currency] || null;
       const totalMarketValue = Number(currencyData.total_market_value ?? 0);
       const totalCost = Number(currencyData.total_cost ?? 0);
       const totalPnL = Number(currencyData.total_pnl ?? (totalMarketValue - totalCost));
@@ -1831,12 +1846,25 @@ async function runAIHoldingsAnalysis(currency, analysisType) {
     active: true,
     stage: 'Connecting to AI service...',
     text: '',
+    content: '',
     error: '',
   };
   renderHoldings();
 
   let result = null;
   let streamError = '';
+  let pendingRender = null;
+  const scheduleRender = () => {
+    if (pendingRender !== null) {
+      return;
+    }
+    pendingRender = setTimeout(() => {
+      pendingRender = null;
+      if ((window.location.hash || '').startsWith('#/holdings')) {
+        renderHoldings();
+      }
+    }, 120);
+  };
 
   try {
     await postSSE('/api/ai/holdings-analysis/stream', {
@@ -1860,35 +1888,67 @@ async function runAIHoldingsAnalysis(currency, analysisType) {
           ...current,
           stage: nextStage,
         };
+        scheduleRender();
       },
       onDelta: (payload) => {
-        const text = payload && payload.text ? String(payload.text) : '';
-        if (!text) return;
+        const deltaText = payload && (payload.text || payload.delta)
+          ? String(payload.text || payload.delta)
+          : '';
+        if (!deltaText) return;
         const current = state.aiStreamingByCurrency[currency] || {};
-        const existingText = current.text ? String(current.text) : '';
+        const existingText = current.text
+          ? String(current.text)
+          : (current.content ? String(current.content) : '');
+        const nextText = existingText + deltaText;
         state.aiStreamingByCurrency[currency] = {
           ...current,
-          text: existingText + text,
+          text: nextText,
+          content: nextText,
         };
+        scheduleRender();
       },
       onResult: (payload) => {
-        result = payload;
+        if (payload) {
+          result = payload;
+        }
+      },
+      onDone: (payload) => {
+        if (!result && payload && payload.result) {
+          result = payload.result;
+        }
       },
       onError: (payload) => {
         streamError = payload && payload.error
           ? String(payload.error)
           : 'AI analysis failed';
+        const current = state.aiStreamingByCurrency[currency] || {};
+        state.aiStreamingByCurrency[currency] = {
+          ...current,
+          active: false,
+          error: streamError,
+        };
+        scheduleRender();
       },
     });
   } catch (err) {
     streamError = err && err.message ? String(err.message) : 'AI analysis failed';
+  } finally {
+    if (pendingRender !== null) {
+      clearTimeout(pendingRender);
+      pendingRender = null;
+    }
   }
 
   if (streamError) {
+    const current = state.aiStreamingByCurrency[currency] || {};
+    const currentText = current.text
+      ? String(current.text)
+      : (current.content ? String(current.content) : '');
     state.aiStreamingByCurrency[currency] = {
       active: false,
       stage: 'Streaming ended with error',
-      text: (state.aiStreamingByCurrency[currency] && state.aiStreamingByCurrency[currency].text) || '',
+      text: currentText,
+      content: currentText,
       error: streamError,
     };
     renderHoldings();
@@ -1897,10 +1957,15 @@ async function runAIHoldingsAnalysis(currency, analysisType) {
 
   if (!result) {
     const message = 'AI analysis returned no result';
+    const current = state.aiStreamingByCurrency[currency] || {};
+    const currentText = current.text
+      ? String(current.text)
+      : (current.content ? String(current.content) : '');
     state.aiStreamingByCurrency[currency] = {
       active: false,
       stage: 'Streaming ended with empty result',
-      text: (state.aiStreamingByCurrency[currency] && state.aiStreamingByCurrency[currency].text) || '',
+      text: currentText,
+      content: currentText,
       error: message,
     };
     renderHoldings();
@@ -3708,7 +3773,7 @@ async function renderSettings() {
     const aiAnalysisSection = `
       <div class="card">
         <h3>AI Analysis</h3>
-        <div class="section-sub">OpenAI-compatible configuration for holdings analysis.</div>
+        <div class="section-sub">Claude / OpenAI-compatible configuration for holdings analysis.</div>
         <div class="form">
           <div class="form-row">
             <div class="field">

@@ -73,12 +73,13 @@ func TestBuildAllocationAdviceUserPrompt(t *testing.T) {
 	t.Parallel()
 
 	req := AllocationAdviceRequest{
-		AgeRange:      "30s",
-		InvestGoal:    "growth",
-		RiskTolerance: "balanced",
-		Horizon:       "long",
-		Currencies:    []string{"USD", "CNY"},
-		CustomPrompt:  "偏好低回撤",
+		AgeRange:        "30s",
+		InvestGoal:      "growth",
+		RiskTolerance:   "balanced",
+		Horizon:         "long",
+		ExperienceLevel: "intermediate",
+		Currencies:      []string{"USD", "CNY"},
+		CustomPrompt:    "偏好低回撤",
 	}
 	assetTypes := []AssetType{
 		{Code: "stock", Label: "股票"},
@@ -168,14 +169,15 @@ func TestGetAllocationAdvice_EndToEndWithStub(t *testing.T) {
 	}
 
 	result, err := core.GetAllocationAdvice(AllocationAdviceRequest{
-		BaseURL:       "https://example.com/v1",
-		APIKey:        "key",
-		Model:         "mock-allocation-model",
-		Currencies:    []string{"USD"},
-		AgeRange:      "30s",
-		InvestGoal:    "balanced",
-		RiskTolerance: "balanced",
-		Horizon:       "long",
+		BaseURL:         "https://example.com/v1",
+		APIKey:          "key",
+		Model:           "mock-allocation-model",
+		Currencies:      []string{"USD"},
+		AgeRange:        "30s",
+		InvestGoal:      "balanced",
+		RiskTolerance:   "balanced",
+		Horizon:         "long",
+		ExperienceLevel: "intermediate",
 	})
 	if err != nil {
 		t.Fatalf("GetAllocationAdvice failed: %v", err)
@@ -234,14 +236,15 @@ func TestGetAllocationAdviceWithStream_EmitsDelta(t *testing.T) {
 
 	var streamed strings.Builder
 	result, err := core.GetAllocationAdviceWithStream(AllocationAdviceRequest{
-		BaseURL:       "https://example.com/v1",
-		APIKey:        "key",
-		Model:         "mock-allocation-model",
-		Currencies:    []string{"USD"},
-		AgeRange:      "30s",
-		InvestGoal:    "balanced",
-		RiskTolerance: "balanced",
-		Horizon:       "long",
+		BaseURL:         "https://example.com/v1",
+		APIKey:          "key",
+		Model:           "mock-allocation-model",
+		Currencies:      []string{"USD"},
+		AgeRange:        "30s",
+		InvestGoal:      "balanced",
+		RiskTolerance:   "balanced",
+		Horizon:         "long",
+		ExperienceLevel: "intermediate",
 	}, func(delta string) {
 		streamed.WriteString(delta)
 	})

@@ -282,7 +282,14 @@ func (h *handler) analyzeHoldingsWithAIStream(w http.ResponseWriter, r *http.Req
 	initSSEHeaders(w)
 	w.WriteHeader(http.StatusOK)
 
-	if err := writeSSEEvent(w, flusher, "progress", map[string]any{
+	var streamMu sync.Mutex
+	writeStreamEvent := func(event string, payload any) error {
+		streamMu.Lock()
+		defer streamMu.Unlock()
+		return writeSSEEvent(w, flusher, event, payload)
+	}
+
+	if err := writeStreamEvent("progress", map[string]any{
 		"stage":   "start",
 		"message": "开始执行持仓分析",
 	}); err != nil {
@@ -290,7 +297,7 @@ func (h *handler) analyzeHoldingsWithAIStream(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	result, err := h.core.AnalyzeHoldingsWithStream(investlog.HoldingsAnalysisRequest{
+	result, err := h.core.AnalyzeHoldingsStream(investlog.HoldingsAnalysisRequest{
 		BaseURL:         payload.BaseURL,
 		APIKey:          payload.APIKey,
 		Model:           payload.Model,
@@ -301,13 +308,17 @@ func (h *handler) analyzeHoldingsWithAIStream(w http.ResponseWriter, r *http.Req
 		AllowNewSymbols: allowNewSymbols,
 		StrategyPrompt:  payload.StrategyPrompt,
 		AnalysisType:    payload.AnalysisType,
-	}, func(delta string) {
+	}, func(delta string) error {
 		if delta == "" {
-			return
+			return nil
 		}
-		if err := writeSSEEvent(w, flusher, "delta", map[string]string{"text": delta}); err != nil {
-			h.logger.Warn("ai holdings stream delta write failed", "err", err)
+		if err := writeStreamEvent("delta", map[string]string{"text": delta}); err != nil {
+			return err
 		}
+		if err := writeStreamEvent("chunk", map[string]string{"delta": delta}); err != nil {
+			return err
+		}
+		return nil
 	})
 	if err != nil {
 		h.logger.Error("ai holdings analysis stream failed",
@@ -316,13 +327,13 @@ func (h *handler) analyzeHoldingsWithAIStream(w http.ResponseWriter, r *http.Req
 			"base_url", payload.BaseURL,
 			"err", err,
 		)
-		_ = writeSSEEvent(w, flusher, "error", map[string]string{"error": err.Error()})
-		_ = writeSSEEvent(w, flusher, "done", map[string]any{"ok": false})
+		_ = writeStreamEvent("error", map[string]string{"error": err.Error()})
+		_ = writeStreamEvent("done", map[string]any{"ok": false})
 		return
 	}
 
-	_ = writeSSEEvent(w, flusher, "result", result)
-	_ = writeSSEEvent(w, flusher, "done", map[string]any{"ok": true})
+	_ = writeStreamEvent("result", result)
+	_ = writeStreamEvent("done", map[string]any{"ok": true, "result": result})
 }
 
 func (h *handler) getHoldingsAnalysis(w http.ResponseWriter, r *http.Request) {
