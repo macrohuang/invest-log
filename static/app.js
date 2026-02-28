@@ -751,6 +751,22 @@ function renderAIStreamCard(currency) {
   `;
 }
 
+// Updates only the AI stream card in-place to avoid a full page re-render during streaming.
+// Returns true if the card was found and updated; false if a full render is needed instead.
+function updateAIStreamCardInPlace(currency) {
+  const el = document.querySelector(`[data-ai-stream-card="${CSS.escape(currency)}"]`);
+  if (!el) return false;
+  const html = renderAIStreamCard(currency);
+  if (!html) return false;
+  const tmp = document.createElement('div');
+  tmp.innerHTML = html;
+  const newEl = tmp.firstElementChild;
+  if (newEl) {
+    el.replaceWith(newEl);
+  }
+  return true;
+}
+
 function renderAIAnalysisCard(result, currency) {
   if (!result) {
     return '';
@@ -1881,7 +1897,10 @@ async function runAIHoldingsAnalysis(currency, analysisType) {
     pendingRender = setTimeout(() => {
       pendingRender = null;
       if ((window.location.hash || '').startsWith('#/holdings')) {
-        renderHoldings();
+        // Update only the stream card in-place to avoid full page re-render flickering.
+        if (!updateAIStreamCardInPlace(currency)) {
+          renderHoldings();
+        }
       }
     }, 120);
   };
