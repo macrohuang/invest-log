@@ -123,6 +123,60 @@ func TestAnalyzeSymbol_EndToEnd(t *testing.T) {
 	}
 }
 
+func TestAnalyzeSymbolWithStream_EmitsDelta(t *testing.T) {
+	core, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	testAccount(t, core, "acc-stream", "Main")
+	testBuyTransaction(t, core, "AAPL", 10, 100, "USD", "acc-stream")
+
+	original := aiChatCompletion
+	defer func() { aiChatCompletion = original }()
+
+	origFetch := fetchExternalDataFn
+	defer func() { fetchExternalDataFn = origFetch }()
+	fetchExternalDataFn = func(_ context.Context, _, _ string, _ *slog.Logger) *symbolExternalData {
+		return nil
+	}
+
+	aiChatCompletion = func(ctx context.Context, req aiChatCompletionRequest) (aiChatCompletionResult, error) {
+		if req.OnDelta != nil {
+			req.OnDelta("delta")
+		}
+		return dimensionStubRouter(ctx, req)
+	}
+
+	var streamed strings.Builder
+	result, err := core.AnalyzeSymbolWithStream(SymbolAnalysisRequest{
+		BaseURL:  "https://example.com/v1",
+		APIKey:   "test-key",
+		Model:    "mock-model",
+		Symbol:   "AAPL",
+		Currency: "USD",
+	}, func(delta string) {
+		streamed.WriteString(delta)
+		streamed.WriteString("\n")
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeSymbolWithStream failed: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+
+	text := streamed.String()
+	hasDimensionDelta := strings.Contains(text, "[macro]") ||
+		strings.Contains(text, "[industry]") ||
+		strings.Contains(text, "[company]") ||
+		strings.Contains(text, "[international]")
+	if !hasDimensionDelta {
+		t.Fatalf("expected at least one dimension delta prefix, got: %s", text)
+	}
+	if !strings.Contains(text, "[synthesis]") {
+		t.Fatalf("expected synthesis delta prefix, got: %s", text)
+	}
+}
+
 func TestAnalyzeSymbol_Validation(t *testing.T) {
 	core, cleanup := setupTestDB(t)
 	defer cleanup()

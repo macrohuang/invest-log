@@ -15,6 +15,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	openai "github.com/openai/openai-go"
+	"github.com/openai/openai-go/option"
 )
 
 const (
@@ -172,6 +175,7 @@ type aiChatCompletionRequest struct {
 	SystemPrompt string
 	UserPrompt   string
 	Logger       *slog.Logger
+	OnDelta      func(string)
 }
 
 type aiChatCompletionResult struct {
@@ -183,6 +187,15 @@ var aiChatCompletion = requestAIChatCompletion
 
 // AnalyzeHoldings analyzes current holdings using an OpenAI-compatible model.
 func (c *Core) AnalyzeHoldings(req HoldingsAnalysisRequest) (*HoldingsAnalysisResult, error) {
+	return c.analyzeHoldings(req, nil)
+}
+
+// AnalyzeHoldingsWithStream analyzes holdings and exposes upstream delta chunks.
+func (c *Core) AnalyzeHoldingsWithStream(req HoldingsAnalysisRequest, onDelta func(string)) (*HoldingsAnalysisResult, error) {
+	return c.analyzeHoldings(req, onDelta)
+}
+
+func (c *Core) analyzeHoldings(req HoldingsAnalysisRequest, onDelta func(string)) (*HoldingsAnalysisResult, error) {
 	normalizedReq, err := normalizeHoldingsAnalysisRequest(req)
 	if err != nil {
 		return nil, err
@@ -216,6 +229,7 @@ func (c *Core) AnalyzeHoldings(req HoldingsAnalysisRequest) (*HoldingsAnalysisRe
 		SystemPrompt: holdingsAnalysisSystemPrompt,
 		UserPrompt:   userPrompt,
 		Logger:       c.Logger(),
+		OnDelta:      onDelta,
 	})
 	if err != nil {
 		return nil, err
@@ -386,12 +400,12 @@ func (c *Core) GetHoldingsAnalysisHistory(currency string, limit int) ([]Holding
 	var results []HoldingsAnalysisResult
 	for rows.Next() {
 		var (
-			id                              int64
-			curr, model, analysisType       string
-			riskLevel, overallSummary       sql.NullString
-			keyFindingsRaw, recsRaw         sql.NullString
-			disclaimer, symbolRefsRaw       sql.NullString
-			createdAt                       string
+			id                        int64
+			curr, model, analysisType string
+			riskLevel, overallSummary sql.NullString
+			keyFindingsRaw, recsRaw   sql.NullString
+			disclaimer, symbolRefsRaw sql.NullString
+			createdAt                 string
 		)
 		if err := rows.Scan(&id, &curr, &model, &analysisType, &riskLevel, &overallSummary,
 			&keyFindingsRaw, &recsRaw, &disclaimer, &symbolRefsRaw, &createdAt); err != nil {
@@ -399,14 +413,14 @@ func (c *Core) GetHoldingsAnalysisHistory(currency string, limit int) ([]Holding
 		}
 
 		result := HoldingsAnalysisResult{
-			ID:           id,
-			GeneratedAt:  createdAt,
-			Model:        model,
-			Currency:     curr,
-			AnalysisType: analysisType,
-			RiskLevel:    riskLevel.String,
+			ID:             id,
+			GeneratedAt:    createdAt,
+			Model:          model,
+			Currency:       curr,
+			AnalysisType:   analysisType,
+			RiskLevel:      riskLevel.String,
 			OverallSummary: overallSummary.String,
-			Disclaimer:   disclaimer.String,
+			Disclaimer:     disclaimer.String,
 		}
 
 		if keyFindingsRaw.Valid && keyFindingsRaw.String != "" {
@@ -605,6 +619,60 @@ func buildHoldingsAnalysisUserPrompt(input *holdingsAnalysisPromptInput, req Hol
 	return sb.String(), nil
 }
 
+func normalizeAIClientBaseURL(baseURL string) (string, error) {
+	trimmed := strings.TrimSpace(baseURL)
+	if trimmed == "" {
+		trimmed = defaultAIBaseURL
+	}
+	if !strings.Contains(trimmed, "://") {
+		trimmed = "https://" + trimmed
+	}
+	trimmed = strings.TrimRight(trimmed, "/")
+
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("invalid base_url: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("invalid base_url scheme: %s", parsed.Scheme)
+	}
+	if parsed.Host == "" {
+		return "", fmt.Errorf("invalid base_url host")
+	}
+
+	originalPath := strings.TrimRight(parsed.Path, "/")
+	path := strings.ToLower(originalPath)
+	trimmedPath := originalPath
+
+	hasCompletionsSuffix := strings.HasSuffix(path, "/chat/completions")
+	hasResponsesSuffix := strings.HasSuffix(path, "/responses")
+
+	switch {
+	case hasCompletionsSuffix:
+		trimmedPath = strings.TrimRight(originalPath[:len(originalPath)-len("/chat/completions")], "/")
+	case hasResponsesSuffix:
+		trimmedPath = strings.TrimRight(originalPath[:len(originalPath)-len("/responses")], "/")
+	}
+
+	switch {
+	case trimmedPath == "":
+		if !hasCompletionsSuffix && !hasResponsesSuffix {
+			trimmedPath = "/v1"
+		}
+	case strings.HasSuffix(strings.ToLower(trimmedPath), "/v1"):
+		// keep path as-is
+	case !hasCompletionsSuffix && !hasResponsesSuffix:
+		trimmedPath += "/v1"
+	}
+
+	parsed.Path = trimmedPath
+	parsed.RawPath = ""
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+
+	return strings.TrimRight(parsed.String(), "/"), nil
+}
+
 func buildAICompletionsEndpoint(baseURL string) (string, error) {
 	trimmed := strings.TrimSpace(baseURL)
 	if trimmed == "" {
@@ -796,41 +864,122 @@ func toAltResponsesEndpoint(endpoint string) string {
 func requestAIByChatCompletions(ctx context.Context, req aiChatCompletionRequest, endpoint string) (aiChatCompletionResult, error) {
 	logAIPromptDebug(req.Logger, endpoint, req.Model, req.SystemPrompt, req.UserPrompt)
 
-	payload := map[string]any{
-		"model": req.Model,
-		"messages": []map[string]string{
-			{"role": "system", "content": req.SystemPrompt},
-			{"role": "user", "content": req.UserPrompt},
+	baseURL, err := normalizeAIClientBaseURL(endpoint)
+	if err != nil {
+		return aiChatCompletionResult{}, err
+	}
+
+	client := openai.NewClient(
+		option.WithBaseURL(baseURL),
+		option.WithAPIKey(req.APIKey),
+		option.WithRequestTimeout(aiRequestTimeout),
+		option.WithMaxRetries(0),
+	)
+
+	stream := client.Chat.Completions.NewStreaming(ctx, openai.ChatCompletionNewParams{
+		Messages: []openai.ChatCompletionMessageParamUnion{
+			openai.SystemMessage(req.SystemPrompt),
+			openai.UserMessage(req.UserPrompt),
 		},
-		"temperature":           0.2,
-		"stream":                false,
-		"max_tokens":            aiMaxOutputTokens,
-		"max_completion_tokens": aiMaxOutputTokens,
-	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return aiChatCompletionResult{}, fmt.Errorf("marshal ai request: %w", err)
+		Model:               openai.ChatModel(req.Model),
+		Temperature:         openai.Float(0.2),
+		MaxCompletionTokens: openai.Int(aiMaxOutputTokens),
+		MaxTokens:           openai.Int(aiMaxOutputTokens),
+	})
+	defer func() { _ = stream.Close() }()
+
+	var (
+		model   = strings.TrimSpace(req.Model)
+		builder strings.Builder
+	)
+	for stream.Next() {
+		chunk := stream.Current()
+		if strings.TrimSpace(chunk.Model) != "" {
+			model = strings.TrimSpace(chunk.Model)
+		}
+		if len(chunk.Choices) == 0 {
+			continue
+		}
+		delta := chunk.Choices[0].Delta.Content
+		if delta == "" {
+			continue
+		}
+		builder.WriteString(delta)
+		if req.OnDelta != nil {
+			req.OnDelta(delta)
+		}
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
-	if err != nil {
-		return aiChatCompletionResult{}, fmt.Errorf("build ai request: %w", err)
+	if streamErr := stream.Err(); streamErr != nil {
+		if isTimeoutError(streamErr) {
+			return aiChatCompletionResult{}, fmt.Errorf("ai upstream timeout on %s; try a faster model or retry later", endpoint)
+		}
+		var upstreamErr *openai.Error
+		if errors.As(streamErr, &upstreamErr) {
+			message := strings.TrimSpace(upstreamErr.Message)
+			if message == "" {
+				message = strings.TrimSpace(upstreamErr.RawJSON())
+			}
+			if message == "" {
+				message = strings.TrimSpace(streamErr.Error())
+			}
+			return aiChatCompletionResult{}, fmt.Errorf("ai upstream error: %s", message)
+		}
+		return aiChatCompletionResult{}, fmt.Errorf("ai request failed: %w", streamErr)
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+req.APIKey)
 
-	respBody, err := executeAIRequest(httpReq, req.Logger)
-	if err != nil {
-		return aiChatCompletionResult{}, err
+	content := strings.TrimSpace(builder.String())
+	if content != "" {
+		if model == "" {
+			model = req.Model
+		}
+		return aiChatCompletionResult{Model: model, Content: content}, nil
 	}
 
-	model, content, err := decodeAIModelAndContent(respBody)
+	// Fallback for providers/tests that ignore stream and return one-shot JSON.
+	resp, err := client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
+		Messages: []openai.ChatCompletionMessageParamUnion{
+			openai.SystemMessage(req.SystemPrompt),
+			openai.UserMessage(req.UserPrompt),
+		},
+		Model:               openai.ChatModel(req.Model),
+		Temperature:         openai.Float(0.2),
+		MaxCompletionTokens: openai.Int(aiMaxOutputTokens),
+		MaxTokens:           openai.Int(aiMaxOutputTokens),
+	})
 	if err != nil {
-		return aiChatCompletionResult{}, err
+		if isTimeoutError(err) {
+			return aiChatCompletionResult{}, fmt.Errorf("ai upstream timeout on %s; try a faster model or retry later", endpoint)
+		}
+		var upstreamErr *openai.Error
+		if errors.As(err, &upstreamErr) {
+			message := strings.TrimSpace(upstreamErr.Message)
+			if message == "" {
+				message = strings.TrimSpace(upstreamErr.RawJSON())
+			}
+			if message == "" {
+				message = strings.TrimSpace(err.Error())
+			}
+			return aiChatCompletionResult{}, fmt.Errorf("ai upstream error: %s", message)
+		}
+		return aiChatCompletionResult{}, fmt.Errorf("ai request failed: %w", err)
+	}
+
+	if resp != nil {
+		if strings.TrimSpace(resp.Model) != "" {
+			model = strings.TrimSpace(resp.Model)
+		}
+		if len(resp.Choices) > 0 {
+			content = strings.TrimSpace(resp.Choices[0].Message.Content)
+		}
 	}
 	if content == "" {
 		return aiChatCompletionResult{}, fmt.Errorf("ai response content is empty")
 	}
+	if req.OnDelta != nil {
+		req.OnDelta(content)
+	}
+
 	return aiChatCompletionResult{Model: model, Content: content}, nil
 }
 

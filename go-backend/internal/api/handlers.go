@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 
@@ -251,6 +253,78 @@ func (h *handler) analyzeHoldingsWithAI(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (h *handler) analyzeHoldingsWithAIStream(w http.ResponseWriter, r *http.Request) {
+	var payload aiHoldingsAnalysisPayload
+	if err := decodeJSON(r, &payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if strings.TrimSpace(payload.APIKey) == "" {
+		writeError(w, http.StatusBadRequest, "api_key is required")
+		return
+	}
+	if strings.TrimSpace(payload.Model) == "" {
+		writeError(w, http.StatusBadRequest, "model is required")
+		return
+	}
+
+	allowNewSymbols := true
+	if payload.AllowNewSymbols != nil {
+		allowNewSymbols = *payload.AllowNewSymbols
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming unsupported")
+		return
+	}
+
+	initSSEHeaders(w)
+	w.WriteHeader(http.StatusOK)
+
+	if err := writeSSEEvent(w, flusher, "progress", map[string]any{
+		"stage":   "start",
+		"message": "开始执行持仓分析",
+	}); err != nil {
+		h.logger.Warn("ai holdings stream write failed", "stage", "start", "err", err)
+		return
+	}
+
+	result, err := h.core.AnalyzeHoldingsWithStream(investlog.HoldingsAnalysisRequest{
+		BaseURL:         payload.BaseURL,
+		APIKey:          payload.APIKey,
+		Model:           payload.Model,
+		Currency:        payload.Currency,
+		RiskProfile:     payload.RiskProfile,
+		Horizon:         payload.Horizon,
+		AdviceStyle:     payload.AdviceStyle,
+		AllowNewSymbols: allowNewSymbols,
+		StrategyPrompt:  payload.StrategyPrompt,
+		AnalysisType:    payload.AnalysisType,
+	}, func(delta string) {
+		if delta == "" {
+			return
+		}
+		if err := writeSSEEvent(w, flusher, "delta", map[string]string{"text": delta}); err != nil {
+			h.logger.Warn("ai holdings stream delta write failed", "err", err)
+		}
+	})
+	if err != nil {
+		h.logger.Error("ai holdings analysis stream failed",
+			"currency", payload.Currency,
+			"model", payload.Model,
+			"base_url", payload.BaseURL,
+			"err", err,
+		)
+		_ = writeSSEEvent(w, flusher, "error", map[string]string{"error": err.Error()})
+		_ = writeSSEEvent(w, flusher, "done", map[string]any{"ok": false})
+		return
+	}
+
+	_ = writeSSEEvent(w, flusher, "result", result)
+	_ = writeSSEEvent(w, flusher, "done", map[string]any{"ok": true})
+}
+
 func (h *handler) getHoldingsAnalysis(w http.ResponseWriter, r *http.Request) {
 	currency := r.URL.Query().Get("currency")
 	result, err := h.core.GetHoldingsAnalysis(currency)
@@ -340,6 +414,80 @@ func (h *handler) getAIAllocationAdvice(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (h *handler) getAIAllocationAdviceStream(w http.ResponseWriter, r *http.Request) {
+	var payload aiAllocationAdvicePayload
+	if err := decodeJSON(r, &payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if strings.TrimSpace(payload.APIKey) == "" {
+		writeError(w, http.StatusBadRequest, "api_key is required")
+		return
+	}
+	if strings.TrimSpace(payload.Model) == "" {
+		writeError(w, http.StatusBadRequest, "model is required")
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming unsupported")
+		return
+	}
+
+	initSSEHeaders(w)
+	w.WriteHeader(http.StatusOK)
+
+	if err := writeSSEEvent(w, flusher, "progress", map[string]any{
+		"stage":   "start",
+		"message": "开始生成资产配置建议",
+	}); err != nil {
+		h.logger.Warn("ai allocation stream write failed", "stage", "start", "err", err)
+		return
+	}
+
+	if err := writeSSEEvent(w, flusher, "progress", map[string]any{
+		"stage":   "running",
+		"message": "正在调用 AI 生成配置区间",
+	}); err != nil {
+		h.logger.Warn("ai allocation stream write failed", "stage", "running", "err", err)
+		return
+	}
+
+	result, err := h.core.GetAllocationAdviceWithStream(investlog.AllocationAdviceRequest{
+		BaseURL:         payload.BaseURL,
+		APIKey:          payload.APIKey,
+		Model:           payload.Model,
+		AgeRange:        payload.AgeRange,
+		InvestGoal:      payload.InvestGoal,
+		RiskTolerance:   payload.RiskTolerance,
+		Horizon:         payload.Horizon,
+		ExperienceLevel: payload.ExperienceLevel,
+		Currencies:      payload.Currencies,
+		CustomPrompt:    payload.CustomPrompt,
+	}, func(delta string) {
+		if delta == "" {
+			return
+		}
+		if err := writeSSEEvent(w, flusher, "delta", map[string]string{"text": delta}); err != nil {
+			h.logger.Warn("ai allocation stream delta write failed", "err", err)
+		}
+	})
+	if err != nil {
+		h.logger.Error("ai allocation advice stream failed",
+			"model", payload.Model,
+			"base_url", payload.BaseURL,
+			"err", err,
+		)
+		_ = writeSSEEvent(w, flusher, "error", map[string]string{"error": err.Error()})
+		_ = writeSSEEvent(w, flusher, "done", map[string]any{"ok": false})
+		return
+	}
+
+	_ = writeSSEEvent(w, flusher, "result", result)
+	_ = writeSSEEvent(w, flusher, "done", map[string]any{"ok": true})
+}
+
 func (h *handler) analyzeSymbolWithAI(w http.ResponseWriter, r *http.Request) {
 	var payload aiSymbolAnalysisPayload
 	if err := decodeJSON(r, &payload); err != nil {
@@ -369,6 +517,108 @@ func (h *handler) analyzeSymbolWithAI(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *handler) analyzeSymbolWithAIStream(w http.ResponseWriter, r *http.Request) {
+	var payload aiSymbolAnalysisPayload
+	if err := decodeJSON(r, &payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if strings.TrimSpace(payload.APIKey) == "" {
+		writeError(w, http.StatusBadRequest, "api_key is required")
+		return
+	}
+	if strings.TrimSpace(payload.Model) == "" {
+		writeError(w, http.StatusBadRequest, "model is required")
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming unsupported")
+		return
+	}
+
+	initSSEHeaders(w)
+	w.WriteHeader(http.StatusOK)
+	var streamMu sync.Mutex
+	writeStreamEvent := func(event string, payload any) error {
+		streamMu.Lock()
+		defer streamMu.Unlock()
+		return writeSSEEvent(w, flusher, event, payload)
+	}
+
+	if err := writeStreamEvent("progress", map[string]any{
+		"stage":   "start",
+		"message": "开始执行个股分析",
+	}); err != nil {
+		h.logger.Warn("ai symbol stream write failed", "stage", "start", "err", err)
+		return
+	}
+
+	if err := writeStreamEvent("progress", map[string]any{
+		"stage":   "running",
+		"message": "正在调用 AI 多维分析",
+	}); err != nil {
+		h.logger.Warn("ai symbol stream write failed", "stage", "running", "err", err)
+		return
+	}
+
+	result, err := h.core.AnalyzeSymbolWithStream(investlog.SymbolAnalysisRequest{
+		BaseURL:        payload.BaseURL,
+		APIKey:         payload.APIKey,
+		Model:          payload.Model,
+		Symbol:         payload.Symbol,
+		Currency:       payload.Currency,
+		RiskProfile:    payload.RiskProfile,
+		Horizon:        payload.Horizon,
+		AdviceStyle:    payload.AdviceStyle,
+		StrategyPrompt: payload.StrategyPrompt,
+	}, func(delta string) {
+		if delta == "" {
+			return
+		}
+		if err := writeStreamEvent("delta", map[string]string{"text": delta}); err != nil {
+			h.logger.Warn("ai symbol stream delta write failed", "err", err)
+		}
+	})
+	if err != nil {
+		h.logger.Error("ai symbol analysis stream failed",
+			"symbol", payload.Symbol,
+			"currency", payload.Currency,
+			"model", payload.Model,
+			"err", err,
+		)
+		_ = writeStreamEvent("error", map[string]string{"error": err.Error()})
+		_ = writeStreamEvent("done", map[string]any{"ok": false})
+		return
+	}
+
+	_ = writeStreamEvent("result", result)
+	_ = writeStreamEvent("done", map[string]any{"ok": true})
+}
+
+func initSSEHeaders(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+}
+
+func writeSSEEvent(w http.ResponseWriter, flusher http.Flusher, event string, payload any) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	if _, err := w.Write([]byte("event: " + event + "\n")); err != nil {
+		return err
+	}
+	if _, err := w.Write([]byte("data: " + string(data) + "\n\n")); err != nil {
+		return err
+	}
+	flusher.Flush()
+	return nil
 }
 
 func (h *handler) getSymbolAnalysis(w http.ResponseWriter, r *http.Request) {

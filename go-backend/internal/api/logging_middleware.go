@@ -28,6 +28,12 @@ func (w *loggingResponseWriter) ErrorMessage() string {
 	return w.errorMessage
 }
 
+func (w *loggingResponseWriter) Flush() {
+	if flusher, ok := w.WrapResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
 func requestLoggingMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 	if logger == nil {
 		logger = slog.Default()
