@@ -3,6 +3,7 @@ const state = {
   privacy: false,
   aiAnalysisByCurrency: {},
   aiAnalysisHistoryByCurrency: {}, // { currency: HoldingsAnalysisResult[] }
+  aiStreamingByCurrency: {}, // { currency: { active, stage, text, error } }
   holdingsFilters: {}, // { currency: { accountIds: [], symbols: [] } }
   aiSettings: null,
   aiSettingsLoaded: false,
@@ -195,6 +196,98 @@ async function fetchJSON(path, options = {}) {
     return null;
   }
   return response.json();
+}
+
+function parseSSEEventChunk(chunk, emit) {
+  const lines = chunk.split('\n');
+  let event = 'message';
+  const dataLines = [];
+
+  lines.forEach((line) => {
+    const trimmed = line.replace(/\r$/, '');
+    if (!trimmed) {
+      return;
+    }
+    if (trimmed.startsWith('event:')) {
+      event = trimmed.slice(6).trim();
+      return;
+    }
+    if (trimmed.startsWith('data:')) {
+      dataLines.push(trimmed.slice(5).trimStart());
+    }
+  });
+
+  const dataRaw = dataLines.join('\n');
+  if (!dataRaw) {
+    return;
+  }
+
+  let payload = dataRaw;
+  try {
+    payload = JSON.parse(dataRaw);
+  } catch (_) {
+    // Keep raw string when JSON parsing fails.
+  }
+  emit(event, payload);
+}
+
+async function postSSE(path, payload, handlers = {}) {
+  if (!state.apiBase && window.location.protocol === 'file:') {
+    throw new Error('API base not set');
+  }
+
+  const response = await fetch(apiUrl(path), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `Request failed: ${response.status}`);
+  }
+
+  if (!response.body) {
+    throw new Error('Streaming response body missing');
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  const emit = (event, data) => {
+    if (handlers.onEvent) handlers.onEvent(event, data);
+    if (event === 'progress' && handlers.onProgress) handlers.onProgress(data);
+    if (event === 'delta' && handlers.onDelta) handlers.onDelta(data);
+    if (event === 'result' && handlers.onResult) handlers.onResult(data);
+    if (event === 'error' && handlers.onError) handlers.onError(data);
+    if (event === 'done' && handlers.onDone) handlers.onDone(data);
+  };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+
+    let sepIndex = buffer.indexOf('\n\n');
+    while (sepIndex !== -1) {
+      const rawEvent = buffer.slice(0, sepIndex);
+      buffer = buffer.slice(sepIndex + 2);
+      if (rawEvent.trim()) {
+        parseSSEEventChunk(rawEvent, emit);
+      }
+      sepIndex = buffer.indexOf('\n\n');
+    }
+  }
+
+  const tail = buffer.trim();
+  if (tail) {
+    parseSSEEventChunk(tail, emit);
+  }
 }
 
 function setActiveRoute(routeKey) {
@@ -599,6 +692,29 @@ function renderReviewModeSection(results) {
     <div class="review-mode-section">
       ${renderReviewCard(results, 'Weekly Review', 7)}
       ${renderReviewCard(results, 'Monthly Review', 30)}
+    </div>
+  `;
+}
+
+function renderAIStreamCard(currency) {
+  const streamState = state.aiStreamingByCurrency[currency];
+  if (!streamState) {
+    return '';
+  }
+
+  const stage = streamState.stage ? escapeHtml(String(streamState.stage)) : 'Analyzing...';
+  const text = streamState.text ? escapeHtml(String(streamState.text)) : '';
+  const error = streamState.error ? escapeHtml(String(streamState.error)) : '';
+  const statusLabel = streamState.active ? 'Streaming' : (error ? 'Failed' : 'Completed');
+
+  return `
+    <div class="card ai-stream-card" data-ai-stream-card="${currency}">
+      <div class="ai-analysis-head">
+        <h4>AI Streaming <span class="tag other">${statusLabel}</span></h4>
+        <div class="section-sub">${stage}</div>
+      </div>
+      ${error ? `<div class="section-sub ai-stream-error">${error}</div>` : ''}
+      ${text ? `<pre class="ai-stream-content">${text}</pre>` : '<div class="section-sub">Waiting for model output...</div>'}
     </div>
   `;
 }
@@ -1410,6 +1526,7 @@ async function renderHoldings() {
               </thead>
               <tbody>${rows || '<tr><td colspan="8" style="text-align:center; padding: 20px;">No positions match filters.</td></tr>'}</tbody>
             </table>
+            ${renderAIStreamCard(currency)}
             ${renderAIAnalysisCard(aiResult, currency)}
             ${renderAIAnalysisHistory(state.aiAnalysisHistoryByCurrency[currency] || [], currency)}
           </div>
@@ -1710,9 +1827,19 @@ async function runAIHoldingsAnalysis(currency, analysisType) {
     return false;
   }
 
-  const result = await fetchJSON('/api/ai/holdings-analysis', {
-    method: 'POST',
-    body: JSON.stringify({
+  state.aiStreamingByCurrency[currency] = {
+    active: true,
+    stage: 'Connecting to AI service...',
+    text: '',
+    error: '',
+  };
+  renderHoldings();
+
+  let result = null;
+  let streamError = '';
+
+  try {
+    await postSSE('/api/ai/holdings-analysis/stream', {
       base_url: normalizedSettings.baseUrl,
       api_key: normalizedSettings.apiKey,
       model: normalizedSettings.model,
@@ -1723,9 +1850,64 @@ async function runAIHoldingsAnalysis(currency, analysisType) {
       allow_new_symbols: normalizedSettings.allowNewSymbols,
       strategy_prompt: normalizedSettings.strategyPrompt,
       analysis_type: analysisType || 'adhoc',
-    }),
-  });
+    }, {
+      onProgress: (payload) => {
+        const nextStage = payload && payload.message
+          ? String(payload.message)
+          : 'Analyzing...';
+        const current = state.aiStreamingByCurrency[currency] || {};
+        state.aiStreamingByCurrency[currency] = {
+          ...current,
+          stage: nextStage,
+        };
+      },
+      onDelta: (payload) => {
+        const text = payload && payload.text ? String(payload.text) : '';
+        if (!text) return;
+        const current = state.aiStreamingByCurrency[currency] || {};
+        const existingText = current.text ? String(current.text) : '';
+        state.aiStreamingByCurrency[currency] = {
+          ...current,
+          text: existingText + text,
+        };
+      },
+      onResult: (payload) => {
+        result = payload;
+      },
+      onError: (payload) => {
+        streamError = payload && payload.error
+          ? String(payload.error)
+          : 'AI analysis failed';
+      },
+    });
+  } catch (err) {
+    streamError = err && err.message ? String(err.message) : 'AI analysis failed';
+  }
 
+  if (streamError) {
+    state.aiStreamingByCurrency[currency] = {
+      active: false,
+      stage: 'Streaming ended with error',
+      text: (state.aiStreamingByCurrency[currency] && state.aiStreamingByCurrency[currency].text) || '',
+      error: streamError,
+    };
+    renderHoldings();
+    throw new Error(streamError);
+  }
+
+  if (!result) {
+    const message = 'AI analysis returned no result';
+    state.aiStreamingByCurrency[currency] = {
+      active: false,
+      stage: 'Streaming ended with empty result',
+      text: (state.aiStreamingByCurrency[currency] && state.aiStreamingByCurrency[currency].text) || '',
+      error: message,
+    };
+    renderHoldings();
+    throw new Error(message);
+  }
+
+  delete state.aiStreamingByCurrency[currency];
   state.aiAnalysisByCurrency[currency] = result;
   return true;
 }
@@ -1756,8 +1938,42 @@ async function renderSymbolAnalysis() {
   runBtn.addEventListener('click', async () => {
     runBtn.disabled = true;
     runBtn.textContent = 'Analyzing...';
+    const contentEl = document.getElementById('symbol-analysis-content');
+    const streamState = {
+      stage: 'Connecting to AI service...',
+      text: '',
+      error: '',
+    };
+    if (contentEl) {
+      contentEl.innerHTML = renderSymbolAnalysisStreamingCard(streamState);
+    }
     try {
-      await runSymbolAnalysis(symbol, currency);
+      await runSymbolAnalysis(symbol, currency, {
+        onProgress: (payload) => {
+          streamState.stage = payload && payload.message
+            ? String(payload.message)
+            : 'Analyzing...';
+          if (contentEl) {
+            contentEl.innerHTML = renderSymbolAnalysisStreamingCard(streamState);
+          }
+        },
+        onDelta: (payload) => {
+          const text = payload && payload.text ? String(payload.text) : '';
+          if (!text) return;
+          streamState.text += text;
+          if (contentEl) {
+            contentEl.innerHTML = renderSymbolAnalysisStreamingCard(streamState);
+          }
+        },
+        onError: (payload) => {
+          streamState.error = payload && payload.error
+            ? String(payload.error)
+            : 'Analysis failed';
+          if (contentEl) {
+            contentEl.innerHTML = renderSymbolAnalysisStreamingCard(streamState);
+          }
+        },
+      });
       showToast('Analysis complete');
       renderSymbolAnalysis();
     } catch (err) {
@@ -1809,7 +2025,30 @@ async function renderSymbolAnalysis() {
   }
 }
 
-async function runSymbolAnalysis(symbol, currency) {
+function renderSymbolAnalysisStreamingCard(streamState) {
+  const stage = streamState && streamState.stage
+    ? escapeHtml(String(streamState.stage))
+    : 'Analyzing...';
+  const text = streamState && streamState.text
+    ? escapeHtml(String(streamState.text))
+    : '';
+  const error = streamState && streamState.error
+    ? escapeHtml(String(streamState.error))
+    : '';
+
+  return `
+    <div class="card ai-stream-card symbol-stream-card">
+      <div class="ai-analysis-head">
+        <h4>AI Streaming <span class="tag other">${error ? 'Failed' : 'Streaming'}</span></h4>
+        <div class="section-sub">${stage}</div>
+      </div>
+      ${error ? `<div class="section-sub ai-stream-error">${error}</div>` : ''}
+      ${text ? `<pre class="ai-stream-content">${text}</pre>` : '<div class="section-sub">Waiting for model output...</div>'}
+    </div>
+  `;
+}
+
+async function runSymbolAnalysis(symbol, currency, handlers = {}) {
   const settings = await loadAIAnalysisSettings();
   const normalizedSettings = {
     baseUrl: (settings.baseUrl || 'https://api.openai.com/v1').trim(),
@@ -1828,20 +2067,48 @@ async function runSymbolAnalysis(symbol, currency) {
     throw new Error('AI settings not configured');
   }
 
-  return await fetchJSON('/api/ai/symbol-analysis', {
-    method: 'POST',
-    body: JSON.stringify({
-      base_url: normalizedSettings.baseUrl,
-      api_key: normalizedSettings.apiKey,
-      model: normalizedSettings.model,
-      symbol,
-      currency,
-      risk_profile: normalizedSettings.riskProfile,
-      horizon: normalizedSettings.horizon,
-      advice_style: normalizedSettings.adviceStyle,
-      strategy_prompt: normalizedSettings.strategyPrompt,
-    }),
+  let result = null;
+  let streamError = '';
+
+  await postSSE('/api/ai/symbol-analysis/stream', {
+    base_url: normalizedSettings.baseUrl,
+    api_key: normalizedSettings.apiKey,
+    model: normalizedSettings.model,
+    symbol,
+    currency,
+    risk_profile: normalizedSettings.riskProfile,
+    horizon: normalizedSettings.horizon,
+    advice_style: normalizedSettings.adviceStyle,
+    strategy_prompt: normalizedSettings.strategyPrompt,
+  }, {
+    onProgress: (payload) => {
+      if (handlers.onProgress) handlers.onProgress(payload);
+    },
+    onDelta: (payload) => {
+      if (handlers.onDelta) handlers.onDelta(payload);
+    },
+    onResult: (payload) => {
+      result = payload;
+      if (handlers.onResult) handlers.onResult(payload);
+    },
+    onError: (payload) => {
+      streamError = payload && payload.error
+        ? String(payload.error)
+        : 'Analysis failed';
+      if (handlers.onError) handlers.onError(payload);
+    },
+    onDone: (payload) => {
+      if (handlers.onDone) handlers.onDone(payload);
+    },
   });
+
+  if (streamError) {
+    throw new Error(streamError);
+  }
+  if (!result) {
+    throw new Error('Analysis returned no result');
+  }
+  return result;
 }
 
 function renderSynthesisCard(synthesis, result) {
@@ -4307,6 +4574,11 @@ function showAIAdvisorModal(assetTypes) {
   let currentStep = 0;
   let adviceResult = null;
   let isLoading = false;
+  let adviceStreamState = {
+    stage: '',
+    text: '',
+    error: '',
+  };
 
   const profile = {
     ageRange: '30s',
@@ -4408,11 +4680,22 @@ function showAIAdvisorModal(assetTypes) {
   }
 
   function renderStep3Loading() {
+    const stage = adviceStreamState.stage
+      ? escapeHtml(String(adviceStreamState.stage))
+      : 'AI 正在分析您的投资画像，生成配置建议…';
+    const streamText = adviceStreamState.text
+      ? `<pre class="ai-stream-content">${escapeHtml(String(adviceStreamState.text))}</pre>`
+      : '';
+    const streamError = adviceStreamState.error
+      ? `<div class="section-sub ai-stream-error">${escapeHtml(String(adviceStreamState.error))}</div>`
+      : '';
     return `
       <div class="ai-advisor-loading">
         <div class="loading-spinner"></div>
-        <p>AI 正在分析您的投资画像，生成配置建议…</p>
+        <p>${stage}</p>
         <div class="section-sub">通常需要 10-30 秒，请稍候</div>
+        ${streamError}
+        ${streamText}
       </div>
     `;
   }
@@ -4568,25 +4851,59 @@ function showAIAdvisorModal(assetTypes) {
       return;
     }
     isLoading = true;
+    adviceStreamState = {
+      stage: '连接 AI 服务中…',
+      text: '',
+      error: '',
+    };
     renderCurrentStep();
     try {
-      adviceResult = await fetchJSON('/api/ai/allocation-advice', {
-        method: 'POST',
-        body: JSON.stringify({
-          base_url: (settings.baseUrl || 'https://api.openai.com/v1').trim(),
-          api_key: apiKey,
-          model,
-          age_range: profile.ageRange,
-          invest_goal: profile.investGoal,
-          risk_tolerance: profile.riskTolerance,
-          horizon: profile.horizon,
-          experience_level: profile.experienceLevel,
-          currencies: profile.currencies,
-          custom_prompt: profile.customPrompt,
-        }),
+      let streamError = '';
+      adviceResult = null;
+      await postSSE('/api/ai/allocation-advice/stream', {
+        base_url: (settings.baseUrl || 'https://api.openai.com/v1').trim(),
+        api_key: apiKey,
+        model,
+        age_range: profile.ageRange,
+        invest_goal: profile.investGoal,
+        risk_tolerance: profile.riskTolerance,
+        horizon: profile.horizon,
+        experience_level: profile.experienceLevel,
+        currencies: profile.currencies,
+        custom_prompt: profile.customPrompt,
+      }, {
+        onProgress: (payload) => {
+          adviceStreamState.stage = payload && payload.message
+            ? String(payload.message)
+            : '分析中…';
+          renderCurrentStep();
+        },
+        onDelta: (payload) => {
+          const text = payload && payload.text ? String(payload.text) : '';
+          if (!text) return;
+          adviceStreamState.text = `${adviceStreamState.text || ''}${text}`;
+          renderCurrentStep();
+        },
+        onResult: (payload) => {
+          adviceResult = payload || null;
+        },
+        onError: (payload) => {
+          streamError = payload && payload.error
+            ? String(payload.error)
+            : 'AI 建议获取失败';
+          adviceStreamState.error = streamError;
+          renderCurrentStep();
+        },
       });
+      if (streamError) {
+        throw new Error(streamError);
+      }
+      if (!adviceResult) {
+        throw new Error('AI 返回为空');
+      }
     } catch (err) {
       adviceResult = null;
+      adviceStreamState.error = (err && err.message) ? String(err.message) : 'AI 建议获取失败';
       showToast('AI 建议获取失败，请检查 API 配置');
     } finally {
       isLoading = false;
@@ -4621,6 +4938,7 @@ function showAIAdvisorModal(assetTypes) {
     } else if (!isLoading) {
       currentStep = 0;
       adviceResult = null;
+      adviceStreamState = { stage: '', text: '', error: '' };
       renderCurrentStep();
     }
   }
@@ -4636,6 +4954,7 @@ function showAIAdvisorModal(assetTypes) {
 
   currentStep = 0;
   adviceResult = null;
+  adviceStreamState = { stage: '', text: '', error: '' };
   isLoading = false;
   overlay.classList.remove('hidden');
   renderCurrentStep();

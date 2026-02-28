@@ -98,6 +98,15 @@ type allocationAdvicePromptInput struct {
 
 // GetAllocationAdvice generates AI-powered asset allocation recommendations.
 func (c *Core) GetAllocationAdvice(req AllocationAdviceRequest) (*AllocationAdviceResult, error) {
+	return c.getAllocationAdvice(req, nil)
+}
+
+// GetAllocationAdviceWithStream generates AI allocation advice and emits model delta chunks.
+func (c *Core) GetAllocationAdviceWithStream(req AllocationAdviceRequest, onDelta func(string)) (*AllocationAdviceResult, error) {
+	return c.getAllocationAdvice(req, onDelta)
+}
+
+func (c *Core) getAllocationAdvice(req AllocationAdviceRequest, onDelta func(string)) (*AllocationAdviceResult, error) {
 	if err := normalizeAllocationAdviceRequest(&req); err != nil {
 		return nil, err
 	}
@@ -130,6 +139,7 @@ func (c *Core) GetAllocationAdvice(req AllocationAdviceRequest) (*AllocationAdvi
 		SystemPrompt: allocationAdviceSystemPrompt,
 		UserPrompt:   userPrompt,
 		Logger:       c.Logger(),
+		OnDelta:      onDelta,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("AI request failed: %w", err)

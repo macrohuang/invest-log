@@ -817,6 +817,32 @@ select.btn.trade-select {
   background: rgba(26, 115, 232, 0.03);
 }
 
+.ai-stream-card {
+  margin-top: 14px;
+  border: 1px solid rgba(76, 175, 80, 0.24);
+  background: rgba(76, 175, 80, 0.05);
+}
+
+.ai-stream-content {
+  margin: 0;
+  padding: 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid rgba(29, 31, 27, 0.08);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 220px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.ai-stream-error {
+  color: #b42318;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
 .ai-analysis-head {
   display: flex;
   flex-direction: column;

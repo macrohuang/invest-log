@@ -515,14 +515,11 @@ func TestRequestAIChatCompletion_DebugLogsRawResponse(t *testing.T) {
 	}
 
 	logs := buf.String()
-	if !strings.Contains(logs, "ai raw response") {
-		t.Fatalf("expected raw response debug log, got %q", logs)
+	if !strings.Contains(logs, "ai request prompt") {
+		t.Fatalf("expected debug prompt log, got %q", logs)
 	}
-	if !strings.Contains(logs, "status_code=200") {
-		t.Fatalf("expected status_code in debug log, got %q", logs)
-	}
-	if !strings.Contains(logs, "model-raw") {
-		t.Fatalf("expected raw model data in debug log, got %q", logs)
+	if !strings.Contains(logs, "model=model-raw") {
+		t.Fatalf("expected model in debug log, got %q", logs)
 	}
 }
 
@@ -550,16 +547,13 @@ func TestRequestAIByChatCompletions_DebugLogsRawResponseOnError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
+	if !strings.Contains(err.Error(), "provider raw detail") {
+		t.Fatalf("expected upstream error detail, got %v", err)
+	}
 
 	logs := buf.String()
-	if !strings.Contains(logs, "ai raw response") {
-		t.Fatalf("expected raw response debug log, got %q", logs)
-	}
-	if !strings.Contains(logs, "status_code=400") {
-		t.Fatalf("expected status_code in debug log, got %q", logs)
-	}
-	if !strings.Contains(logs, "provider raw detail") {
-		t.Fatalf("expected upstream raw message in debug log, got %q", logs)
+	if !strings.Contains(logs, "ai request prompt") {
+		t.Fatalf("expected debug prompt log, got %q", logs)
 	}
 }
 
@@ -673,5 +667,260 @@ func TestAnalyzeHoldings_UsesFifteenMinuteOverallTimeout(t *testing.T) {
 	}
 	if remainingAtCall > 15*time.Minute+5*time.Second {
 		t.Fatalf("unexpectedly large timeout, got remaining %s", remainingAtCall)
+	}
+}
+
+func TestAnalyzeHoldingsWithStream_EmitsDelta(t *testing.T) {
+	core, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	testAccount(t, core, "acc-stream", "Stream Account")
+	testBuyTransaction(t, core, "AAPL", 10, 100, "USD", "acc-stream")
+
+	original := aiChatCompletion
+	defer func() { aiChatCompletion = original }()
+
+	aiChatCompletion = func(ctx context.Context, req aiChatCompletionRequest) (aiChatCompletionResult, error) {
+		if req.OnDelta == nil {
+			t.Fatal("expected onDelta callback")
+		}
+		req.OnDelta("第一段")
+		req.OnDelta("第二段")
+
+		return aiChatCompletionResult{
+			Model: "mock-stream-model",
+			Content: `{
+				"overall_summary":"ok",
+				"risk_level":"balanced",
+				"key_findings":["x"],
+				"recommendations":[{"symbol":"AAPL","action":"hold","theory_tag":"Buffett","rationale":"wait"}],
+				"disclaimer":"仅供参考"
+			}`,
+		}, nil
+	}
+
+	var streamed strings.Builder
+	result, err := core.AnalyzeHoldingsWithStream(HoldingsAnalysisRequest{
+		BaseURL: "https://example.com/v1",
+		APIKey:  "key",
+		Model:   "mock-stream-model",
+	}, func(delta string) {
+		streamed.WriteString(delta)
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeHoldingsWithStream failed: %v", err)
+	}
+
+	if streamed.String() != "第一段第二段" {
+		t.Fatalf("unexpected streamed deltas: %q", streamed.String())
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if result.Model != "mock-stream-model" {
+		t.Fatalf("unexpected model: %s", result.Model)
+	}
+}
+
+func TestGetHoldingsAnalysisAndHistory(t *testing.T) {
+	core, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	latest, err := core.GetHoldingsAnalysis("USD")
+	if err != nil {
+		t.Fatalf("GetHoldingsAnalysis empty failed: %v", err)
+	}
+	if latest != nil {
+		t.Fatalf("expected nil latest analysis, got %+v", latest)
+	}
+
+	firstID, err := core.saveHoldingsAnalysis(&HoldingsAnalysisResult{
+		Currency:       "USD",
+		Model:          "m-usd",
+		AnalysisType:   "adhoc",
+		RiskLevel:      "balanced",
+		OverallSummary: "usd summary",
+		KeyFindings:    []string{"f1"},
+		Recommendations: []HoldingsAnalysisRecommendation{
+			{Symbol: "AAPL", Action: "hold", TheoryTag: "Buffett", Rationale: "长期持有"},
+		},
+		Disclaimer: "仅供参考",
+		SymbolRefs: []HoldingsSymbolRef{
+			{Symbol: "AAPL", ID: 11, Rating: "buy", Action: "increase", Summary: "summary", CreatedAt: "2026-01-01T00:00:00+08:00"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("save first holdings analysis failed: %v", err)
+	}
+
+	if _, err := core.saveHoldingsAnalysis(&HoldingsAnalysisResult{
+		Currency:        "CNY",
+		Model:           "m-cny",
+		AnalysisType:    "weekly",
+		RiskLevel:       "conservative",
+		OverallSummary:  "cny summary",
+		KeyFindings:     []string{"f2"},
+		Recommendations: []HoldingsAnalysisRecommendation{},
+		Disclaimer:      "仅供参考",
+	}); err != nil {
+		t.Fatalf("save second holdings analysis failed: %v", err)
+	}
+
+	if _, err := core.db.Exec(
+		`INSERT INTO holdings_analyses
+			(currency, model, analysis_type, risk_level, overall_summary, key_findings, recommendations, disclaimer, symbol_refs)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"USD", "m-bad", "adhoc", "balanced", "bad json", "{invalid", "{invalid", "仅供参考", "{invalid",
+	); err != nil {
+		t.Fatalf("insert malformed holdings analysis failed: %v", err)
+	}
+
+	latest, err = core.GetHoldingsAnalysis(" usd ")
+	if err != nil {
+		t.Fatalf("GetHoldingsAnalysis failed: %v", err)
+	}
+	if latest == nil {
+		t.Fatal("expected non-nil latest analysis")
+	}
+	if latest.Currency != "USD" {
+		t.Fatalf("expected normalized currency USD, got %s", latest.Currency)
+	}
+
+	usdHistory, err := core.GetHoldingsAnalysisHistory("USD", 10)
+	if err != nil {
+		t.Fatalf("GetHoldingsAnalysisHistory USD failed: %v", err)
+	}
+	if len(usdHistory) < 2 {
+		t.Fatalf("expected at least 2 USD analyses, got %d", len(usdHistory))
+	}
+
+	foundSaved := false
+	foundMalformed := false
+	for _, item := range usdHistory {
+		if item.ID == firstID {
+			foundSaved = true
+			if len(item.SymbolRefs) != 1 {
+				t.Fatalf("expected symbol refs for saved row, got %+v", item.SymbolRefs)
+			}
+		}
+		if item.OverallSummary == "bad json" {
+			foundMalformed = true
+			if item.KeyFindings == nil || len(item.KeyFindings) != 0 {
+				t.Fatalf("expected malformed findings fallback to empty slice, got %+v", item.KeyFindings)
+			}
+			if item.Recommendations == nil || len(item.Recommendations) != 0 {
+				t.Fatalf("expected malformed recommendations fallback to empty slice, got %+v", item.Recommendations)
+			}
+		}
+	}
+	if !foundSaved {
+		t.Fatalf("expected to find saved row id=%d in USD history", firstID)
+	}
+	if !foundMalformed {
+		t.Fatal("expected to find malformed row in USD history")
+	}
+
+	allHistory, err := core.GetHoldingsAnalysisHistory("", 0)
+	if err != nil {
+		t.Fatalf("GetHoldingsAnalysisHistory all failed: %v", err)
+	}
+	if allHistory == nil {
+		t.Fatal("expected non-nil all history slice")
+	}
+	if len(allHistory) < 3 {
+		t.Fatalf("expected at least 3 analyses, got %d", len(allHistory))
+	}
+}
+
+func TestDecodeAIModelAndContent_VariousShapes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		body        string
+		wantModel   string
+		wantContent string
+		wantErr     string
+	}{
+		{
+			name:        "output_text field",
+			body:        `{"model":"m-output-text","output_text":"final text"}`,
+			wantModel:   "m-output-text",
+			wantContent: "final text",
+		},
+		{
+			name:        "choices message content parts",
+			body:        `{"model":"m-choices","choices":[{"message":{"content":[{"text":" part1 "},{"value":"part2"},{"content":"part3"}]}}]}`,
+			wantModel:   "m-choices",
+			wantContent: "part1\npart2\npart3",
+		},
+		{
+			name:        "output content array",
+			body:        `{"model":"m-output","output":[{"content":[{"text":"alpha"},{"content":"beta"}]}]}`,
+			wantModel:   "m-output",
+			wantContent: "alpha\nbeta",
+		},
+		{
+			name:        "content output_text fallback",
+			body:        `{"model":"m-content","content":{"output_text":["x","y"]}}`,
+			wantModel:   "m-content",
+			wantContent: "x\ny",
+		},
+		{
+			name:    "empty payload",
+			body:    `{"model":"m-empty"}`,
+			wantErr: "ai response content is empty",
+		},
+		{
+			name:    "invalid json",
+			body:    `{`,
+			wantErr: "decode ai response",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			model, content, err := decodeAIModelAndContent([]byte(tc.body))
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("expected error contains %q, got %v", tc.wantErr, err)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if model != tc.wantModel {
+				t.Fatalf("unexpected model: got %q want %q", model, tc.wantModel)
+			}
+			if content != tc.wantContent {
+				t.Fatalf("unexpected content: got %q want %q", content, tc.wantContent)
+			}
+		})
+	}
+}
+
+func TestParseAIErrorMessage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "nested error message", body: `{"error":{"message":" provider detail "}}`, want: "provider detail"},
+		{name: "top level message", body: `{"message":" top message "}`, want: "top message"},
+		{name: "invalid json", body: `{`, want: ""},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if got := parseAIErrorMessage([]byte(tc.body)); got != tc.want {
+				t.Fatalf("unexpected message: got %q want %q", got, tc.want)
+			}
+		})
 	}
 }

@@ -448,7 +448,7 @@ type agentResult struct {
 	Error     error
 }
 
-func (c *Core) runDimensionAgents(ctx context.Context, endpoint, apiKey, model, userPrompt string) (map[string]string, error) {
+func (c *Core) runDimensionAgents(ctx context.Context, endpoint, apiKey, model, userPrompt string, onDelta func(string)) (map[string]string, error) {
 	ch := make(chan agentResult, len(dimensionAgents))
 	var wg sync.WaitGroup
 
@@ -463,6 +463,13 @@ func (c *Core) runDimensionAgents(ctx context.Context, endpoint, apiKey, model, 
 				SystemPrompt: sysPrompt,
 				UserPrompt:   userPrompt,
 				Logger:       c.Logger(),
+				OnDelta: func(delta string) {
+					delta = strings.TrimSpace(delta)
+					if delta == "" || onDelta == nil {
+						return
+					}
+					onDelta("[" + dim + "] " + delta)
+				},
 			})
 			if err != nil {
 				ch <- agentResult{Dimension: dim, Error: err}
@@ -498,6 +505,7 @@ func runSynthesisAgent(
 	endpoint, apiKey, model, symbolContext string,
 	dimensionOutputs map[string]string,
 	preferenceContext symbolPreferenceContext,
+	onDelta func(string),
 ) (string, error) {
 	dimensionJSON, err := json.Marshal(dimensionOutputs)
 	if err != nil {
@@ -531,6 +539,13 @@ func runSynthesisAgent(
 		Model:        model,
 		SystemPrompt: symbolSynthesisSystemPrompt,
 		UserPrompt:   userPrompt,
+		OnDelta: func(delta string) {
+			delta = strings.TrimSpace(delta)
+			if delta == "" || onDelta == nil {
+				return
+			}
+			onDelta("[synthesis] " + delta)
+		},
 	})
 	if err != nil {
 		return "", err
@@ -774,6 +789,15 @@ func buildDimensionUserPrompt(symbolContext, enrichedContext string, req SymbolA
 
 // AnalyzeSymbol runs a multi-agent deep analysis for a single symbol.
 func (c *Core) AnalyzeSymbol(req SymbolAnalysisRequest) (*SymbolAnalysisResult, error) {
+	return c.analyzeSymbol(req, nil)
+}
+
+// AnalyzeSymbolWithStream runs symbol analysis and emits model delta chunks.
+func (c *Core) AnalyzeSymbolWithStream(req SymbolAnalysisRequest, onDelta func(string)) (*SymbolAnalysisResult, error) {
+	return c.analyzeSymbol(req, onDelta)
+}
+
+func (c *Core) analyzeSymbol(req SymbolAnalysisRequest, onDelta func(string)) (*SymbolAnalysisResult, error) {
 	normalizedReq, err := normalizeSymbolAnalysisRequest(req)
 	if err != nil {
 		return nil, err
@@ -818,7 +842,7 @@ func (c *Core) AnalyzeSymbol(req SymbolAnalysisRequest) (*SymbolAnalysisResult, 
 	userPrompt := buildDimensionUserPrompt(symbolContextJSON, enrichedContext, normalizedReq)
 
 	// Run 4 dimension agents in parallel.
-	dimensionOutputs, err := c.runDimensionAgents(ctx, endpointURL, normalizedReq.APIKey, normalizedReq.Model, userPrompt)
+	dimensionOutputs, err := c.runDimensionAgents(ctx, endpointURL, normalizedReq.APIKey, normalizedReq.Model, userPrompt, onDelta)
 	if err != nil {
 		_ = c.updateSymbolAnalysisStatus(rowID, "failed", err.Error())
 		return nil, err
@@ -829,7 +853,7 @@ func (c *Core) AnalyzeSymbol(req SymbolAnalysisRequest) (*SymbolAnalysisResult, 
 		RiskProfile: normalizedReq.RiskProfile,
 		Horizon:     normalizedReq.Horizon,
 		AdviceStyle: normalizedReq.AdviceStyle,
-	})
+	}, onDelta)
 	if err != nil {
 		_ = c.updateSymbolAnalysisStatus(rowID, "failed", err.Error())
 		return nil, fmt.Errorf("synthesis agent failed: %w", err)
