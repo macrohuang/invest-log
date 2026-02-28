@@ -91,3 +91,45 @@ func TestAISettingsEndpointsInvalidPayload(t *testing.T) {
 		t.Fatalf("PUT /api/ai-settings with invalid payload: expected 400, got %d, body: %s", rr.Code, rr.Body.String())
 	}
 }
+
+func TestAISettingsEndpointDefaultAllowNewSymbolsWhenOmitted(t *testing.T) {
+	router, cleanup := setupTestRouter(t)
+	defer cleanup()
+
+	rr := doRequest(router, http.MethodPut, "/api/ai-settings", map[string]any{
+		"model": "gpt-4o-mini",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PUT /api/ai-settings: expected 200, got %d, body: %s", rr.Code, rr.Body.String())
+	}
+
+	rr = doRequest(router, http.MethodGet, "/api/ai-settings", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /api/ai-settings: expected 200, got %d", rr.Code)
+	}
+
+	var got map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&got); err != nil {
+		t.Fatalf("decode settings: %v", err)
+	}
+	if got["allow_new_symbols"] != true {
+		t.Fatalf("expected allow_new_symbols=true when omitted, got %v", got["allow_new_symbols"])
+	}
+}
+
+func TestAISettingsEndpointsDBClosed(t *testing.T) {
+	router, cleanup := setupClosedRouter(t)
+	defer cleanup()
+
+	rr := doRequest(router, http.MethodGet, "/api/ai-settings", nil)
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("GET /api/ai-settings on closed db: expected 500, got %d", rr.Code)
+	}
+
+	rr = doRequest(router, http.MethodPut, "/api/ai-settings", map[string]any{
+		"model": "m",
+	})
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("PUT /api/ai-settings on closed db: expected 500, got %d", rr.Code)
+	}
+}

@@ -105,3 +105,38 @@ func TestSetAISettingsInvalidEnumsFallbackToDefault(t *testing.T) {
 		t.Fatalf("expected default advice style, got %q", saved.AdviceStyle)
 	}
 }
+
+func TestGetAISettingsReturnsDefaultsWhenRowMissing(t *testing.T) {
+	core, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	if _, err := core.db.Exec("DELETE FROM ai_settings WHERE id = 1"); err != nil {
+		t.Fatalf("delete ai_settings row: %v", err)
+	}
+
+	settings, err := core.GetAISettings()
+	assertNoError(t, err, "get ai settings with missing row")
+
+	if settings.BaseURL != "https://api.openai.com/v1" {
+		t.Fatalf("unexpected default base url: %q", settings.BaseURL)
+	}
+	if !settings.AllowNewSymbols {
+		t.Fatal("expected default allow_new_symbols true")
+	}
+}
+
+func TestAISettingsMethodsWhenDBClosed(t *testing.T) {
+	core, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	if err := core.Close(); err != nil {
+		t.Fatalf("close db: %v", err)
+	}
+
+	if _, err := core.GetAISettings(); err == nil {
+		t.Fatal("expected GetAISettings error on closed db")
+	}
+	if _, err := core.SetAISettings(AISettings{Model: "m"}); err == nil {
+		t.Fatal("expected SetAISettings error on closed db")
+	}
+}
