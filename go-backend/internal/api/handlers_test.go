@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"investlog/pkg/investlog"
@@ -478,5 +479,26 @@ func TestCORS(t *testing.T) {
 	// Should allow localhost origin
 	if rr.Code != http.StatusOK && rr.Code != http.StatusNoContent {
 		t.Errorf("OPTIONS /api/health: expected 200 or 204, got %d", rr.Code)
+	}
+}
+
+func TestAIHoldingsAnalysisStreamEndpoint_ReturnsSSEErrorEvent(t *testing.T) {
+	router, cleanup := setupTestRouter(t)
+	defer cleanup()
+
+	rr := doRequest(router, "POST", "/api/ai/holdings-analysis/stream", map[string]interface{}{})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected status 200 for SSE stream, got %d", rr.Code)
+	}
+	if got := rr.Header().Get("Content-Type"); !strings.Contains(got, "text/event-stream") {
+		t.Fatalf("expected text/event-stream content-type, got %q", got)
+	}
+
+	body := rr.Body.String()
+	if !strings.Contains(body, "event: start") {
+		t.Fatalf("expected start event, got body: %s", body)
+	}
+	if !strings.Contains(body, "event: error") {
+		t.Fatalf("expected error event, got body: %s", body)
 	}
 }

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"google.golang.org/genai"
 )
 
 func TestBuildAICompletionsEndpoint(t *testing.T) {
@@ -673,5 +675,538 @@ func TestAnalyzeHoldings_UsesFifteenMinuteOverallTimeout(t *testing.T) {
 	}
 	if remainingAtCall > 15*time.Minute+5*time.Second {
 		t.Fatalf("unexpectedly large timeout, got remaining %s", remainingAtCall)
+	}
+}
+
+func TestIsGeminiRequest(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		endpoint string
+		model    string
+		want     bool
+	}{
+		{name: "model starts with gemini", endpoint: "https://example.com/v1/chat/completions", model: "gemini-2.5-flash", want: true},
+		{name: "googleapis endpoint", endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "custom-model", want: true},
+		{name: "path contains gemini", endpoint: "https://example.com/gemini/v1/chat/completions", model: "custom-model", want: true},
+		{name: "non gemini model and endpoint", endpoint: "https://api.openai.com/v1/chat/completions", model: "gpt-4o-mini", want: false},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := isGeminiRequest(tc.endpoint, tc.model)
+			if got != tc.want {
+				t.Fatalf("got %v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRequestAIChatCompletion_UsesGeminiClient(t *testing.T) {
+	t.Parallel()
+
+	original := aiGeminiCompletion
+	defer func() { aiGeminiCompletion = original }()
+
+	called := false
+	aiGeminiCompletion = func(ctx context.Context, req aiChatCompletionRequest, onChunk aiChunkCallback) (aiChatCompletionResult, error) {
+		called = true
+		if onChunk != nil {
+			t.Fatal("non-stream chat completion should not pass onChunk callback")
+		}
+		return aiChatCompletionResult{
+			Model:   "gemini-2.5-flash",
+			Content: `{"overall_summary":"ok","risk_level":"balanced","key_findings":[],"recommendations":[],"disclaimer":"d"}`,
+		}, nil
+	}
+
+	result, err := requestAIChatCompletion(context.Background(), aiChatCompletionRequest{
+		EndpointURL:  "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+		APIKey:       "key",
+		Model:        "gemini-2.5-flash",
+		SystemPrompt: "sys",
+		UserPrompt:   "user",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !called {
+		t.Fatal("expected gemini completion path to be called")
+	}
+	if result.Model != "gemini-2.5-flash" {
+		t.Fatalf("unexpected model: %s", result.Model)
+	}
+}
+
+func TestAnalyzeHoldingsStreamEndToEndWithStub(t *testing.T) {
+	core, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	testAccount(t, core, "acc-1", "Main")
+	testBuyTransaction(t, core, "AAPL", 10, 100, "USD", "acc-1")
+
+	original := aiChatCompletionStream
+	defer func() { aiChatCompletionStream = original }()
+
+	aiChatCompletionStream = func(ctx context.Context, req aiChatCompletionRequest, onChunk aiChunkCallback) (aiChatCompletionResult, error) {
+		if onChunk == nil {
+			t.Fatal("expected stream callback")
+		}
+		if err := onChunk("{\"overall_summary\":\"组合需要分散\",\"risk_level\":\"balanced\",\"key_findings\":[\"集中度较高\"],"); err != nil {
+			return aiChatCompletionResult{}, err
+		}
+		if err := onChunk("\"recommendations\":[{\"symbol\":\"AAPL\",\"action\":\"reduce\",\"theory_tag\":\"Malkiel\",\"rationale\":\"降低集中风险\"}],\"disclaimer\":\"仅供参考\"}"); err != nil {
+			return aiChatCompletionResult{}, err
+		}
+		return aiChatCompletionResult{
+			Model: "gemini-2.5-flash",
+			Content: `{
+				"overall_summary":"组合需要分散",
+				"risk_level":"balanced",
+				"key_findings":["集中度较高"],
+				"recommendations":[{"symbol":"AAPL","action":"reduce","theory_tag":"Malkiel","rationale":"降低集中风险"}],
+				"disclaimer":"仅供参考"
+			}`,
+		}, nil
+	}
+
+	var chunks []string
+	result, err := core.AnalyzeHoldingsStream(HoldingsAnalysisRequest{
+		BaseURL:         "https://generativelanguage.googleapis.com/v1beta/openai",
+		APIKey:          "key",
+		Model:           "gemini-2.5-flash",
+		Currency:        "USD",
+		RiskProfile:     "balanced",
+		Horizon:         "medium",
+		AdviceStyle:     "balanced",
+		AllowNewSymbols: true,
+	}, func(chunk string) error {
+		chunks = append(chunks, chunk)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeHoldingsStream failed: %v", err)
+	}
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(chunks))
+	}
+	if result == nil || result.OverallSummary == "" {
+		t.Fatalf("expected parsed result, got %+v", result)
+	}
+}
+
+func TestParseGeminiBaseURLAndVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		endpoint    string
+		wantBaseURL string
+		wantVersion string
+		wantErr     string
+	}{
+		{
+			name:        "gemini openai compatible endpoint",
+			endpoint:    "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+			wantBaseURL: "https://generativelanguage.googleapis.com/",
+			wantVersion: "v1beta",
+		},
+		{
+			name:        "proxy endpoint with prefix",
+			endpoint:    "https://proxy.example.com/gateway/v1/chat/completions",
+			wantBaseURL: "https://proxy.example.com/gateway/",
+			wantVersion: "v1",
+		},
+		{
+			name:     "invalid scheme",
+			endpoint: "ftp://example.com/v1/chat/completions",
+			wantErr:  "invalid gemini endpoint scheme",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gotBaseURL, gotVersion, err := parseGeminiBaseURLAndVersion(tc.endpoint)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if gotBaseURL != tc.wantBaseURL {
+				t.Fatalf("base url got %q want %q", gotBaseURL, tc.wantBaseURL)
+			}
+			if gotVersion != tc.wantVersion {
+				t.Fatalf("version got %q want %q", gotVersion, tc.wantVersion)
+			}
+		})
+	}
+}
+
+func TestBuildGeminiClientConfig(t *testing.T) {
+	t.Parallel()
+
+	config, err := buildGeminiClientConfig("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "test-key")
+	if err != nil {
+		t.Fatalf("buildGeminiClientConfig failed: %v", err)
+	}
+	if config == nil {
+		t.Fatal("expected config")
+	}
+	if config.Backend != genai.BackendGeminiAPI {
+		t.Fatalf("expected BackendGeminiAPI, got %v", config.Backend)
+	}
+	if config.APIKey != "test-key" {
+		t.Fatalf("unexpected api key: %q", config.APIKey)
+	}
+	if config.HTTPOptions.BaseURL != "https://generativelanguage.googleapis.com/" {
+		t.Fatalf("unexpected base url: %q", config.HTTPOptions.BaseURL)
+	}
+	if config.HTTPOptions.APIVersion != "v1beta" {
+		t.Fatalf("unexpected api version: %q", config.HTTPOptions.APIVersion)
+	}
+}
+
+func TestBuildGeminiClientConfig_FallbackFromOpenAIDefault(t *testing.T) {
+	t.Parallel()
+
+	config, err := buildGeminiClientConfig("https://api.openai.com/v1/chat/completions", "test-key")
+	if err != nil {
+		t.Fatalf("buildGeminiClientConfig failed: %v", err)
+	}
+	if config.HTTPOptions.BaseURL != "https://generativelanguage.googleapis.com/" {
+		t.Fatalf("unexpected fallback base url: %q", config.HTTPOptions.BaseURL)
+	}
+	if config.HTTPOptions.APIVersion != "v1beta" {
+		t.Fatalf("unexpected fallback api version: %q", config.HTTPOptions.APIVersion)
+	}
+}
+
+func TestShouldFallbackToGeminiDefaultBaseURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		endpoint string
+		want     bool
+	}{
+		{
+			name:     "empty endpoint",
+			endpoint: "",
+			want:     true,
+		},
+		{
+			name:     "openai default endpoint",
+			endpoint: "https://api.openai.com/v1/chat/completions",
+			want:     true,
+		},
+		{
+			name:     "gemini endpoint",
+			endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+			want:     false,
+		},
+		{
+			name:     "custom provider endpoint",
+			endpoint: "https://openrouter.ai/api/v1/chat/completions",
+			want:     false,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := shouldFallbackToGeminiDefaultBaseURL(tc.endpoint)
+			if got != tc.want {
+				t.Fatalf("got %v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRequestAIChatCompletionStream_UsesGeminiClient(t *testing.T) {
+	t.Parallel()
+
+	original := aiGeminiCompletion
+	defer func() { aiGeminiCompletion = original }()
+
+	var chunks []string
+	aiGeminiCompletion = func(ctx context.Context, req aiChatCompletionRequest, onChunk aiChunkCallback) (aiChatCompletionResult, error) {
+		if onChunk == nil {
+			t.Fatal("expected onChunk callback")
+		}
+		if err := onChunk("chunk-1"); err != nil {
+			return aiChatCompletionResult{}, err
+		}
+		if err := onChunk("chunk-2"); err != nil {
+			return aiChatCompletionResult{}, err
+		}
+		return aiChatCompletionResult{Model: req.Model, Content: "done"}, nil
+	}
+
+	result, err := requestAIChatCompletionStream(context.Background(), aiChatCompletionRequest{
+		EndpointURL:  "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+		APIKey:       "key",
+		Model:        "gemini-2.5-flash",
+		SystemPrompt: "sys",
+		UserPrompt:   "user",
+	}, func(chunk string) error {
+		chunks = append(chunks, chunk)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(chunks) != 2 {
+		t.Fatalf("expected 2 chunks, got %d", len(chunks))
+	}
+	if result.Content != "done" {
+		t.Fatalf("unexpected result content: %q", result.Content)
+	}
+}
+
+func TestRequestAIByGeminiNative_NonStream(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("expected POST, got %s", r.Method)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"modelVersion":"gemini-2.5-flash",
+			"candidates":[
+				{"content":{"parts":[{"text":"{\"overall_summary\":\"ok\",\"risk_level\":\"balanced\",\"key_findings\":[],\"recommendations\":[],\"disclaimer\":\"d\"}"}]}}
+			]
+		}`))
+	}))
+	defer server.Close()
+
+	result, err := requestAIByGeminiNative(context.Background(), aiChatCompletionRequest{
+		EndpointURL:  server.URL + "/v1beta/openai/chat/completions",
+		APIKey:       "key",
+		Model:        "gemini-2.5-flash",
+		SystemPrompt: "sys",
+		UserPrompt:   "user",
+	}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Model != "gemini-2.5-flash" {
+		t.Fatalf("unexpected model: %q", result.Model)
+	}
+	if !strings.Contains(result.Content, "overall_summary") {
+		t.Fatalf("unexpected content: %q", result.Content)
+	}
+}
+
+func TestRequestAIByGeminiNative_Stream(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, ":streamGenerateContent") {
+			t.Fatalf("expected stream path, got %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"modelVersion\":\"gemini-2.5-flash\",\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"{\\\"overall_summary\\\":\\\"ok\\\"\"}]}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"modelVersion\":\"gemini-2.5-flash\",\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"{\\\"overall_summary\\\":\\\"ok\\\",\\\"risk_level\\\":\\\"balanced\\\",\\\"key_findings\\\":[],\\\"recommendations\\\":[],\\\"disclaimer\\\":\\\"d\\\"}\"}]}}]}\n\n"))
+	}))
+	defer server.Close()
+
+	var chunks []string
+	result, err := requestAIByGeminiNative(context.Background(), aiChatCompletionRequest{
+		EndpointURL:  server.URL + "/v1beta/openai/chat/completions",
+		APIKey:       "key",
+		Model:        "gemini-2.5-flash",
+		SystemPrompt: "sys",
+		UserPrompt:   "user",
+	}, func(chunk string) error {
+		chunks = append(chunks, chunk)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(chunks) == 0 {
+		t.Fatal("expected stream chunks")
+	}
+	if !strings.Contains(result.Content, "overall_summary") {
+		t.Fatalf("unexpected content: %q", result.Content)
+	}
+}
+
+func TestRequestAIChatCompletionStream_NonGeminiUsesFallback(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"gpt-4o-mini","choices":[{"message":{"content":"{\"overall_summary\":\"ok\",\"risk_level\":\"balanced\",\"key_findings\":[],\"recommendations\":[],\"disclaimer\":\"d\"}"}}]}`))
+	}))
+	defer server.Close()
+
+	var chunks []string
+	result, err := requestAIChatCompletionStream(context.Background(), aiChatCompletionRequest{
+		EndpointURL:  server.URL,
+		APIKey:       "key",
+		Model:        "gpt-4o-mini",
+		SystemPrompt: "sys",
+		UserPrompt:   "user",
+	}, func(chunk string) error {
+		chunks = append(chunks, chunk)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("expected 1 fallback chunk, got %d", len(chunks))
+	}
+	if result.Model != "gpt-4o-mini" {
+		t.Fatalf("unexpected model: %q", result.Model)
+	}
+}
+
+func TestGetHoldingsAnalysisAndHistory(t *testing.T) {
+	t.Parallel()
+
+	core, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	_, err := core.saveHoldingsAnalysis(&HoldingsAnalysisResult{
+		GeneratedAt:     NowRFC3339InShanghai(),
+		Model:           "gemini-2.5-flash",
+		Currency:        "USD",
+		AnalysisType:    "adhoc",
+		OverallSummary:  "summary",
+		RiskLevel:       "balanced",
+		KeyFindings:     []string{"finding"},
+		Recommendations: []HoldingsAnalysisRecommendation{{Action: "hold", TheoryTag: "Buffett", Rationale: "rationale"}},
+		Disclaimer:      "仅供参考",
+	})
+	if err != nil {
+		t.Fatalf("saveHoldingsAnalysis failed: %v", err)
+	}
+
+	history, err := core.GetHoldingsAnalysisHistory("USD", 5)
+	if err != nil {
+		t.Fatalf("GetHoldingsAnalysisHistory failed: %v", err)
+	}
+	if len(history) != 1 {
+		t.Fatalf("expected 1 history record, got %d", len(history))
+	}
+
+	latest, err := core.GetHoldingsAnalysis("USD")
+	if err != nil {
+		t.Fatalf("GetHoldingsAnalysis failed: %v", err)
+	}
+	if latest == nil || latest.OverallSummary != "summary" {
+		t.Fatalf("unexpected latest result: %+v", latest)
+	}
+}
+
+func TestSaveHoldingsAnalysis_WithSymbolRefs(t *testing.T) {
+	t.Parallel()
+
+	core, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	id, err := core.saveHoldingsAnalysis(&HoldingsAnalysisResult{
+		GeneratedAt:     NowRFC3339InShanghai(),
+		Model:           "gemini-2.5-flash",
+		Currency:        "USD",
+		AnalysisType:    "weekly",
+		OverallSummary:  "summary with refs",
+		RiskLevel:       "balanced",
+		KeyFindings:     []string{"finding-1", "finding-2"},
+		Recommendations: []HoldingsAnalysisRecommendation{{Action: "hold", TheoryTag: "Dalio", Rationale: "rationale"}},
+		Disclaimer:      "仅供参考",
+		SymbolRefs: []HoldingsSymbolRef{{
+			Symbol: "AAPL", ID: 1, Rating: "buy", Action: "increase", Summary: "summary", CreatedAt: NowRFC3339InShanghai(),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("saveHoldingsAnalysis failed: %v", err)
+	}
+	if id <= 0 {
+		t.Fatalf("expected positive id, got %d", id)
+	}
+}
+
+func TestBuildHoldingsAnalysisUserPrompt_WeeklyAndRefs(t *testing.T) {
+	t.Parallel()
+
+	prompt, err := buildHoldingsAnalysisUserPrompt(&holdingsAnalysisPromptInput{
+		Holdings: []holdingsAnalysisCurrencySnapshot{{Currency: "USD"}},
+	}, HoldingsAnalysisRequest{
+		RiskProfile:     "balanced",
+		Horizon:         "medium",
+		AdviceStyle:     "balanced",
+		AllowNewSymbols: true,
+		AnalysisType:    "weekly",
+	}, []HoldingsSymbolRef{{Symbol: "AAPL", Summary: "s"}})
+	if err != nil {
+		t.Fatalf("buildHoldingsAnalysisUserPrompt failed: %v", err)
+	}
+	if !strings.Contains(prompt, "分析类型：周报") {
+		t.Fatalf("expected weekly instruction, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "最新深度AI分析摘要") {
+		t.Fatalf("expected symbol refs section, got: %s", prompt)
+	}
+}
+
+func TestRequestAIChatCompletionStream_CallbackError(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"gpt-4o-mini","choices":[{"message":{"content":"{\"overall_summary\":\"ok\",\"risk_level\":\"balanced\",\"key_findings\":[],\"recommendations\":[],\"disclaimer\":\"d\"}"}}]}`))
+	}))
+	defer server.Close()
+
+	_, err := requestAIChatCompletionStream(context.Background(), aiChatCompletionRequest{
+		EndpointURL:  server.URL,
+		APIKey:       "key",
+		Model:        "gpt-4o-mini",
+		SystemPrompt: "sys",
+		UserPrompt:   "user",
+	}, func(chunk string) error {
+		return errors.New("callback failed")
+	})
+	if err == nil || !strings.Contains(err.Error(), "stream callback failed") {
+		t.Fatalf("expected callback error, got %v", err)
+	}
+}
+
+func TestExtractOutputContentAndExtractText(t *testing.T) {
+	t.Parallel()
+
+	output := []any{
+		map[string]any{
+			"content": []any{
+				map[string]any{"text": "hello"},
+			},
+		},
+	}
+	if got := extractOutputContent(output); got != "hello" {
+		t.Fatalf("extractOutputContent got %q", got)
+	}
+
+	mixed := map[string]any{
+		"content": []any{
+			map[string]any{"value": "v1"},
+			map[string]any{"content": "v2"},
+		},
+	}
+	if got := extractText(mixed); got == "" {
+		t.Fatal("expected non-empty extractText result")
 	}
 }

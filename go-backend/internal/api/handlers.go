@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -249,6 +250,80 @@ func (h *handler) analyzeHoldingsWithAI(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func writeSSEEvent(w http.ResponseWriter, flushFn func(), event string, payload any) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal sse payload: %w", err)
+	}
+	if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data); err != nil {
+		return err
+	}
+	if flushFn != nil {
+		flushFn()
+	}
+	return nil
+}
+
+func (h *handler) analyzeHoldingsWithAIStream(w http.ResponseWriter, r *http.Request) {
+	var payload aiHoldingsAnalysisPayload
+	if err := decodeJSON(r, &payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	flushFn := func() {}
+	if flusher, ok := w.(http.Flusher); ok {
+		flushFn = flusher.Flush
+	}
+
+	allowNewSymbols := true
+	if payload.AllowNewSymbols != nil {
+		allowNewSymbols = *payload.AllowNewSymbols
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	if err := writeSSEEvent(w, flushFn, "start", map[string]string{
+		"model":    payload.Model,
+		"currency": payload.Currency,
+	}); err != nil {
+		return
+	}
+
+	result, err := h.core.AnalyzeHoldingsStream(investlog.HoldingsAnalysisRequest{
+		BaseURL:         payload.BaseURL,
+		APIKey:          payload.APIKey,
+		Model:           payload.Model,
+		Currency:        payload.Currency,
+		RiskProfile:     payload.RiskProfile,
+		Horizon:         payload.Horizon,
+		AdviceStyle:     payload.AdviceStyle,
+		AllowNewSymbols: allowNewSymbols,
+		StrategyPrompt:  payload.StrategyPrompt,
+		AnalysisType:    payload.AnalysisType,
+	}, func(chunk string) error {
+		if chunk == "" {
+			return nil
+		}
+		return writeSSEEvent(w, flushFn, "chunk", map[string]string{"text": chunk})
+	})
+	if err != nil {
+		h.logger.Error("ai holdings stream analysis failed",
+			"currency", payload.Currency,
+			"model", payload.Model,
+			"base_url", payload.BaseURL,
+			"err", err,
+		)
+		_ = writeSSEEvent(w, flushFn, "error", map[string]string{"error": err.Error()})
+		return
+	}
+
+	_ = writeSSEEvent(w, flushFn, "done", map[string]any{"result": result})
 }
 
 func (h *handler) getHoldingsAnalysis(w http.ResponseWriter, r *http.Request) {

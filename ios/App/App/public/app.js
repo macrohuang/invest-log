@@ -3,6 +3,7 @@ const state = {
   privacy: false,
   aiAnalysisByCurrency: {},
   aiAnalysisHistoryByCurrency: {}, // { currency: HoldingsAnalysisResult[] }
+  aiStreamingByCurrency: {}, // { currency: { active: true, text: string, analysisType: string, startedAt: string } }
   holdingsFilters: {}, // { currency: { accountIds: [], symbols: [] } }
   aiSettings: null,
   aiSettingsLoaded: false,
@@ -13,6 +14,8 @@ let _openPopover = null;
 
 const aiAnalysisSettingsKey = 'aiHoldingsAnalysisSettings';
 const aiAnalysisAPIKeyStorageKey = 'aiHoldingsAnalysisApiKey';
+const defaultOpenAIBaseURL = 'https://api.openai.com/v1';
+const defaultGeminiBaseURL = 'https://generativelanguage.googleapis.com/v1beta';
 
 const view = document.getElementById('view');
 const toastEl = document.getElementById('toast');
@@ -197,6 +200,103 @@ async function fetchJSON(path, options = {}) {
   return response.json();
 }
 
+function parseSSEEventBlock(block) {
+  const lines = block.split('\n');
+  let eventName = 'message';
+  const dataLines = [];
+
+  lines.forEach((line) => {
+    if (!line || line.startsWith(':')) {
+      return;
+    }
+    if (line.startsWith('event:')) {
+      eventName = line.slice(6).trim();
+      return;
+    }
+    if (line.startsWith('data:')) {
+      dataLines.push(line.slice(5).trimStart());
+    }
+  });
+
+  if (!dataLines.length) {
+    return null;
+  }
+
+  const raw = dataLines.join('\n');
+  let payload = raw;
+  try {
+    payload = JSON.parse(raw);
+  } catch (_) {
+    // Keep raw string payload when JSON parsing fails.
+  }
+  return { event: eventName, payload };
+}
+
+async function streamSSE(path, options = {}) {
+  if (!state.apiBase && window.location.protocol === 'file:') {
+    throw new Error('API base not set');
+  }
+
+  const url = apiUrl(path);
+  const config = {
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
+    ...options,
+  };
+
+  const response = await fetch(url, config);
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || `Request failed: ${response.status}`);
+  }
+
+  const reader = response.body && response.body.getReader ? response.body.getReader() : null;
+  if (!reader) {
+    throw new Error('SSE stream is not supported by current browser');
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+  const onEvent = typeof options.onEvent === 'function' ? options.onEvent : null;
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      buffer += decoder.decode();
+    } else {
+      buffer += decoder.decode(value, { stream: true });
+    }
+    buffer = buffer.replace(/\r\n/g, '\n');
+
+    let boundary = buffer.indexOf('\n\n');
+    while (boundary !== -1) {
+      const block = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      if (block.trim()) {
+        const parsed = parseSSEEventBlock(block);
+        if (parsed && onEvent) {
+          // eslint-disable-next-line no-await-in-loop
+          await onEvent(parsed.event, parsed.payload);
+        }
+      }
+      boundary = buffer.indexOf('\n\n');
+    }
+
+    if (done) {
+      break;
+    }
+  }
+
+  if (buffer.trim()) {
+    const parsed = parseSSEEventBlock(buffer);
+    if (parsed && onEvent) {
+      await onEvent(parsed.event, parsed.payload);
+    }
+  }
+}
+
 function setActiveRoute(routeKey) {
   navLinks.forEach((link) => {
     const isActive = link.dataset.route === routeKey;
@@ -215,7 +315,7 @@ function getRouteQuery() {
 
 function defaultAIAnalysisSettings() {
   return {
-    baseUrl: 'https://api.openai.com/v1',
+    baseUrl: defaultOpenAIBaseURL,
     model: '',
     riskProfile: 'balanced',
     horizon: 'medium',
@@ -230,13 +330,29 @@ function normalizeChoice(value, allowed, fallback) {
   return allowed.includes(normalized) ? normalized : fallback;
 }
 
+function isGeminiModel(value) {
+  return String(value || '').trim().toLowerCase().startsWith('gemini');
+}
+
+function normalizeAIBaseUrl(value, fallback = defaultOpenAIBaseURL) {
+  return trimTrailingSlash(String(value || '').trim()) || fallback;
+}
+
+function normalizeAIBaseUrlForModel(value, model) {
+  const normalizedBaseUrl = normalizeAIBaseUrl(value);
+  if (isGeminiModel(model) && normalizedBaseUrl.toLowerCase() === defaultOpenAIBaseURL) {
+    return defaultGeminiBaseURL;
+  }
+  return normalizedBaseUrl;
+}
+
 function normalizeAIAnalysisSettings(raw) {
   const defaults = defaultAIAnalysisSettings();
   const source = raw && typeof raw === 'object' ? raw : {};
 
-  const baseUrlRaw = source.baseUrl || source.base_url || defaults.baseUrl;
-  const baseUrl = trimTrailingSlash(String(baseUrlRaw || '').trim()) || defaults.baseUrl;
   const model = String(source.model || '').trim();
+  const baseUrlRaw = source.baseUrl || source.base_url || defaults.baseUrl;
+  const baseUrl = normalizeAIBaseUrlForModel(baseUrlRaw, model);
   const riskProfile = normalizeChoice(source.riskProfile || source.risk_profile, ['conservative', 'balanced', 'aggressive'], defaults.riskProfile);
   const horizon = normalizeChoice(source.horizon, ['short', 'medium', 'long'], defaults.horizon);
   const adviceStyle = normalizeChoice(source.adviceStyle || source.advice_style, ['conservative', 'balanced', 'aggressive'], defaults.adviceStyle);
@@ -603,7 +719,31 @@ function renderReviewModeSection(results) {
   `;
 }
 
+function renderAIStreamingCard(currency, streamState) {
+  const startedAt = streamState.startedAt
+    ? escapeHtml(formatDateTimeInDisplayTimezone(streamState.startedAt))
+    : '—';
+  const typeLabel = formatAnalysisTypeLabel(streamState.analysisType || 'adhoc');
+  const previewText = streamState.text || '';
+
+  return `
+    <div class="card ai-analysis-card ai-analysis-streaming" data-ai-analysis-card="${currency}">
+      <div class="ai-analysis-head">
+        <h4>AI Analysis <span class="tag other">${typeLabel}</span></h4>
+        <div class="section-sub">Gemini streaming · Started: ${startedAt}</div>
+      </div>
+      <div class="ai-streaming-status">生成中，正在逐块返回结果...</div>
+      <pre class="ai-streaming-text" data-ai-stream-preview="${currency}">${escapeHtml(previewText)}</pre>
+    </div>
+  `;
+}
+
 function renderAIAnalysisCard(result, currency) {
+  const streamState = state.aiStreamingByCurrency[currency];
+  if (streamState && streamState.active) {
+    return renderAIStreamingCard(currency, streamState);
+  }
+
   if (!result) {
     return '';
   }
@@ -668,6 +808,38 @@ function renderAIAnalysisCard(result, currency) {
       <div class="section-sub">${disclaimer}</div>
     </div>
   `;
+}
+
+function upsertAIStreamingCard(currency) {
+  const panel = view.querySelector(`[data-holdings-panel="${currency}"]`);
+  if (!panel) return;
+  const streamState = state.aiStreamingByCurrency[currency];
+  if (!streamState || !streamState.active) return;
+
+  const markup = renderAIStreamingCard(currency, streamState);
+  const existingCard = panel.querySelector(`[data-ai-analysis-card="${currency}"]`);
+  if (existingCard) {
+    existingCard.outerHTML = markup;
+    return;
+  }
+  const table = panel.querySelector('table[data-holdings-table]');
+  if (!table) return;
+  table.insertAdjacentHTML('afterend', markup);
+}
+
+function appendAIStreamingChunk(currency, chunk) {
+  if (!chunk) return;
+  const streamState = state.aiStreamingByCurrency[currency];
+  if (!streamState || !streamState.active) return;
+
+  streamState.text += chunk;
+  const preview = view.querySelector(`[data-ai-stream-preview="${currency}"]`);
+  if (!preview) {
+    upsertAIStreamingCard(currency);
+    return;
+  }
+  preview.textContent = streamState.text;
+  preview.scrollTop = preview.scrollHeight;
 }
 
 function formatAnalysisTypeLabel(type) {
@@ -1644,8 +1816,17 @@ function bindHoldingsActions() {
           const analysisType = typeSelect ? typeSelect.value : 'adhoc';
           btn.disabled = true;
           btn.textContent = 'Analyzing...';
+          state.aiStreamingByCurrency[currency] = {
+            active: true,
+            text: '',
+            analysisType,
+            startedAt: new Date().toISOString(),
+          };
+          upsertAIStreamingCard(currency);
           try {
-            const analyzed = await runAIHoldingsAnalysis(currency, analysisType);
+            const analyzed = await runAIHoldingsAnalysis(currency, analysisType, (chunk) => {
+              appendAIStreamingChunk(currency, chunk);
+            });
             if (analyzed) {
               // Refresh history from server so the new result appears in history.
               try {
@@ -1658,6 +1839,7 @@ function bindHoldingsActions() {
               showToast(`${currency} analysis ready`);
             }
           } finally {
+            delete state.aiStreamingByCurrency[currency];
             btn.disabled = false;
             btn.textContent = 'AI';
           }
@@ -1665,6 +1847,7 @@ function bindHoldingsActions() {
         renderHoldings();
       } catch (err) {
         if (action === 'ai-analyze') {
+          delete state.aiStreamingByCurrency[currency];
           let message = 'AI analysis failed';
           if (err && err.message) {
             const raw = String(err.message);
@@ -1681,6 +1864,7 @@ function bindHoldingsActions() {
             message = trimmed;
           }
           showToast(message);
+          renderHoldings();
         } else {
           showToast('Price update failed');
         }
@@ -1689,12 +1873,14 @@ function bindHoldingsActions() {
   });
 }
 
-async function runAIHoldingsAnalysis(currency, analysisType) {
+async function runAIHoldingsAnalysis(currency, analysisType, onChunk) {
   const settings = await loadAIAnalysisSettings();
+  const model = (settings.model || '').trim();
+  const baseUrl = normalizeAIBaseUrlForModel(settings.baseUrl, model);
 
   const normalizedSettings = {
-    baseUrl: (settings.baseUrl || 'https://api.openai.com/v1').trim(),
-    model: (settings.model || '').trim(),
+    baseUrl,
+    model,
     apiKey: (settings.apiKey || '').trim(),
     riskProfile: settings.riskProfile || 'balanced',
     horizon: settings.horizon || 'medium',
@@ -1710,23 +1896,60 @@ async function runAIHoldingsAnalysis(currency, analysisType) {
     return false;
   }
 
-  const result = await fetchJSON('/api/ai/holdings-analysis', {
+  const requestPayload = {
+    base_url: normalizedSettings.baseUrl,
+    api_key: normalizedSettings.apiKey,
+    model: normalizedSettings.model,
+    currency,
+    risk_profile: normalizedSettings.riskProfile,
+    horizon: normalizedSettings.horizon,
+    advice_style: normalizedSettings.adviceStyle,
+    allow_new_symbols: normalizedSettings.allowNewSymbols,
+    strategy_prompt: normalizedSettings.strategyPrompt,
+    analysis_type: analysisType || 'adhoc',
+  };
+
+  let streamError = '';
+  let doneResult = null;
+
+  await streamSSE('/api/ai/holdings-analysis/stream', {
     method: 'POST',
-    body: JSON.stringify({
-      base_url: normalizedSettings.baseUrl,
-      api_key: normalizedSettings.apiKey,
-      model: normalizedSettings.model,
-      currency,
-      risk_profile: normalizedSettings.riskProfile,
-      horizon: normalizedSettings.horizon,
-      advice_style: normalizedSettings.adviceStyle,
-      allow_new_symbols: normalizedSettings.allowNewSymbols,
-      strategy_prompt: normalizedSettings.strategyPrompt,
-      analysis_type: analysisType || 'adhoc',
-    }),
+    body: JSON.stringify(requestPayload),
+    async onEvent(eventName, payload) {
+      if (eventName === 'chunk') {
+        if (payload && typeof payload === 'object' && typeof payload.text === 'string' && typeof onChunk === 'function') {
+          onChunk(payload.text);
+        }
+        return;
+      }
+      if (eventName === 'done') {
+        if (payload && typeof payload === 'object' && payload.result) {
+          doneResult = payload.result;
+          return;
+        }
+        doneResult = payload;
+        return;
+      }
+      if (eventName === 'error') {
+        if (payload && typeof payload === 'object' && payload.error) {
+          streamError = String(payload.error);
+        } else if (typeof payload === 'string') {
+          streamError = payload;
+        } else {
+          streamError = 'AI analysis failed';
+        }
+      }
+    },
   });
 
-  state.aiAnalysisByCurrency[currency] = result;
+  if (streamError) {
+    throw new Error(streamError);
+  }
+  if (!doneResult || typeof doneResult !== 'object') {
+    throw new Error('AI stream ended without done payload');
+  }
+
+  state.aiAnalysisByCurrency[currency] = doneResult;
   return true;
 }
 
@@ -1811,9 +2034,11 @@ async function renderSymbolAnalysis() {
 
 async function runSymbolAnalysis(symbol, currency) {
   const settings = await loadAIAnalysisSettings();
+  const model = (settings.model || '').trim();
+  const baseUrl = normalizeAIBaseUrlForModel(settings.baseUrl, model);
   const normalizedSettings = {
-    baseUrl: (settings.baseUrl || 'https://api.openai.com/v1').trim(),
-    model: (settings.model || '').trim(),
+    baseUrl,
+    model,
     apiKey: (settings.apiKey || '').trim(),
     riskProfile: (settings.riskProfile || 'balanced').trim(),
     horizon: (settings.horizon || 'medium').trim(),
@@ -3441,12 +3666,12 @@ async function renderSettings() {
     const aiAnalysisSection = `
       <div class="card">
         <h3>AI Analysis</h3>
-        <div class="section-sub">OpenAI-compatible configuration for holdings analysis.</div>
+        <div class="section-sub">Provider base URL, model, and API key for AI analysis (Gemini supported).</div>
         <div class="form">
           <div class="form-row">
             <div class="field">
               <label>AI Base URL</label>
-              <input id="ai-base-url" type="text" placeholder="https://api.openai.com/v1" value="${escapeHtml(aiSettings.baseUrl || 'https://api.openai.com/v1')}">
+              <input id="ai-base-url" type="text" placeholder="${defaultOpenAIBaseURL}" value="${escapeHtml(aiSettings.baseUrl || defaultOpenAIBaseURL)}">
             </div>
             <div class="field">
               <label>Model</label>
@@ -3930,10 +4155,21 @@ function bindSettingsActions(assetTypes) {
       const adviceStyleInput = document.getElementById('ai-advice-style');
       const allowNewSymbolsInput = document.getElementById('ai-allow-new-symbols');
       const strategyPromptInput = document.getElementById('ai-strategy-prompt');
+      const model = modelInput && modelInput.value ? modelInput.value.trim() : '';
+      const rawBaseUrl = baseUrlInput && baseUrlInput.value ? baseUrlInput.value.trim() : '';
+      const normalizedRawBaseUrl = normalizeAIBaseUrl(rawBaseUrl);
+      const normalizedBaseUrl = normalizeAIBaseUrlForModel(rawBaseUrl, model);
+      const autoAdjustedGeminiBaseURL = isGeminiModel(model) &&
+        normalizedRawBaseUrl.toLowerCase() === defaultOpenAIBaseURL &&
+        normalizedBaseUrl === defaultGeminiBaseURL;
+
+      if (baseUrlInput) {
+        baseUrlInput.value = normalizedBaseUrl;
+      }
 
       const settings = {
-        baseUrl: trimTrailingSlash(baseUrlInput && baseUrlInput.value ? baseUrlInput.value.trim() : '') || 'https://api.openai.com/v1',
-        model: modelInput && modelInput.value ? modelInput.value.trim() : '',
+        baseUrl: normalizedBaseUrl,
+        model,
         apiKey: apiKeyInput && apiKeyInput.value ? apiKeyInput.value.trim() : '',
         riskProfile: riskProfileInput && riskProfileInput.value ? riskProfileInput.value : 'balanced',
         horizon: horizonInput && horizonInput.value ? horizonInput.value : 'medium',
@@ -3947,6 +4183,8 @@ function bindSettingsActions(assetTypes) {
         const saved = await saveAIAnalysisSettings(settings);
         if (!saved.model || !saved.apiKey) {
           showToast('Saved. Set model and API key before running analysis');
+        } else if (autoAdjustedGeminiBaseURL) {
+          showToast('AI settings saved. Gemini base URL auto-adjusted.');
         } else {
           showToast('AI settings saved');
         }
@@ -4560,6 +4798,7 @@ function showAIAdvisorModal(assetTypes) {
   async function fetchAdvice() {
     const settings = await loadAIAnalysisSettings();
     const model = (settings.model || '').trim();
+    const baseUrl = normalizeAIBaseUrlForModel(settings.baseUrl, model);
     const apiKey = (settings.apiKey || '').trim();
     if (!model || !apiKey) {
       closeModal();
@@ -4573,7 +4812,7 @@ function showAIAdvisorModal(assetTypes) {
       adviceResult = await fetchJSON('/api/ai/allocation-advice', {
         method: 'POST',
         body: JSON.stringify({
-          base_url: (settings.baseUrl || 'https://api.openai.com/v1').trim(),
+          base_url: baseUrl,
           api_key: apiKey,
           model,
           age_range: profile.ageRange,

@@ -817,6 +817,11 @@ select.btn.trade-select {
   background: rgba(26, 115, 232, 0.03);
 }
 
+.ai-analysis-streaming {
+  border-color: rgba(236, 151, 31, 0.45);
+  background: rgba(236, 151, 31, 0.08);
+}
+
 .ai-analysis-head {
   display: flex;
   flex-direction: column;
@@ -840,6 +845,28 @@ select.btn.trade-select {
 
 .ai-section {
   margin-bottom: 10px;
+}
+
+.ai-streaming-status {
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #9c5d08;
+  font-weight: 600;
+}
+
+.ai-streaming-text {
+  margin: 0;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(29, 31, 27, 0.12);
+  background: rgba(255, 255, 255, 0.88);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 260px;
+  overflow: auto;
 }
 
 .ai-section h5 {
