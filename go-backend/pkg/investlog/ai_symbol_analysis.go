@@ -10,105 +10,58 @@ import (
 	"sync"
 )
 
-const symbolAnalysisTimeout = aiTotalRequestTimeout
+const (
+	symbolAnalysisTimeout       = aiTotalRequestTimeout
+	minFrameworkAnalyses        = 3
+	maxSynthesisDisclaimerChars = 16
+)
 
-const macroAnalysisSystemPrompt = `你是一个专注于宏观经济政策分析的投资研究助手。
-你需要分析以下维度：
-1) 货币政策：利率走向、流动性环境、央行政策倾向
-2) 财政政策：政府支出、税收政策、产业补贴
-3) 监管环境：行业监管变化、政策风险
-4) 经济周期：当前经济阶段、GDP增长、通胀水平、就业数据
+type symbolFrameworkSpec struct {
+	ID    string
+	Name  string
+	Focus string
+}
 
-请基于给定标的的相关市场和经济环境进行分析。
+var symbolFrameworkCatalog = []symbolFrameworkSpec{
+	{ID: "dupont_roic", Name: "杜邦ROIC", Focus: "拆解ROE/ROIC驱动，检验资本效率与杠杆质量"},
+	{ID: "capital_cycle", Name: "资本周期", Focus: "识别供给扩张/出清节奏，判断利润中枢拐点"},
+	{ID: "industry_s_curve", Name: "产业S曲线", Focus: "定位渗透率阶段、增长斜率与天花板"},
+	{ID: "reverse_dcf", Name: "反向DCF", Focus: "反推出市场隐含增长与利润假设并检验可达性"},
+	{ID: "dynamic_moat", Name: "动态护城河", Focus: "评估护城河强化或弱化趋势及触发因素"},
+	{ID: "dcf", Name: "DCF估值", Focus: "以现金流折现估算内在价值与安全边际"},
+	{ID: "porter_moat", Name: "波特护城河", Focus: "从五力与竞争位置评估超额收益可持续性"},
+	{ID: "expectations_investing", Name: "预期差投资", Focus: "比较市场一致预期与现实偏差的方向与幅度"},
+	{ID: "relative_valuation", Name: "相对估值", Focus: "与历史区间及可比公司估值横向对照"},
+}
+
+var legacyDimensionColumnOrder = []string{"macro", "industry", "company", "international"}
+
+const frameworkAnalysisSystemPromptTemplate = `你是一个只使用单一分析框架的投资研究助手。
+本次必须使用框架ID: %s
+框架名称: %s
+框架重点: %s
+
 必须输出 JSON 对象，不要输出 Markdown，不要输出额外文字。
 JSON 字段必须包含：
-- dimension: "macro"
+- dimension: "%s"
 - rating: string (positive/neutral/negative)
 - confidence: string (high/medium/low)
 - key_points: string[]
 - risks: string[]
 - opportunities: string[]
 - summary: string
+- suggestion: string (必须给出明确动作建议，且包含 increase/hold/reduce 之一)
+- valuation_assessment: string (可选)
 
 要求：
-- 分析必须具体到该标的所在的市场和行业
-- 结合最新的宏观经济数据进行判断
-- 评级必须有充分的数据支撑`
+- 只按该框架推理，不要混用其他框架
+- 结论必须明确，禁止“看情况/视情况/it depends”
+- 用短句输出，信息密度高`
 
-const industryAnalysisSystemPrompt = `你是一个专注于行业趋势分析的投资研究助手。
-你需要分析以下维度：
-1) 行业趋势：行业增长率、市场规模、发展阶段
-2) 竞争格局：市场集中度、主要竞争者、进入壁垒
-3) 技术颠覆：技术创新、数字化转型、替代技术威胁
-4) 供应链：上下游关系、原材料成本、供应链稳定性
-
-请基于给定标的所在行业进行深入分析。
-必须输出 JSON 对象，不要输出 Markdown，不要输出额外文字。
-JSON 字段必须包含：
-- dimension: "industry"
-- rating: string (positive/neutral/negative)
-- confidence: string (high/medium/low)
-- key_points: string[]
-- risks: string[]
-- opportunities: string[]
-- summary: string
-
-要求：
-- 分析必须聚焦于该标的所在的具体细分行业
-- 对比同行业其他主要公司
-- 识别行业的关键驱动因素和风险因素`
-
-const companyAnalysisSystemPrompt = `你是一个专注于公司基本面分析的投资研究助手。
-你需要分析以下维度：
-1) 财务分析：营收增长、利润率（毛利率/净利率）、资产负债率、自由现金流
-2) 估值分析：PE、PB、DCF估值、与历史和同行的对比
-3) 护城河：品牌优势、网络效应、成本优势、转换成本、规模效应
-4) 管理层：管理团队能力、公司治理、股东回报政策
-
-请基于给定标的进行深入的基本面分析。
-必须输出 JSON 对象，不要输出 Markdown，不要输出额外文字。
-JSON 字段必须包含：
-- dimension: "company"
-- rating: string (positive/neutral/negative)
-- confidence: string (high/medium/low)
-- key_points: string[]
-- risks: string[]
-- opportunities: string[]
-- summary: string
-- valuation_assessment: string (对当前估值水平的评估)
-
-要求：
-- 必须获取该公司近3年的财务数据进行分析
-- 估值分析必须包含具体的估值指标数据
-- 基于华尔街估值逻辑进行分析
-- 对护城河的分析要具体而非泛泛而谈`
-
-const internationalAnalysisSystemPrompt = `你是一个专注于国际政治经济分析的投资研究助手。
-你需要分析以下维度：
-1) 贸易关系：贸易摩擦、关税政策、贸易协定
-2) 地缘政治：国际关系、地区冲突、制裁风险
-3) 汇率风险：汇率走势、资本管制、外汇政策
-4) 跨境资本流动：外资流向、QFII/QDII、互联互通机制
-
-请基于给定标的的国际环境进行分析。
-必须输出 JSON 对象，不要输出 Markdown，不要输出额外文字。
-JSON 字段必须包含：
-- dimension: "international"
-- rating: string (positive/neutral/negative)
-- confidence: string (high/medium/low)
-- key_points: string[]
-- risks: string[]
-- opportunities: string[]
-- summary: string
-
-要求：
-- 分析必须结合标的所在市场的国际环境
-- 评估跨境风险对该标的的具体影响
-- 关注最新的国际政治经济动态`
-
-const symbolSynthesisSystemPrompt = `你是一个综合投资分析师，负责整合多维度分析结果给出最终投资建议。
-你将收到四个维度的分析结果（宏观经济政策、行业竞争格局、公司基本面、国际政治经济），
-需要综合权衡所有维度，结合持仓规模、当前仓位占比、用户投资偏好和策略约束，给出最终投资建议。
+const symbolSynthesisSystemPrompt = `你是一个综合投资分析师，负责整合三个已选框架的结果给出最终投资建议。
+你将收到：1) 标的信息，2) 三个框架分析结果，3) 权重上下文。
+权重上下文包含持仓数量、仓位占比、资产类别配置区间、用户偏好与策略（含 StrategyPrompt）。
+你必须显式基于这三框架做综合判断，不得引用未给出的框架。
 
 必须输出 JSON 对象，不要输出 Markdown，不要输出额外文字。
 JSON 字段必须包含：
@@ -125,8 +78,8 @@ JSON 字段必须包含：
 - disclaimer: string (风险免责声明)
 
 要求：
-- 综合评级必须有充分的逻辑依据
-- 如果各维度结论冲突，需要明确说明权衡逻辑
+- 综合评级必须有充分的逻辑依据，并显式说明三框架如何加权
+- 如果框架结论冲突，需要明确说明权衡逻辑
 - 行动建议必须具体可执行
 - 必须把“持仓数量 + 仓位占比 + 资产类别配置区间 + 用户偏好与策略”纳入权重计算
 - 禁止输出“看情况/视情况而定/it depends”等含混表达
@@ -158,6 +111,7 @@ type SymbolDimensionResult struct {
 	Risks               []string `json:"risks"`
 	Opportunities       []string `json:"opportunities"`
 	Summary             string   `json:"summary"`
+	Suggestion          string   `json:"suggestion,omitempty"`
 	ValuationAssessment string   `json:"valuation_assessment,omitempty"`
 }
 
@@ -275,9 +229,23 @@ type symbolContextData struct {
 }
 
 type symbolPreferenceContext struct {
-	RiskProfile string `json:"risk_profile"`
-	Horizon     string `json:"horizon"`
-	AdviceStyle string `json:"advice_style"`
+	RiskProfile    string `json:"risk_profile"`
+	Horizon        string `json:"horizon"`
+	AdviceStyle    string `json:"advice_style"`
+	StrategyPrompt string `json:"strategy_prompt,omitempty"`
+}
+
+type symbolSynthesisWeightContext struct {
+	HoldingsQuantity     float64 `json:"holdings_quantity"`
+	PositionPercent      float64 `json:"position_percent"`
+	AllocationMinPercent float64 `json:"allocation_min_percent"`
+	AllocationMaxPercent float64 `json:"allocation_max_percent"`
+	AllocationStatus     string  `json:"allocation_status"`
+	AssetType            string  `json:"asset_type,omitempty"`
+	RiskProfile          string  `json:"risk_profile"`
+	Horizon              string  `json:"horizon"`
+	AdviceStyle          string  `json:"advice_style"`
+	StrategyPrompt       string  `json:"strategy_prompt,omitempty"`
 }
 
 // aiJSON returns a JSON string containing only the fields allowed for AI consumption:
@@ -430,31 +398,192 @@ func (c *Core) buildSymbolContext(symbol, currency string) (*symbolContextData, 
 	return ctx, nil
 }
 
-type dimensionAgent struct {
-	Dimension    string
+type frameworkAgent struct {
+	FrameworkID  string
 	SystemPrompt string
 }
 
-var dimensionAgents = []dimensionAgent{
-	{"macro", macroAnalysisSystemPrompt},
-	{"industry", industryAnalysisSystemPrompt},
-	{"company", companyAnalysisSystemPrompt},
-	{"international", internationalAnalysisSystemPrompt},
-}
-
 type agentResult struct {
-	Dimension string
-	Content   string
-	Error     error
+	FrameworkID string
+	Content     string
+	Error       error
 }
 
-func (c *Core) runDimensionAgents(ctx context.Context, endpoint, apiKey, model, userPrompt string, onDelta func(string)) (map[string]string, error) {
-	ch := make(chan agentResult, len(dimensionAgents))
+func buildFrameworkSystemPrompt(spec symbolFrameworkSpec) string {
+	return fmt.Sprintf(frameworkAnalysisSystemPromptTemplate, spec.ID, spec.Name, spec.Focus, spec.ID)
+}
+
+func containsAnyKeyword(text string, keywords []string) bool {
+	for _, keyword := range keywords {
+		if keyword != "" && strings.Contains(text, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+func selectSymbolFrameworks(contextData *symbolContextData, enrichedContext string) []symbolFrameworkSpec {
+	scores := make(map[string]int, len(symbolFrameworkCatalog))
+	for idx, spec := range symbolFrameworkCatalog {
+		// Base score keeps selection deterministic when heuristic scores tie.
+		scores[spec.ID] = len(symbolFrameworkCatalog) - idx
+	}
+
+	addScore := func(frameworkID string, score int) {
+		if _, ok := scores[frameworkID]; ok {
+			scores[frameworkID] += score
+		}
+	}
+
+	// Default baseline for single-stock analysis.
+	addScore("dcf", 8)
+	addScore("dynamic_moat", 7)
+	addScore("relative_valuation", 7)
+
+	if contextData != nil {
+		if contextData.PnLPercent >= 20 || contextData.PnLPercent <= -10 {
+			addScore("reverse_dcf", 8)
+			addScore("expectations_investing", 6)
+		}
+
+		switch contextData.AllocationStatus {
+		case "above_target":
+			addScore("relative_valuation", 8)
+			addScore("reverse_dcf", 6)
+		case "below_target":
+			addScore("dcf", 6)
+			addScore("porter_moat", 5)
+		}
+
+		symbolType := detectSymbolType(contextData.Symbol, contextData.Currency, contextData.AssetType)
+		switch symbolType {
+		case "etf", "fund":
+			addScore("capital_cycle", 8)
+			addScore("industry_s_curve", 5)
+			addScore("relative_valuation", 5)
+		default:
+			addScore("dupont_roic", 3)
+		}
+	}
+
+	traitParts := []string{enrichedContext}
+	if contextData != nil {
+		traitParts = append(traitParts, contextData.Symbol, contextData.Name, contextData.AssetType)
+	}
+	traitsText := strings.ToLower(strings.Join(traitParts, " "))
+
+	if containsAnyKeyword(traitsText, []string{"bank", "银行", "insurance", "保险", "broker", "券商", "financial"}) {
+		addScore("dupont_roic", 10)
+		addScore("relative_valuation", 6)
+	}
+	if containsAnyKeyword(traitsText, []string{"周期", "commodity", "shipping", "steel", "煤", "油", "化工", "有色"}) {
+		addScore("capital_cycle", 10)
+		addScore("industry_s_curve", 5)
+	}
+	if containsAnyKeyword(traitsText, []string{"高增长", "growth", "ai", "云", "新能源", "biotech", "半导体", "渗透率"}) {
+		addScore("industry_s_curve", 9)
+		addScore("expectations_investing", 8)
+		addScore("reverse_dcf", 4)
+	}
+	if containsAnyKeyword(traitsText, []string{"护城河", "brand", "平台", "network", "专利", "粘性"}) {
+		addScore("dynamic_moat", 8)
+		addScore("porter_moat", 8)
+	}
+
+	type scoredFramework struct {
+		Spec  symbolFrameworkSpec
+		Score int
+		Index int
+	}
+
+	scored := make([]scoredFramework, 0, len(symbolFrameworkCatalog))
+	for idx, spec := range symbolFrameworkCatalog {
+		scored = append(scored, scoredFramework{
+			Spec:  spec,
+			Score: scores[spec.ID],
+			Index: idx,
+		})
+	}
+
+	sort.Slice(scored, func(i, j int) bool {
+		if scored[i].Score == scored[j].Score {
+			return scored[i].Index < scored[j].Index
+		}
+		return scored[i].Score > scored[j].Score
+	})
+
+	selected := make([]symbolFrameworkSpec, 0, minFrameworkAnalyses)
+	for _, item := range scored {
+		selected = append(selected, item.Spec)
+		if len(selected) == minFrameworkAnalyses {
+			break
+		}
+	}
+	return selected
+}
+
+func frameworkIDsFromSpecs(specs []symbolFrameworkSpec) []string {
+	ids := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		ids = append(ids, spec.ID)
+	}
+	return ids
+}
+
+func buildSynthesisWeightContext(contextData *symbolContextData, preference symbolPreferenceContext) symbolSynthesisWeightContext {
+	weight := symbolSynthesisWeightContext{
+		AllocationMaxPercent: 100,
+		AllocationStatus:     "unknown",
+		RiskProfile:          preference.RiskProfile,
+		Horizon:              preference.Horizon,
+		AdviceStyle:          preference.AdviceStyle,
+		StrategyPrompt:       preference.StrategyPrompt,
+	}
+	if contextData == nil {
+		return weight
+	}
+
+	weight.HoldingsQuantity = round2(contextData.TotalShares)
+	weight.PositionPercent = round2(contextData.PositionPercent)
+	weight.AllocationMinPercent = round2(contextData.AllocationMinPercent)
+	weight.AllocationMaxPercent = round2(contextData.AllocationMaxPercent)
+	weight.AllocationStatus = contextData.AllocationStatus
+	weight.AssetType = contextData.AssetType
+
+	if weight.AllocationMinPercent == 0 && weight.AllocationMaxPercent == 0 {
+		weight.AllocationMaxPercent = 100
+	}
+	if strings.TrimSpace(weight.AllocationStatus) == "" {
+		weight.AllocationStatus = "unknown"
+	}
+	return weight
+}
+
+func (c *Core) runDimensionAgents(
+	ctx context.Context,
+	endpoint, apiKey, model string,
+	frameworks []symbolFrameworkSpec,
+	userPrompt string,
+	onDelta func(string),
+) (map[string]string, error) {
+	if len(frameworks) < minFrameworkAnalyses {
+		return nil, fmt.Errorf("selected frameworks less than %d", minFrameworkAnalyses)
+	}
+
+	agents := make([]frameworkAgent, 0, len(frameworks))
+	for _, framework := range frameworks {
+		agents = append(agents, frameworkAgent{
+			FrameworkID:  framework.ID,
+			SystemPrompt: buildFrameworkSystemPrompt(framework),
+		})
+	}
+
+	ch := make(chan agentResult, len(agents))
 	var wg sync.WaitGroup
 
-	for _, a := range dimensionAgents {
+	for _, a := range agents {
 		wg.Add(1)
-		go func(dim, sysPrompt string) {
+		go func(frameworkID, sysPrompt string) {
 			defer wg.Done()
 			res, err := aiChatCompletion(ctx, aiChatCompletionRequest{
 				EndpointURL:  endpoint,
@@ -468,15 +597,15 @@ func (c *Core) runDimensionAgents(ctx context.Context, endpoint, apiKey, model, 
 					if delta == "" || onDelta == nil {
 						return
 					}
-					onDelta("[" + dim + "] " + delta)
+					onDelta("[" + frameworkID + "] " + delta)
 				},
 			})
 			if err != nil {
-				ch <- agentResult{Dimension: dim, Error: err}
+				ch <- agentResult{FrameworkID: frameworkID, Error: err}
 				return
 			}
-			ch <- agentResult{Dimension: dim, Content: res.Content}
-		}(a.Dimension, a.SystemPrompt)
+			ch <- agentResult{FrameworkID: frameworkID, Content: res.Content}
+		}(a.FrameworkID, a.SystemPrompt)
 	}
 
 	go func() {
@@ -484,18 +613,18 @@ func (c *Core) runDimensionAgents(ctx context.Context, endpoint, apiKey, model, 
 		close(ch)
 	}()
 
-	outputs := make(map[string]string)
+	outputs := make(map[string]string, len(agents))
 	var errs []string
 	for r := range ch {
 		if r.Error != nil {
-			errs = append(errs, fmt.Sprintf("%s: %v", r.Dimension, r.Error))
+			errs = append(errs, fmt.Sprintf("%s: %v", r.FrameworkID, r.Error))
 			continue
 		}
-		outputs[r.Dimension] = r.Content
+		outputs[r.FrameworkID] = r.Content
 	}
 
-	if len(outputs) < 2 {
-		return nil, fmt.Errorf("too many dimension agents failed (%d/%d): %s", len(errs), len(dimensionAgents), strings.Join(errs, "; "))
+	if len(outputs) < minFrameworkAnalyses {
+		return nil, fmt.Errorf("framework analyses insufficient (%d/%d): %s", len(outputs), len(agents), strings.Join(errs, "; "))
 	}
 	return outputs, nil
 }
@@ -503,35 +632,43 @@ func (c *Core) runDimensionAgents(ctx context.Context, endpoint, apiKey, model, 
 func runSynthesisAgent(
 	ctx context.Context,
 	endpoint, apiKey, model, symbolContext string,
-	dimensionOutputs map[string]string,
-	preferenceContext symbolPreferenceContext,
+	frameworkOutputs map[string]string,
+	frameworkIDs []string,
+	weightContext symbolSynthesisWeightContext,
 	onDelta func(string),
 ) (string, error) {
-	dimensionJSON, err := json.Marshal(dimensionOutputs)
+	frameworkJSON, err := json.Marshal(frameworkOutputs)
 	if err != nil {
-		return "", fmt.Errorf("marshal dimension outputs: %w", err)
+		return "", fmt.Errorf("marshal framework outputs: %w", err)
 	}
-	preferenceJSON, err := json.Marshal(preferenceContext)
+	frameworkIDsJSON, err := json.Marshal(frameworkIDs)
 	if err != nil {
-		return "", fmt.Errorf("marshal preference context: %w", err)
+		return "", fmt.Errorf("marshal framework ids: %w", err)
+	}
+	weightJSON, err := json.Marshal(weightContext)
+	if err != nil {
+		return "", fmt.Errorf("marshal synthesis weight context: %w", err)
 	}
 
-	userPrompt := fmt.Sprintf(`请基于以下标的信息和四维度分析结果，综合给出投资建议：
+	userPrompt := fmt.Sprintf(`请基于以下信息给出综合建议：
 
 标的信息：
 %s
 
-用户投资偏好与策略约束：
+三框架ID（必须逐一引用）：
 %s
 
-各维度分析结果：
+三框架分析结果：
 %s
 
-决策硬约束：
-1) 结论第一句必须直接给出 target_action + action_probability_percent。
-2) action_probability_percent 必须是具体数字（例如 67），不能给区间，不能模糊措辞。
-3) 必须明确说明“当前仓位占比”与“目标区间（如有）”之间差距。
-4) 语言直接，不要客套，不要公关腔。`, symbolContext, string(preferenceJSON), string(dimensionJSON))
+权重上下文（必须纳入计算）：
+%s
+
+硬约束：
+1) overall_summary 的第一句必须直接给结论（target_action + action_probability_percent）。
+2) action_probability_percent 必须是具体数值。
+3) 必须明确给出当前仓位占比、目标配置区间、差值。
+4) 禁止“看情况/视情况/it depends”。`, symbolContext, string(frameworkIDsJSON), string(frameworkJSON), string(weightJSON))
 
 	result, err := aiChatCompletion(ctx, aiChatCompletionRequest{
 		EndpointURL:  endpoint,
@@ -559,6 +696,20 @@ func parseSymbolDimensionResult(raw string) (*SymbolDimensionResult, error) {
 	if err := json.Unmarshal([]byte(cleaned), &result); err != nil {
 		return nil, fmt.Errorf("parse dimension result: %w", err)
 	}
+	if strings.TrimSpace(result.Suggestion) == "" {
+		var fallback struct {
+			FrameworkID    string `json:"framework_id"`
+			Suggestion     string `json:"suggestion"`
+			Recommendation string `json:"recommendation"`
+			Advice         string `json:"advice"`
+		}
+		if err := json.Unmarshal([]byte(cleaned), &fallback); err == nil {
+			if strings.TrimSpace(result.Dimension) == "" {
+				result.Dimension = strings.TrimSpace(fallback.FrameworkID)
+			}
+			result.Suggestion = firstNonEmptyString(fallback.Suggestion, fallback.Recommendation, fallback.Advice)
+		}
+	}
 	return &result, nil
 }
 
@@ -572,13 +723,77 @@ func parseSynthesisResult(raw string) (*SymbolSynthesisResult, error) {
 	return &result, nil
 }
 
-func normalizeSynthesisResult(result *SymbolSynthesisResult, context *symbolContextData) {
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func normalizeDimensionResult(result *SymbolDimensionResult, frameworkID string) {
 	if result == nil {
 		return
 	}
+
+	result.Dimension = strings.ToLower(strings.TrimSpace(result.Dimension))
+	if strings.TrimSpace(frameworkID) != "" {
+		result.Dimension = strings.ToLower(strings.TrimSpace(frameworkID))
+	}
+	result.Rating = strings.ToLower(strings.TrimSpace(result.Rating))
+	if result.Rating == "" {
+		result.Rating = "neutral"
+	}
+	result.Confidence = strings.ToLower(strings.TrimSpace(result.Confidence))
+	if result.Confidence == "" {
+		result.Confidence = "medium"
+	}
+	result.Summary = strings.TrimSpace(stripFuzzyPhrases(result.Summary))
+	if result.Summary == "" {
+		result.Summary = "数据不足，暂给中性判断。"
+	}
+	result.Suggestion = strings.TrimSpace(stripFuzzyPhrases(result.Suggestion))
+	if result.Suggestion == "" {
+		result.Suggestion = defaultDimensionSuggestion(result.Rating)
+	}
+}
+
+func defaultDimensionSuggestion(rating string) string {
+	switch strings.ToLower(strings.TrimSpace(rating)) {
+	case "positive":
+		return "increase：信号偏正，分批加仓。"
+	case "negative":
+		return "reduce：信号偏弱，先降仓。"
+	default:
+		return "hold：信号中性，维持仓位。"
+	}
+}
+
+func normalizeSynthesisResult(result *SymbolSynthesisResult, context *symbolContextData, frameworkIDs ...[]string) {
+	if result == nil {
+		return
+	}
+	var selectedFrameworkIDs []string
+	if len(frameworkIDs) > 0 {
+		selectedFrameworkIDs = frameworkIDs[0]
+	}
+	result.TargetAction = normalizeSynthesisAction(result.TargetAction)
 	result.ActionProbability = normalizeSynthesisProbability(result.Confidence, result.ActionProbability)
 	result.PositionSuggestion = normalizeSynthesisPositionSuggestion(*result, context)
-	result.OverallSummary = normalizeSynthesisSummary(*result)
+	result.OverallSummary = normalizeSynthesisSummary(*result, selectedFrameworkIDs)
+	result.Disclaimer = normalizeSynthesisDisclaimer(result.Disclaimer)
+}
+
+func normalizeSynthesisAction(action string) string {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "increase":
+		return "increase"
+	case "reduce":
+		return "reduce"
+	default:
+		return "hold"
+	}
 }
 
 func normalizeSynthesisProbability(confidence string, probability float64) float64 {
@@ -596,7 +811,11 @@ func normalizeSynthesisProbability(confidence string, probability float64) float
 	}
 }
 
-func normalizeSynthesisSummary(result SymbolSynthesisResult) string {
+func normalizeSynthesisSummary(result SymbolSynthesisResult, frameworkIDs ...[]string) string {
+	var selectedFrameworkIDs []string
+	if len(frameworkIDs) > 0 {
+		selectedFrameworkIDs = frameworkIDs[0]
+	}
 	actionLabel := mapSynthesisActionLabel(result.TargetAction)
 	probability := normalizeSynthesisProbability(result.Confidence, result.ActionProbability)
 
@@ -611,17 +830,18 @@ func normalizeSynthesisSummary(result SymbolSynthesisResult) string {
 	risks := buildSynthesisListLine("雷点", result.RiskWarnings)
 
 	builder := strings.Builder{}
-	builder.WriteString(fmt.Sprintf("结论：%s，执行概率%.0f%%。", actionLabel, probability))
+	builder.WriteString(fmt.Sprintf("%s，执行概率%.0f%%。", actionLabel, probability))
+	if len(selectedFrameworkIDs) > 0 {
+		builder.WriteString("框架：")
+		builder.WriteString(strings.Join(selectedFrameworkIDs, "、"))
+		builder.WriteString("。")
+	}
 	builder.WriteString("仓位：")
 	builder.WriteString(position)
 	builder.WriteString(factors)
 	builder.WriteString(risks)
 
-	summary := builder.String()
-	summary = strings.ReplaceAll(summary, "看情况", "")
-	summary = strings.ReplaceAll(summary, "视情况", "")
-	summary = strings.ReplaceAll(summary, "it depends", "")
-	summary = strings.TrimSpace(summary)
+	summary := strings.TrimSpace(stripFuzzyPhrases(builder.String()))
 
 	if len([]rune(summary)) > 200 {
 		summary = string([]rune(summary)[:200])
@@ -631,10 +851,41 @@ func normalizeSynthesisSummary(result SymbolSynthesisResult) string {
 	}
 
 	if summary == "" {
-		summary = fmt.Sprintf("结论：%s，执行概率%.0f%%。", actionLabel, probability)
+		summary = fmt.Sprintf("%s，执行概率%.0f%%。", actionLabel, probability)
 	}
 
 	return summary
+}
+
+func normalizeSynthesisDisclaimer(disclaimer string) string {
+	cleaned := strings.TrimSpace(stripFuzzyPhrases(disclaimer))
+	cleaned = strings.NewReplacer("\n", "", "\r", "", " ", "", "。", "", "，", "").Replace(cleaned)
+	if cleaned == "" {
+		cleaned = "市场波动风险"
+	}
+	runes := []rune(cleaned)
+	if len(runes) > maxSynthesisDisclaimerChars {
+		cleaned = string(runes[:maxSynthesisDisclaimerChars])
+	}
+	if strings.TrimSpace(cleaned) == "" {
+		return "市场波动风险"
+	}
+	return cleaned
+}
+
+func stripFuzzyPhrases(input string) string {
+	if strings.TrimSpace(input) == "" {
+		return ""
+	}
+	replacer := strings.NewReplacer(
+		"看情况", "",
+		"视情况", "",
+		"视情况而定", "",
+		"it depends", "",
+		"It depends", "",
+		"IT DEPENDS", "",
+	)
+	return replacer.Replace(input)
 }
 
 func normalizeSynthesisPositionSuggestion(result SymbolSynthesisResult, context *symbolContextData) string {
@@ -722,7 +973,7 @@ func buildSynthesisListLine(label string, items []string) string {
 }
 
 func compactSynthesisText(input string) string {
-	trimmed := strings.TrimSpace(input)
+	trimmed := strings.TrimSpace(stripFuzzyPhrases(input))
 	if trimmed == "" {
 		return ""
 	}
@@ -756,11 +1007,15 @@ func mapSynthesisActionLabel(action string) string {
 	}
 }
 
-// buildDimensionUserPrompt constructs the user prompt for dimension agents,
+// buildDimensionUserPrompt constructs the user prompt for framework agents,
 // optionally injecting enriched context from external data.
-func buildDimensionUserPrompt(symbolContext, enrichedContext string, req SymbolAnalysisRequest) string {
+func buildDimensionUserPrompt(symbolContext, enrichedContext string, req SymbolAnalysisRequest, selectedFrameworkIDs []string) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("请分析以下投资标的：\n%s\n", symbolContext))
+
+	if len(selectedFrameworkIDs) > 0 {
+		sb.WriteString(fmt.Sprintf("\n本次只允许分析以下框架ID：%s\n", strings.Join(selectedFrameworkIDs, ", ")))
+	}
 
 	if enrichedContext != "" {
 		sb.WriteString(fmt.Sprintf(`
@@ -771,13 +1026,14 @@ func buildDimensionUserPrompt(symbolContext, enrichedContext string, req SymbolA
 `, enrichedContext))
 	}
 
-	sb.WriteString("\n请根据你的专业维度进行深入分析，并输出指定格式的 JSON 结果。")
+	sb.WriteString("\n请根据你的框架职责进行分析，并输出指定格式的 JSON 结果。")
 
-	if req.RiskProfile != "" || req.Horizon != "" || req.AdviceStyle != "" {
+	if req.RiskProfile != "" || req.Horizon != "" || req.AdviceStyle != "" || req.StrategyPrompt != "" {
 		preferenceJSON, err := json.Marshal(symbolPreferenceContext{
-			RiskProfile: req.RiskProfile,
-			Horizon:     req.Horizon,
-			AdviceStyle: req.AdviceStyle,
+			RiskProfile:    req.RiskProfile,
+			Horizon:        req.Horizon,
+			AdviceStyle:    req.AdviceStyle,
+			StrategyPrompt: req.StrategyPrompt,
 		})
 		if err == nil {
 			sb.WriteString(fmt.Sprintf("\n\n用户投资偏好（用于结论权重与表达强度）：\n%s", string(preferenceJSON)))
@@ -838,36 +1094,85 @@ func (c *Core) analyzeSymbol(req SymbolAnalysisRequest, onDelta func(string)) (*
 		}
 	}
 
-	// Build user prompt for dimension agents.
-	userPrompt := buildDimensionUserPrompt(symbolContextJSON, enrichedContext, normalizedReq)
+	selectedFrameworks := selectSymbolFrameworks(contextData, enrichedContext)
+	if len(selectedFrameworks) < minFrameworkAnalyses {
+		err := fmt.Errorf("selected frameworks less than %d", minFrameworkAnalyses)
+		_ = c.updateSymbolAnalysisStatus(rowID, "failed", err.Error())
+		return nil, err
+	}
+	selectedFrameworkIDs := frameworkIDsFromSpecs(selectedFrameworks)
 
-	// Run 4 dimension agents in parallel.
-	dimensionOutputs, err := c.runDimensionAgents(ctx, endpointURL, normalizedReq.APIKey, normalizedReq.Model, userPrompt, onDelta)
+	// Build user prompt for framework agents.
+	userPrompt := buildDimensionUserPrompt(symbolContextJSON, enrichedContext, normalizedReq, selectedFrameworkIDs)
+
+	// Run 3 framework agents in parallel.
+	dimensionOutputs, err := c.runDimensionAgents(
+		ctx,
+		endpointURL,
+		normalizedReq.APIKey,
+		normalizedReq.Model,
+		selectedFrameworks,
+		userPrompt,
+		onDelta,
+	)
 	if err != nil {
 		_ = c.updateSymbolAnalysisStatus(rowID, "failed", err.Error())
 		return nil, err
 	}
 
+	dimensions := make(map[string]*SymbolDimensionResult, len(selectedFrameworkIDs))
+	normalizedDimensionOutputs := make(map[string]string, len(selectedFrameworkIDs))
+	for _, frameworkID := range selectedFrameworkIDs {
+		rawOutput, ok := dimensionOutputs[frameworkID]
+		if !ok || strings.TrimSpace(rawOutput) == "" {
+			continue
+		}
+
+		parsed, parseErr := parseSymbolDimensionResult(rawOutput)
+		if parseErr != nil {
+			c.Logger().Warn("failed to parse framework result", "framework", frameworkID, "err", parseErr)
+			continue
+		}
+		normalizeDimensionResult(parsed, frameworkID)
+		dimensions[frameworkID] = parsed
+
+		normalizedJSON, marshalErr := json.Marshal(parsed)
+		if marshalErr != nil {
+			c.Logger().Warn("failed to marshal normalized framework result", "framework", frameworkID, "err", marshalErr)
+			normalizedDimensionOutputs[frameworkID] = rawOutput
+			continue
+		}
+		normalizedDimensionOutputs[frameworkID] = string(normalizedJSON)
+	}
+	if len(dimensions) < minFrameworkAnalyses {
+		err := fmt.Errorf("framework analyses parsed less than %d", minFrameworkAnalyses)
+		_ = c.updateSymbolAnalysisStatus(rowID, "failed", err.Error())
+		return nil, err
+	}
+
+	preferenceContext := symbolPreferenceContext{
+		RiskProfile:    normalizedReq.RiskProfile,
+		Horizon:        normalizedReq.Horizon,
+		AdviceStyle:    normalizedReq.AdviceStyle,
+		StrategyPrompt: normalizedReq.StrategyPrompt,
+	}
+	weightContext := buildSynthesisWeightContext(contextData, preferenceContext)
+
 	// Run synthesis agent sequentially.
-	synthesisOutput, err := runSynthesisAgent(ctx, endpointURL, normalizedReq.APIKey, normalizedReq.Model, symbolContextJSON, dimensionOutputs, symbolPreferenceContext{
-		RiskProfile: normalizedReq.RiskProfile,
-		Horizon:     normalizedReq.Horizon,
-		AdviceStyle: normalizedReq.AdviceStyle,
-	}, onDelta)
+	synthesisOutput, err := runSynthesisAgent(
+		ctx,
+		endpointURL,
+		normalizedReq.APIKey,
+		normalizedReq.Model,
+		symbolContextJSON,
+		normalizedDimensionOutputs,
+		selectedFrameworkIDs,
+		weightContext,
+		onDelta,
+	)
 	if err != nil {
 		_ = c.updateSymbolAnalysisStatus(rowID, "failed", err.Error())
 		return nil, fmt.Errorf("synthesis agent failed: %w", err)
-	}
-
-	// Parse all results.
-	dimensions := make(map[string]*SymbolDimensionResult)
-	for dim, raw := range dimensionOutputs {
-		parsed, parseErr := parseSymbolDimensionResult(raw)
-		if parseErr != nil {
-			c.Logger().Warn("failed to parse dimension result", "dimension", dim, "err", parseErr)
-			continue
-		}
-		dimensions[dim] = parsed
 	}
 
 	synthesis, err := parseSynthesisResult(synthesisOutput)
@@ -876,7 +1181,7 @@ func (c *Core) analyzeSymbol(req SymbolAnalysisRequest, onDelta func(string)) (*
 		return nil, fmt.Errorf("parse synthesis result: %w", err)
 	}
 
-	normalizeSynthesisResult(synthesis, contextData)
+	normalizeSynthesisResult(synthesis, contextData, selectedFrameworkIDs)
 
 	synthesisToSave := synthesisOutput
 	if normalizedJSON, marshalErr := json.Marshal(synthesis); marshalErr == nil {
@@ -897,7 +1202,7 @@ func (c *Core) analyzeSymbol(req SymbolAnalysisRequest, onDelta func(string)) (*
 		CreatedAt:  NowRFC3339InShanghai(),
 	}
 
-	if err := c.saveCompletedSymbolAnalysis(rowID, dimensionOutputs, synthesisToSave, enrichedContext); err != nil {
+	if err := c.saveCompletedSymbolAnalysis(rowID, normalizedDimensionOutputs, synthesisToSave, enrichedContext); err != nil {
 		return nil, fmt.Errorf("save analysis result: %w", err)
 	}
 
@@ -924,7 +1229,98 @@ func (c *Core) updateSymbolAnalysisStatus(id int64, status, errMsg string) error
 	return err
 }
 
+func orderedDimensionOutputKeys(dimensionOutputs map[string]string) []string {
+	orderedKeys := make([]string, 0, len(dimensionOutputs))
+	seen := make(map[string]struct{}, len(dimensionOutputs))
+
+	for _, framework := range symbolFrameworkCatalog {
+		output := strings.TrimSpace(dimensionOutputs[framework.ID])
+		if output == "" {
+			continue
+		}
+		orderedKeys = append(orderedKeys, framework.ID)
+		seen[framework.ID] = struct{}{}
+	}
+
+	for _, legacyKey := range legacyDimensionColumnOrder {
+		output := strings.TrimSpace(dimensionOutputs[legacyKey])
+		if output == "" {
+			continue
+		}
+		if _, exists := seen[legacyKey]; exists {
+			continue
+		}
+		orderedKeys = append(orderedKeys, legacyKey)
+		seen[legacyKey] = struct{}{}
+	}
+
+	var extras []string
+	for key, output := range dimensionOutputs {
+		if strings.TrimSpace(output) == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		extras = append(extras, key)
+	}
+	sort.Strings(extras)
+	orderedKeys = append(orderedKeys, extras...)
+	return orderedKeys
+}
+
+func mapDimensionOutputsToLegacyColumns(dimensionOutputs map[string]string) (string, string, string, string) {
+	var slots [4]string
+	orderedKeys := orderedDimensionOutputKeys(dimensionOutputs)
+	for idx, key := range orderedKeys {
+		if idx >= len(slots) {
+			break
+		}
+		slots[idx] = dimensionOutputs[key]
+	}
+	return slots[0], slots[1], slots[2], slots[3]
+}
+
+func orderedDimensionIDs(dimensions map[string]*SymbolDimensionResult) []string {
+	if len(dimensions) == 0 {
+		return nil
+	}
+
+	ordered := make([]string, 0, len(dimensions))
+	seen := make(map[string]struct{}, len(dimensions))
+	for _, framework := range symbolFrameworkCatalog {
+		if _, ok := dimensions[framework.ID]; !ok {
+			continue
+		}
+		ordered = append(ordered, framework.ID)
+		seen[framework.ID] = struct{}{}
+	}
+	for _, legacyKey := range legacyDimensionColumnOrder {
+		if _, ok := dimensions[legacyKey]; !ok {
+			continue
+		}
+		if _, exists := seen[legacyKey]; exists {
+			continue
+		}
+		ordered = append(ordered, legacyKey)
+		seen[legacyKey] = struct{}{}
+	}
+
+	var extras []string
+	for key := range dimensions {
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		extras = append(extras, key)
+	}
+	sort.Strings(extras)
+	ordered = append(ordered, extras...)
+	return ordered
+}
+
 func (c *Core) saveCompletedSymbolAnalysis(id int64, dimensionOutputs map[string]string, synthesisOutput string, externalDataSummary string) error {
+	macroOutput, industryOutput, companyOutput, internationalOutput := mapDimensionOutputsToLegacyColumns(dimensionOutputs)
+
 	_, err := c.db.Exec(
 		`UPDATE symbol_analyses
 		 SET status = 'completed',
@@ -936,10 +1332,10 @@ func (c *Core) saveCompletedSymbolAnalysis(id int64, dimensionOutputs map[string
 		     external_data_summary = ?,
 		     completed_at = CURRENT_TIMESTAMP
 		 WHERE id = ?`,
-		dimensionOutputs["macro"],
-		dimensionOutputs["industry"],
-		dimensionOutputs["company"],
-		dimensionOutputs["international"],
+		macroOutput,
+		industryOutput,
+		companyOutput,
+		internationalOutput,
 		synthesisOutput,
 		externalDataSummary,
 		id,
@@ -1049,19 +1445,31 @@ func buildSymbolAnalysisResult(
 	createdAt string, completedAtRaw sql.NullString,
 ) (*SymbolAnalysisResult, error) {
 	dimensions := make(map[string]*SymbolDimensionResult)
-	dimensionRaws := map[string]sql.NullString{
-		"macro":         macroRaw,
-		"industry":      industryRaw,
-		"company":       companyRaw,
-		"international": internationalRaw,
+	dimensionRaws := []struct {
+		FallbackKey string
+		Raw         sql.NullString
+	}{
+		{FallbackKey: "macro", Raw: macroRaw},
+		{FallbackKey: "industry", Raw: industryRaw},
+		{FallbackKey: "company", Raw: companyRaw},
+		{FallbackKey: "international", Raw: internationalRaw},
 	}
-	for dim, raw := range dimensionRaws {
-		if raw.Valid && raw.String != "" {
-			parsed, err := parseSymbolDimensionResult(raw.String)
-			if err == nil {
-				dimensions[dim] = parsed
-			}
+	for _, item := range dimensionRaws {
+		if !item.Raw.Valid || strings.TrimSpace(item.Raw.String) == "" {
+			continue
 		}
+
+		parsed, err := parseSymbolDimensionResult(item.Raw.String)
+		if err != nil {
+			continue
+		}
+
+		dimensionKey := strings.ToLower(strings.TrimSpace(parsed.Dimension))
+		if dimensionKey == "" {
+			dimensionKey = item.FallbackKey
+		}
+		normalizeDimensionResult(parsed, dimensionKey)
+		dimensions[parsed.Dimension] = parsed
 	}
 
 	var synthesis *SymbolSynthesisResult
@@ -1070,6 +1478,9 @@ func buildSymbolAnalysisResult(
 		if err == nil {
 			synthesis = parsed
 		}
+	}
+	if synthesis != nil {
+		normalizeSynthesisResult(synthesis, nil, orderedDimensionIDs(dimensions))
 	}
 
 	completedAt := ""

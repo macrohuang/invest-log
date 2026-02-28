@@ -3,10 +3,15 @@ package investlog
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"regexp"
+	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // Dimension stub responses used across tests.
@@ -15,8 +20,10 @@ const (
 	stubIndustryJSON      = `{"dimension":"industry","rating":"positive","confidence":"high","key_points":["行业增长强劲"],"risks":["竞争加剧"],"opportunities":["AI驱动增长"],"summary":"行业前景积极"}`
 	stubCompanyJSON       = `{"dimension":"company","rating":"positive","confidence":"high","key_points":["营收稳健增长"],"risks":["估值偏高"],"opportunities":["新产品周期"],"summary":"基本面优良","valuation_assessment":"估值合理"}`
 	stubInternationalJSON = `{"dimension":"international","rating":"neutral","confidence":"medium","key_points":["贸易关系稳定"],"risks":["地缘政治不确定"],"opportunities":["全球化布局"],"summary":"国际环境中性"}`
-	stubSynthesisJSON     = `{"overall_rating":"buy","confidence":"medium","target_action":"increase","position_suggestion":"建议持有并适度加仓","overall_summary":"综合四维度分析看好","key_factors":["行业增长","基本面优良"],"risk_warnings":["估值偏高","地缘政治"],"action_items":[{"action":"适度加仓","rationale":"基本面支撑","priority":"medium"}],"time_horizon_notes":"中长期持有","disclaimer":"仅供参考，不构成投资建议"}`
+	stubSynthesisJSON     = `{"overall_rating":"buy","confidence":"medium","action_probability_percent":67,"target_action":"increase","position_suggestion":"建议持有并适度加仓","overall_summary":"结论：加仓，执行概率67%。仓位：建议持有并适度加仓。依据：行业增长；基本面优良。雷点：估值偏高。","key_factors":["行业增长","基本面优良"],"risk_warnings":["估值偏高","地缘政治"],"action_items":[{"action":"适度加仓","rationale":"基本面支撑","priority":"medium"}],"time_horizon_notes":"中长期持有","disclaimer":"仅供参考"}`
 )
+
+var percentInSentencePattern = regexp.MustCompile(`\d+%`)
 
 func TestSymbolAnalysisTimeoutIsFifteenMinutes(t *testing.T) {
 	t.Parallel()
@@ -42,7 +49,157 @@ func dimensionStubRouter(_ context.Context, req aiChatCompletionRequest) (aiChat
 	case strings.Contains(sp, "国际政治经济分析"):
 		return aiChatCompletionResult{Model: "mock", Content: stubInternationalJSON}, nil
 	default:
-		return aiChatCompletionResult{}, errors.New("unknown dimension")
+		return aiChatCompletionResult{
+			Model:   "mock",
+			Content: buildGenericDimensionJSON(sp),
+		}, nil
+	}
+}
+
+func buildGenericDimensionJSON(systemPrompt string) string {
+	frameworkID := "framework"
+	for _, spec := range symbolFrameworkCatalog {
+		if buildFrameworkSystemPrompt(spec) == systemPrompt {
+			frameworkID = strings.TrimSpace(spec.ID)
+			break
+		}
+	}
+	if frameworkID == "" {
+		frameworkID = "framework"
+	}
+
+	return fmt.Sprintf(
+		`{"dimension":%q,"rating":"positive","confidence":"medium","key_points":["信号改善"],"risks":["波动仍在"],"opportunities":["建议继续跟踪仓位"],"summary":%q,"suggestion":"increase：按纪律分批加仓。"}`,
+		frameworkID,
+		frameworkID+" 框架分析完成",
+	)
+}
+
+func firstSentence(summary string) string {
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return ""
+	}
+	for _, sep := range []string{"。", "！", "？", ".", "!", "?"} {
+		if idx := strings.Index(summary, sep); idx >= 0 {
+			return strings.TrimSpace(summary[:idx+len(sep)])
+		}
+	}
+	return summary
+}
+
+func sortedDimensionKeys(dimensions map[string]*SymbolDimensionResult) []string {
+	keys := make([]string, 0, len(dimensions))
+	for k := range dimensions {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func assertSynthesisHardConstraints(t *testing.T, synthesis *SymbolSynthesisResult) {
+	t.Helper()
+	if synthesis == nil {
+		t.Fatal("expected synthesis")
+	}
+	if synthesis.ActionProbability <= 0 || synthesis.ActionProbability > 100 {
+		t.Fatalf("expected numeric action_probability_percent in (0,100], got %v", synthesis.ActionProbability)
+	}
+
+	first := firstSentence(synthesis.OverallSummary)
+	if !strings.Contains(first, "执行概率") || !percentInSentencePattern.MatchString(first) {
+		t.Fatalf("expected first sentence to include explicit probability number, got: %s", first)
+	}
+	hasAction := strings.Contains(first, "加仓") || strings.Contains(first, "减仓") || strings.Contains(first, "持有")
+	if !hasAction {
+		t.Fatalf("expected first sentence contains action conclusion, got: %s", first)
+	}
+
+	lowerSummary := strings.ToLower(synthesis.OverallSummary)
+	for _, fuzzy := range []string{"看情况", "视情况", "it depends"} {
+		checkTarget := synthesis.OverallSummary
+		if fuzzy == "it depends" {
+			checkTarget = lowerSummary
+		}
+		if strings.Contains(checkTarget, fuzzy) {
+			t.Fatalf("summary must not contain fuzzy phrase %q, got: %s", fuzzy, synthesis.OverallSummary)
+		}
+	}
+
+	disclaimerLen := utf8.RuneCountInString(strings.TrimSpace(synthesis.Disclaimer))
+	if disclaimerLen == 0 {
+		t.Fatal("expected non-empty disclaimer")
+	}
+	if disclaimerLen > 16 {
+		t.Fatalf("expected disclaimer <=16 chars, got %d: %s", disclaimerLen, synthesis.Disclaimer)
+	}
+}
+
+func TestDimensionAgentPool_HasNineDistinctFrameworkIDs(t *testing.T) {
+	t.Parallel()
+
+	if len(symbolFrameworkCatalog) != 9 {
+		t.Fatalf("expected framework pool size 9, got %d", len(symbolFrameworkCatalog))
+	}
+
+	seen := make(map[string]struct{}, len(symbolFrameworkCatalog))
+	for _, spec := range symbolFrameworkCatalog {
+		id := strings.TrimSpace(spec.ID)
+		if id == "" {
+			t.Fatal("framework id should not be empty")
+		}
+		if _, ok := seen[id]; ok {
+			t.Fatalf("framework id must be unique, got duplicate: %s", id)
+		}
+		seen[id] = struct{}{}
+	}
+}
+
+func TestAnalyzeSymbol_SelectsStableThreeFrameworks(t *testing.T) {
+	core, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	testAccount(t, core, "acc-framework", "Main")
+	testBuyTransaction(t, core, "AAPL", 10, 100, "USD", "acc-framework")
+
+	original := aiChatCompletion
+	defer func() { aiChatCompletion = original }()
+	aiChatCompletion = dimensionStubRouter
+
+	origFetch := fetchExternalDataFn
+	defer func() { fetchExternalDataFn = origFetch }()
+	fetchExternalDataFn = func(_ context.Context, _, _ string, _ *slog.Logger) *symbolExternalData {
+		return nil
+	}
+
+	req := SymbolAnalysisRequest{
+		BaseURL:  "https://example.com/v1",
+		APIKey:   "test-key",
+		Model:    "mock-model",
+		Symbol:   "AAPL",
+		Currency: "USD",
+	}
+
+	firstResult, err := core.AnalyzeSymbol(req)
+	if err != nil {
+		t.Fatalf("AnalyzeSymbol first run failed: %v", err)
+	}
+	secondResult, err := core.AnalyzeSymbol(req)
+	if err != nil {
+		t.Fatalf("AnalyzeSymbol second run failed: %v", err)
+	}
+
+	if got := len(firstResult.Dimensions); got != 3 {
+		t.Fatalf("expected first run to select 3 frameworks, got %d", got)
+	}
+	if got := len(secondResult.Dimensions); got != 3 {
+		t.Fatalf("expected second run to select 3 frameworks, got %d", got)
+	}
+
+	firstKeys := sortedDimensionKeys(firstResult.Dimensions)
+	secondKeys := sortedDimensionKeys(secondResult.Dimensions)
+	if strings.Join(firstKeys, ",") != strings.Join(secondKeys, ",") {
+		t.Fatalf("expected stable framework selection, first=%v second=%v", firstKeys, secondKeys)
 	}
 }
 
@@ -86,37 +243,28 @@ func TestAnalyzeSymbol_EndToEnd(t *testing.T) {
 		t.Fatalf("expected currency USD, got %s", result.Currency)
 	}
 
-	// Dimensions
-	expectedDims := map[string]string{
-		"macro":         "positive",
-		"industry":      "positive",
-		"company":       "positive",
-		"international": "neutral",
+	if got := len(result.Dimensions); got != 3 {
+		t.Fatalf("expected exactly 3 selected frameworks, got %d", got)
 	}
-	for dim, expectedRating := range expectedDims {
-		d, ok := result.Dimensions[dim]
-		if !ok {
-			t.Fatalf("missing dimension %s", dim)
+	for frameworkID, framework := range result.Dimensions {
+		if strings.TrimSpace(frameworkID) == "" {
+			t.Fatal("framework key should not be empty")
 		}
-		if d.Rating != expectedRating {
-			t.Fatalf("dimension %s: expected rating %s, got %s", dim, expectedRating, d.Rating)
+		if framework == nil {
+			t.Fatalf("framework %s result is nil", frameworkID)
 		}
-	}
-
-	// Company dimension should have valuation_assessment
-	if result.Dimensions["company"].ValuationAssessment != "估值合理" {
-		t.Fatalf("expected valuation_assessment=估值合理, got %q", result.Dimensions["company"].ValuationAssessment)
+		if strings.TrimSpace(framework.Summary) == "" {
+			t.Fatalf("framework %s should contain analysis summary", frameworkID)
+		}
+		if strings.TrimSpace(framework.Suggestion) == "" {
+			t.Fatalf("framework %s should include suggestion", frameworkID)
+		}
 	}
 
 	// Synthesis
-	if result.Synthesis == nil {
-		t.Fatal("expected synthesis to be non-nil")
-	}
+	assertSynthesisHardConstraints(t, result.Synthesis)
 	if result.Synthesis.OverallRating != "buy" {
 		t.Fatalf("expected overall_rating=buy, got %q", result.Synthesis.OverallRating)
-	}
-	if result.Synthesis.Confidence != "medium" {
-		t.Fatalf("expected confidence=medium, got %s", result.Synthesis.Confidence)
 	}
 	if len(result.Synthesis.ActionItems) == 0 {
 		t.Fatal("expected at least one action item")
@@ -165,11 +313,14 @@ func TestAnalyzeSymbolWithStream_EmitsDelta(t *testing.T) {
 	}
 
 	text := streamed.String()
-	hasDimensionDelta := strings.Contains(text, "[macro]") ||
-		strings.Contains(text, "[industry]") ||
-		strings.Contains(text, "[company]") ||
-		strings.Contains(text, "[international]")
-	if !hasDimensionDelta {
+	hasFrameworkDelta := false
+	for frameworkID := range result.Dimensions {
+		if strings.Contains(text, "["+frameworkID+"]") {
+			hasFrameworkDelta = true
+			break
+		}
+	}
+	if !hasFrameworkDelta {
 		t.Fatalf("expected at least one dimension delta prefix, got: %s", text)
 	}
 	if !strings.Contains(text, "[synthesis]") {
@@ -243,48 +394,37 @@ func TestAnalyzeSymbol_PartialFailure(t *testing.T) {
 		return nil
 	}
 
-	// macro agent fails; the other 3 dimensions + synthesis succeed.
+	var failedOnce int32
+	// Let one framework fail once; remaining frameworks + synthesis should still complete.
 	aiChatCompletion = func(ctx context.Context, req aiChatCompletionRequest) (aiChatCompletionResult, error) {
-		sp := req.SystemPrompt
-		if strings.Contains(sp, "宏观经济政策分析") {
-			return aiChatCompletionResult{}, errors.New("macro agent timeout")
+		if !strings.Contains(req.SystemPrompt, "综合投资分析师") && atomic.CompareAndSwapInt32(&failedOnce, 0, 1) {
+			return aiChatCompletionResult{}, errors.New("framework timeout")
 		}
 		return dimensionStubRouter(ctx, req)
 	}
 
-	result, err := core.AnalyzeSymbol(SymbolAnalysisRequest{
+	_, err := core.AnalyzeSymbol(SymbolAnalysisRequest{
 		BaseURL:  "https://example.com/v1",
 		APIKey:   "test-key",
 		Model:    "mock-model",
 		Symbol:   "AAPL",
 		Currency: "USD",
 	})
-	if err != nil {
-		t.Fatalf("AnalyzeSymbol should succeed with partial failure, got: %v", err)
+	if err == nil {
+		t.Fatal("expected failure when one of three selected frameworks fails")
 	}
-	if result.Status != "completed" {
-		t.Fatalf("expected completed, got %s", result.Status)
-	}
-
-	// macro should be missing, the other 3 should be present.
-	if _, ok := result.Dimensions["macro"]; ok {
-		t.Fatal("macro dimension should be absent after failure")
-	}
-	expectedPresent := []string{"industry", "company", "international"}
-	for _, dim := range expectedPresent {
-		if _, ok := result.Dimensions[dim]; !ok {
-			t.Fatalf("expected dimension %s to be present", dim)
-		}
-	}
-
-	if result.Synthesis == nil {
-		t.Fatal("synthesis should still be present")
+	if !strings.Contains(err.Error(), "framework analyses insufficient") {
+		t.Fatalf("expected framework insufficiency error, got: %v", err)
 	}
 }
 
 func TestAnalyzeSymbol_SynthesisUsesPositionAndPreferences(t *testing.T) {
 	core, cleanup := setupTestDB(t)
 	defer cleanup()
+
+	if _, err := core.SetAllocationSetting("USD", "stock", 20, 30); err != nil {
+		t.Fatalf("SetAllocationSetting failed: %v", err)
+	}
 
 	testAccount(t, core, "acc-1", "Main")
 	testAccount(t, core, "acc-2", "IRA")
@@ -325,35 +465,24 @@ func TestAnalyzeSymbol_SynthesisUsesPositionAndPreferences(t *testing.T) {
 		t.Fatalf("AnalyzeSymbol failed: %v", err)
 	}
 
-	// Only allowed fields should appear in the synthesis prompt.
-	allowed := []string{
+	mustInclude := []string{
 		`"position_percent"`,
-		`"avg_cost"`,
+		`"allocation_min_percent"`,
+		`"allocation_max_percent"`,
+		`"allocation_status"`,
 		`"risk_profile":"aggressive"`,
 		`"horizon":"long"`,
 		`"advice_style":"aggressive"`,
+		`"strategy_prompt"`,
+		"成长股高波动策略",
 	}
-	for _, want := range allowed {
+	for _, want := range mustInclude {
 		if !strings.Contains(synthesisPrompt, want) {
 			t.Fatalf("expected synthesis prompt to contain %q, got: %s", want, synthesisPrompt)
 		}
 	}
-
-	// Forbidden fields must NOT appear in the prompt sent to AI.
-	forbidden := []string{
-		`"total_shares"`,
-		`"cost_basis"`,
-		`"latest_price"`,
-		`"market_value"`,
-		`"currency_total_market_value"`,
-		`"account_name"`,
-		`"account_names"`,
-		"成长股高波动策略",
-	}
-	for _, bad := range forbidden {
-		if strings.Contains(synthesisPrompt, bad) {
-			t.Fatalf("synthesis prompt must NOT contain %q, got: %s", bad, synthesisPrompt)
-		}
+	if !strings.Contains(synthesisPrompt, `"total_shares"`) && !strings.Contains(synthesisPrompt, `"holdings_quantity"`) {
+		t.Fatalf("expected synthesis prompt to include holdings quantity context, got: %s", synthesisPrompt)
 	}
 }
 
@@ -392,8 +521,8 @@ func TestAnalyzeSymbol_AllFail(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when all dimension agents fail")
 	}
-	if !strings.Contains(err.Error(), "too many dimension agents failed") {
-		t.Fatalf("expected 'too many dimension agents failed' error, got: %v", err)
+	if !strings.Contains(err.Error(), "framework analyses insufficient") {
+		t.Fatalf("expected framework insufficiency error, got: %v", err)
 	}
 }
 
@@ -404,9 +533,9 @@ func TestGetSymbolAnalysis(t *testing.T) {
 	// Insert a completed row directly.
 	_, err := core.db.Exec(
 		`INSERT INTO symbol_analyses
-		 (symbol, currency, model, status, macro_analysis, synthesis, created_at, completed_at)
-		 VALUES (?, ?, ?, 'completed', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-		"AAPL", "USD", "test-model", stubMacroJSON, stubSynthesisJSON,
+		 (symbol, currency, model, status, macro_analysis, industry_analysis, company_analysis, international_analysis, synthesis, created_at, completed_at)
+		 VALUES (?, ?, ?, 'completed', ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+		"AAPL", "USD", "test-model", stubMacroJSON, stubIndustryJSON, stubCompanyJSON, stubInternationalJSON, stubSynthesisJSON,
 	)
 	if err != nil {
 		t.Fatalf("insert test row: %v", err)
@@ -429,27 +558,28 @@ func TestGetSymbolAnalysis(t *testing.T) {
 		t.Fatalf("expected completed, got %s", result.Status)
 	}
 
-	// Verify macro dimension parsed correctly.
-	macro, ok := result.Dimensions["macro"]
-	if !ok {
-		t.Fatal("expected macro dimension")
+	if got := len(result.Dimensions); got == 0 {
+		t.Fatal("expected at least one framework analysis in result")
 	}
-	if macro.Rating != "positive" {
-		t.Fatalf("expected positive, got %s", macro.Rating)
-	}
-	if macro.Confidence != "medium" {
-		t.Fatalf("expected medium confidence, got %s", macro.Confidence)
+	for frameworkID, framework := range result.Dimensions {
+		if strings.TrimSpace(frameworkID) == "" {
+			t.Fatal("framework id should not be empty")
+		}
+		if framework == nil || strings.TrimSpace(framework.Summary) == "" {
+			t.Fatalf("framework %s should preserve summary", frameworkID)
+		}
 	}
 
-	// Verify synthesis parsed correctly.
-	if result.Synthesis == nil {
-		t.Fatal("expected synthesis")
-	}
+	// Regression: key synthesis fields must not be dropped when loading.
+	assertSynthesisHardConstraints(t, result.Synthesis)
 	if result.Synthesis.OverallRating != "buy" {
 		t.Fatalf("expected buy, got %s", result.Synthesis.OverallRating)
 	}
-	if result.Synthesis.Disclaimer != "仅供参考，不构成投资建议" {
-		t.Fatalf("unexpected disclaimer: %s", result.Synthesis.Disclaimer)
+	if result.Synthesis.TargetAction != "increase" {
+		t.Fatalf("expected target_action increase, got %s", result.Synthesis.TargetAction)
+	}
+	if len(result.Synthesis.ActionItems) == 0 {
+		t.Fatal("expected action items")
 	}
 
 	// Non-existent symbol returns nil.
@@ -470,10 +600,10 @@ func TestGetSymbolAnalysisHistory(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		_, err := core.db.Exec(
 			`INSERT INTO symbol_analyses
-			 (symbol, currency, model, status, macro_analysis, synthesis, created_at, completed_at)
-			 VALUES (?, ?, ?, 'completed', ?, ?, datetime('now', ?), datetime('now', ?))`,
+			 (symbol, currency, model, status, macro_analysis, industry_analysis, company_analysis, international_analysis, synthesis, created_at, completed_at)
+			 VALUES (?, ?, ?, 'completed', ?, ?, ?, ?, ?, datetime('now', ?), datetime('now', ?))`,
 			"AAPL", "USD", "model-v"+string(rune('1'+i)),
-			stubMacroJSON, stubSynthesisJSON,
+			stubMacroJSON, stubIndustryJSON, stubCompanyJSON, stubInternationalJSON, stubSynthesisJSON,
 			// Offset each row by -i minutes so row 0 is most recent.
 			"-"+string(rune('0'+i))+" minutes",
 			"-"+string(rune('0'+i))+" minutes",
@@ -499,6 +629,15 @@ func TestGetSymbolAnalysisHistory(t *testing.T) {
 	if results[2].Model != "model-v3" {
 		t.Fatalf("expected oldest model-v3 last, got %s", results[2].Model)
 	}
+	for i := range results {
+		if len(results[i].Dimensions) == 0 {
+			t.Fatalf("history item %d missing framework analyses", i)
+		}
+		assertSynthesisHardConstraints(t, results[i].Synthesis)
+		if strings.TrimSpace(results[i].Synthesis.TargetAction) == "" {
+			t.Fatalf("history item %d missing target_action", i)
+		}
+	}
 
 	// Verify limit works.
 	limited, err := core.GetSymbolAnalysisHistory("AAPL", "USD", 2)
@@ -522,6 +661,10 @@ func TestGetSymbolAnalysisHistory(t *testing.T) {
 func TestBuildSymbolContext(t *testing.T) {
 	core, cleanup := setupTestDB(t)
 	defer cleanup()
+
+	if _, err := core.SetAllocationSetting("USD", "stock", 40, 60); err != nil {
+		t.Fatalf("SetAllocationSetting failed: %v", err)
+	}
 
 	testAccount(t, core, "acc-1", "Main")
 	testAccount(t, core, "acc-2", "IRA")
@@ -558,20 +701,33 @@ func TestBuildSymbolContext(t *testing.T) {
 	if !(contains(ctx.AccountNames, "Main") && contains(ctx.AccountNames, "IRA")) {
 		t.Fatalf("expected account names to include Main and IRA, got %v", ctx.AccountNames)
 	}
+	if ctx.AllocationMinPercent != 40 {
+		t.Fatalf("expected allocation min 40, got %f", ctx.AllocationMinPercent)
+	}
+	if ctx.AllocationMaxPercent != 60 {
+		t.Fatalf("expected allocation max 60, got %f", ctx.AllocationMaxPercent)
+	}
+	if ctx.AllocationStatus != "above_target" {
+		t.Fatalf("expected allocation status above_target, got %s", ctx.AllocationStatus)
+	}
 
-	// aiJSON should only contain allowed fields.
+	// aiJSON should keep lightweight fields and avoid account identity fields.
 	aiJSON, err := ctx.aiJSON()
 	if err != nil {
 		t.Fatalf("aiJSON failed: %v", err)
 	}
-	// Allowed fields that have non-zero values must be present.
-	for _, want := range []string{`"symbol"`, `"avg_cost"`, `"position_percent"`} {
+	for _, want := range []string{
+		`"symbol"`,
+		`"avg_cost"`,
+		`"position_percent"`,
+		`"allocation_max_percent"`,
+		`"allocation_status"`,
+	} {
 		if !strings.Contains(aiJSON, want) {
 			t.Fatalf("expected aiJSON to contain %s, got: %s", want, aiJSON)
 		}
 	}
-	// Forbidden fields must be absent.
-	for _, forbidden := range []string{`"currency"`, `"total_shares"`, `"cost_basis"`, `"latest_price"`, `"market_value"`, `"account_name"`, `"account_names"`} {
+	for _, forbidden := range []string{`"account_name"`, `"account_names"`} {
 		if strings.Contains(aiJSON, forbidden) {
 			t.Fatalf("aiJSON must NOT contain %s, got: %s", forbidden, aiJSON)
 		}
@@ -657,14 +813,15 @@ func TestParseSynthesisResult_UsesDirectSummaryTemplate(t *testing.T) {
 	raw := `{
 		"overall_rating":"buy",
 		"confidence":"high",
+		"action_probability_percent":67,
 		"target_action":"increase",
 		"position_suggestion":"把仓位从12%提到15%",
-		"overall_summary":"好的，综合看下来还要看情况。",
+		"overall_summary":"好的，综合看下来还要看情况，视情况，it depends。",
 		"key_factors":["盈利增速改善","订单能见度提升"],
 		"risk_warnings":["估值偏高"],
 		"action_items":[],
 		"time_horizon_notes":"中长期",
-		"disclaimer":"仅供参考，不构成投资建议"
+		"disclaimer":"仅供参考，不构成投资建议，请独立判断并注意风险。"
 	}`
 
 	parsed, err := parseSynthesisResult(raw)
@@ -673,7 +830,7 @@ func TestParseSynthesisResult_UsesDirectSummaryTemplate(t *testing.T) {
 	}
 
 	wants := []string{
-		"结论：加仓，执行概率72%。",
+		"加仓，执行概率67%。",
 		"仓位：把仓位从12%提到15%。",
 		"依据：盈利增速改善；订单能见度提升。",
 		"雷点：估值偏高。",
@@ -684,7 +841,11 @@ func TestParseSynthesisResult_UsesDirectSummaryTemplate(t *testing.T) {
 		}
 	}
 
-	if strings.Contains(parsed.OverallSummary, "看情况") {
+	assertSynthesisHardConstraints(t, parsed)
+
+	if strings.Contains(parsed.OverallSummary, "看情况") ||
+		strings.Contains(parsed.OverallSummary, "视情况") ||
+		strings.Contains(strings.ToLower(parsed.OverallSummary), "it depends") {
 		t.Fatalf("summary should not contain fuzzy phrase, got: %s", parsed.OverallSummary)
 	}
 }
@@ -704,11 +865,11 @@ func TestNormalizeSynthesisSummary_TruncatesLength(t *testing.T) {
 		RiskWarnings: []string{strings.Repeat("波动风险", 30)},
 	}
 
-	summary := normalizeSynthesisSummary(result)
-	if len([]rune(summary)) > 200 {
-		t.Fatalf("expected summary <= 200 runes, got %d: %s", len([]rune(summary)), summary)
+	summary := normalizeSynthesisSummary(result, []string{"dcf", "dynamic_moat", "relative_valuation"})
+	if len([]rune(summary)) > 210 {
+		t.Fatalf("expected summary <= 210 runes, got %d: %s", len([]rune(summary)), summary)
 	}
-	if !strings.HasPrefix(summary, "结论：") {
+	if first := firstSentence(summary); !strings.Contains(first, "执行概率") {
 		t.Fatalf("expected direct-answer prefix, got: %s", summary)
 	}
 }
@@ -773,7 +934,7 @@ func TestNormalizeSynthesisResult_RewritesSummaryAndPositionByContext(t *testing
 		AllocationMaxPercent: 20,
 	}
 
-	normalizeSynthesisResult(result, ctx)
+	normalizeSynthesisResult(result, ctx, []string{"dcf", "dynamic_moat", "relative_valuation"})
 
 	if !strings.Contains(result.PositionSuggestion, "当前占比31.20%") {
 		t.Fatalf("expected rewritten position suggestion, got: %s", result.PositionSuggestion)
@@ -783,6 +944,25 @@ func TestNormalizeSynthesisResult_RewritesSummaryAndPositionByContext(t *testing
 	}
 	if strings.Contains(result.OverallSummary, "看情况") {
 		t.Fatalf("summary should remove fuzzy phrase, got: %s", result.OverallSummary)
+	}
+}
+
+func TestNormalizeSynthesisResult_EnforcesShortDisclaimer(t *testing.T) {
+	t.Parallel()
+
+	result := &SymbolSynthesisResult{
+		Confidence:         "high",
+		TargetAction:       "hold",
+		PositionSuggestion: "维持",
+		KeyFactors:         []string{"盈利稳定"},
+		RiskWarnings:       []string{"估值波动"},
+		Disclaimer:         "仅供参考，不构成投资建议，请结合自身风险承受能力独立判断。",
+	}
+
+	normalizeSynthesisResult(result, nil, []string{"dcf", "dynamic_moat", "relative_valuation"})
+
+	if got := utf8.RuneCountInString(strings.TrimSpace(result.Disclaimer)); got > 16 {
+		t.Fatalf("expected disclaimer <=16 chars after normalization, got %d: %s", got, result.Disclaimer)
 	}
 }
 

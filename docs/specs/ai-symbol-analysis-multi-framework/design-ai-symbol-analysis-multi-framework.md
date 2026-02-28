@@ -3,7 +3,7 @@
 > 文件名：`docs/specs/ai-symbol-analysis-multi-framework/design-ai-symbol-analysis-multi-framework.md`
 
 ## 1. 设计目标
-- 对应 MRD：`docs/specs/ai-symbol-analysis-multi-framework/mrd-ai-symbol-analysis-multi-framework.md`（当前工作区未检索到该文件，本文按任务输入约束先行落设计）。
+- 对应 MRD：`docs/specs/ai-symbol-analysis-multi-framework/mrd-ai-symbol-analysis-multi-framework.md`。
 - 在现有 `AnalyzeSymbol` 流程上，将固定四维改造为“给定框架池中动态选择 3 个框架”。
 - 引入可解释、可测试的框架选择规则，避免纯提示词黑盒选择。
 - 综合建议必须显式纳入：持仓数量、仓位占比、资产配置区间、用户偏好策略。
@@ -75,11 +75,16 @@
   - 宏观/产业/经营：`news/research` 数据经 `summarizeExternalDataFn` 结构化提炼
 
 ### 4.2 框架池与 3 框架选择规则（可解释、可测试）
-- 框架池（首版）：
-  - `macro_policy_framework`（宏观政策传导）
-  - `industry_cycle_framework`（产业周期与竞争格局）
-  - `company_fundamental_framework`（财报与估值）
-  - `international_risk_framework`（国际风险与跨境变量）
+- 框架池（严格按需求）：
+  - `dupont_roic`：杜邦分析 + ROIC 拆解（财务质量框架）
+  - `capital_cycle`：资本周期框架 (Capital Cycle)
+  - `industry_s_curve`：产业生命周期与 S 曲线 (S-Curve)
+  - `reverse_dcf`：反向 DCF (Reverse Discounted Cash Flow)
+  - `dynamic_moat`：动态护城河分析 (Dynamic Moat)
+  - `dcf`：DCF（自由现金流折现）
+  - `porter_moat`：波特五力 + 护城河分析
+  - `expectations_investing`：预期差框架 (Expectations Investing)
+  - `relative_valuation`：相对估值（P/E、P/S、EV/EBITDA）
 - 选择输入：
   - `framework_pool`（请求可选；未传使用默认池）
   - `evidence_pack`（4.1）
@@ -93,14 +98,16 @@
   - `preference_fit`：与风险偏好/期限/策略一致度
 - 选择规则：
   1. 先过滤：`coverage < 0.45` 的框架不参与排序。
-  2. `company_fundamental_framework` 若 `P0+P1 coverage >= 0.5` 则强制入选。
-  3. 其余按 `score` 降序取满 3 个。
-  4. 同分按稳定顺序打破平局：`company > industry > macro > international`。
+  2. 若 `P0+P1 coverage >= 0.5`，财报敏感框架至少入选 1 个：`dupont_roic`、`reverse_dcf`、`dcf`、`relative_valuation`。
+  3. 若产业/政策证据覆盖高（`P2+P3 >= 0.5`），`capital_cycle` 或 `industry_s_curve` 至少入选 1 个。
+  4. 若竞争格局与经营动态证据高（`P3+P4 >= 0.5`），`dynamic_moat` 或 `porter_moat` 至少入选 1 个。
+  5. 其余按 `score` 降序补满 3 个。
+  6. 同分按稳定顺序打破平局：`dupont_roic > reverse_dcf > dcf > relative_valuation > capital_cycle > industry_s_curve > dynamic_moat > porter_moat > expectations_investing`。
 - 可解释输出：
-  - 返回 `selected_frameworks`（含 `score`、`rank`、`selected_reason`、`rejected_reason`）。
+  - 返回 `selected_frameworks`（含 `framework_id`、`score`、`rank`、`selected_reason`、`rejected_reason`）。
 - 可测试性：
   - 单测使用固定证据夹具，验证“同输入必同输出”。
-  - 边界测试：覆盖不足、强制入选、生效平局顺序、池大小=3/4/5。
+  - 边界测试：覆盖不足、约束入选规则生效、平局顺序稳定、候选池大小=3/9。
 
 ### 4.3 每框架输出与顶部综合建议组织
 - 每框架输出（新字段 `framework_outputs[]`）：
@@ -131,7 +138,7 @@
 
 ### 4.4 综合建议加权模型（纳入持仓数量/仓位/区间/偏好）
 - 框架共识分（按动作分别计算）：
-  - `FrameworkScore(action) = Σ(framework_weight_i * action_score_i)`
+  - `FrameworkScore(action) = Σ(framework_weight_i * action_score_i)`，其中 `i` 仅包含被选中的 3 个框架。
   - `framework_weight_i = framework_score_i * confidence_factor_i`
 - 组合约束分：
   - `PortfolioScore(action) = 0.15*Q + 0.30*P + 0.30*A + 0.25*U`
@@ -180,7 +187,7 @@
 
 ### 4.8 降级策略
 - D1：P0/P1 财报不足时，允许继续分析，但必须降低置信并输出覆盖不足说明。
-- D2：有效框架 < 3 时，按固定兜底顺序补齐：`company -> industry -> macro`。
+- D2：有效框架 < 3 时，按固定兜底顺序补齐：`dupont_roic -> dcf -> relative_valuation -> capital_cycle -> porter_moat`。
 - D3：若最终成功框架 < 2，直接失败并返回可诊断错误。
 - D4：综合层 JSON 解析失败时，走本地最小可用综合模板（含明确动作与概率）。
 

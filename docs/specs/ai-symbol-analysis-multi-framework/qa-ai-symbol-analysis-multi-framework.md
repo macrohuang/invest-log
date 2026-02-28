@@ -9,7 +9,7 @@
 
 ## 2. 测试范围
 - In Scope：
-  - 框架分析产出数量与结构（必须为 3 个框架结果）。
+  - 框架分析产出数量与结构（必须为 3 个框架结果，且来自指定 9 框架池）。
   - 综合建议输出硬约束：
     - `action_probability_percent` 必须为明确数值。
     - 禁止“看情况/视情况而定/it depends”等含混措辞。
@@ -21,6 +21,17 @@
 - Out of Scope：
   - 前端展示层视觉和交互动效。
   - 外部数据源供应商 SLA 与内容真实性评估。
+
+### 指定框架池（用于断言合法性）
+- `dupont_roic`
+- `capital_cycle`
+- `industry_s_curve`
+- `reverse_dcf`
+- `dynamic_moat`
+- `dcf`
+- `porter_moat`
+- `expectations_investing`
+- `relative_valuation`
 
 ## 3. 测试优先级定义
 - P0：阻断发布，影响结果可信度或接口可用性。
@@ -57,6 +68,7 @@
 | 编号 | 优先级 | 类型 | 前置条件 | 步骤 | 预期结果 |
 | --- | --- | --- | --- | --- | --- |
 | TC-001 | P0 | 正向 | stub 3 个框架均返回合法 JSON | 调用 `AnalyzeSymbol` | 返回 `status=completed`，且框架结果数量“恰好 3”；综合建议存在。 |
+| TC-001A | P0 | 正向 | 候选池为 9 框架 | 调用 `AnalyzeSymbol` | 入选框架“恰好 3 个”，且全部属于指定框架池，不允许池外值。 |
 | TC-002 | P0 | 正向 | 3 框架结论有冲突（1 正向、1 中性、1 负向） | 调用 `AnalyzeSymbol` | 综合建议包含冲突权衡逻辑，不是简单拼接。 |
 | TC-003 | P0 | 正向 | 合法 synthesis JSON | 解析并归一化结果 | 满足 A-001/A-002/A-004。 |
 | TC-004 | P0 | 正向 | 存在持仓与配置 | 调用 `AnalyzeSymbol` | `position_suggestion` 明确包含“当前占比 + 目标区间 + 差值 + 动作”。 |
@@ -76,6 +88,7 @@
 | --- | --- | --- | --- | --- | --- |
 | TC-011 | P0 | 边界 | `action_probability_percent=0` 或 `>100` | 归一化处理 | 概率回退到置信度默认值（high/medium/low）。 |
 | TC-012 | P0 | 边界 | `disclaimer` 长度 16 与 17 | 解析并归一化 | 16 通过；17 触发修正或测试失败（阻断）。 |
+| TC-012A | P0 | 边界 | `disclaimer` 为长免责声明 | 解析并归一化 | 最终 `disclaimer` 必须收敛为短风险锚点（<=16字）。 |
 | TC-013 | P1 | 边界 | 无持仓、无配置区间 | 调用 `AnalyzeSymbol` | 仍可分析；仓位文案出现未知或默认区间逻辑。 |
 | TC-014 | P1 | 边界 | summary 超长（>200 字） | 归一化处理 | 截断且保持首句结论与句末标点完整。 |
 

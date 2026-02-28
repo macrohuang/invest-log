@@ -15,17 +15,18 @@ import (
 // externalDataSection represents one chunk of fetched external data.
 type externalDataSection struct {
 	Source  string `json:"source"`
-	Type   string `json:"type"` // "news", "financials", "research"
+	Type    string `json:"type"` // "news", "financials", "research"
 	Content string `json:"content"`
 }
 
 // symbolExternalData holds all fetched external data for a symbol.
 type symbolExternalData struct {
-	Symbol      string
-	Market      string
-	FetchedAt   time.Time
-	RawSections []externalDataSection
-	Summary     string
+	Symbol            string
+	Market            string
+	FetchedAt         time.Time
+	RawSections       []externalDataSection
+	Summary           string
+	StructuredSummary string
 }
 
 // externalDataSource defines a single data source to fetch.
@@ -37,10 +38,23 @@ type externalDataSource struct {
 }
 
 const (
-	externalDataFetchTimeout   = 30 * time.Second
+	externalDataFetchTimeout     = 30 * time.Second
 	externalDataSummarizeTimeout = 30 * time.Second
-	externalDataMaxChars       = 8000
+	externalDataMaxChars         = 8000
 )
+
+type externalSummarySectionSpec struct {
+	Header  string
+	GapNote string
+}
+
+var externalSummarySectionSpecs = []externalSummarySectionSpec{
+	{Header: "近5个季度财报", GapNote: "未抓取到近5个季度财报"},
+	{Header: "近3年年报", GapNote: "未抓取到近3年年报"},
+	{Header: "行业宏观政策", GapNote: "未抓取到行业宏观政策"},
+	{Header: "产业周期", GapNote: "未抓取到产业周期信息"},
+	{Header: "公司最新经营", GapNote: "未抓取到公司最新经营进展"},
+}
 
 // Function variables for testing/mocking.
 var fetchExternalDataFn = fetchExternalDataImpl
@@ -160,22 +174,42 @@ func summarizeExternalDataImpl(ctx context.Context, data *symbolExternalData, en
 		rawText = string([]rune(rawText)[:externalDataMaxChars])
 	}
 
-	systemPrompt := `你是一个专业的投资数据分析助手。你将收到关于某个投资标的的多源原始数据（新闻、财务数据、研报等），
-请提取关键信息并整理为结构化摘要。
+	systemPrompt := `你是一个投资数据整理助手。你会收到多源原始数据（财报、新闻、研报）。
+请优先按以下结构输出，并允许数据不足但必须明确缺口。
 
 输出格式（纯文本，非JSON）：
-【最新动态】关键新闻和事件的简要总结（3-5条）
-【关键财务指标】核心财务数据摘要（如PE/PB/ROE/营收增速等，有则列出，无则省略此节）
-【市场情绪】分析师评级、目标价、机构观点概述（有则列出，无则省略此节）
-【风险信号】值得关注的风险因素（2-3条）
+【近5个季度财报】
+- ...
+【近3年年报】
+- ...
+【行业宏观政策】
+- ...
+【产业周期】
+- ...
+【公司最新经营】
+- ...
+【数据缺口】
+- 缺口：...
 
-要求：
-- 只提取事实性信息，不做投资建议
-- 保持简洁，每条不超过30字
-- 如某个部分无相关数据，省略该部分
-- 总输出不超过500字`
+硬要求：
+- 不做投资建议，只提事实
+- 缺数据时必须写“缺口：...”，不能省略
+- 每条尽量短句，优先数字与时间
+- 如果同一事实在多个来源出现，只保留最有信息密度的一条`
 
-	userPrompt := fmt.Sprintf("标的: %s\n市场: %s\n数据采集时间: %s\n\n原始数据:\n%s",
+	userPrompt := fmt.Sprintf(`标的: %s
+市场: %s
+数据采集时间: %s
+
+任务优先级：
+1) 近5个季度财报
+2) 近3年年报
+3) 行业宏观政策
+4) 产业周期
+5) 公司最新经营
+
+原始数据：
+%s`,
 		data.Symbol, data.Market, data.FetchedAt.Format("2006-01-02 15:04"), rawText)
 
 	summarizeCtx, cancel := context.WithTimeout(ctx, externalDataSummarizeTimeout)
@@ -193,10 +227,167 @@ func summarizeExternalDataImpl(ctx context.Context, data *symbolExternalData, en
 		if logger != nil {
 			logger.Warn("external data summarization failed", "symbol", data.Symbol, "error", err)
 		}
-		return ""
+		fallback := buildFallbackStructuredExternalSummary(data)
+		data.StructuredSummary = fallback
+		return fallback
 	}
 
-	return strings.TrimSpace(result.Content)
+	normalized := normalizeStructuredExternalSummary(strings.TrimSpace(result.Content), data)
+	if normalized == "" {
+		normalized = buildFallbackStructuredExternalSummary(data)
+	}
+	data.StructuredSummary = normalized
+	return normalized
+}
+
+func normalizeStructuredExternalSummary(summary string, data *symbolExternalData) string {
+	normalized := strings.TrimSpace(summary)
+	if normalized == "" {
+		return buildFallbackStructuredExternalSummary(data)
+	}
+
+	missingSections := make([]string, 0)
+	for _, spec := range externalSummarySectionSpecs {
+		header := fmt.Sprintf("【%s】", spec.Header)
+		if strings.Contains(normalized, header) {
+			continue
+		}
+		normalized += fmt.Sprintf("\n\n%s\n- 缺口：%s", header, spec.GapNote)
+		missingSections = append(missingSections, spec.Header)
+	}
+
+	if !strings.Contains(normalized, "【数据缺口】") {
+		normalized += "\n\n【数据缺口】"
+		if len(missingSections) == 0 {
+			normalized += "\n- 无新增结构化缺口（仍需后续刷新）"
+		} else {
+			for _, section := range missingSections {
+				normalized += fmt.Sprintf("\n- 缺口：%s数据不足", section)
+			}
+		}
+	}
+
+	return strings.TrimSpace(normalized)
+}
+
+func buildFallbackStructuredExternalSummary(data *symbolExternalData) string {
+	if data == nil {
+		return buildAllGapSummary()
+	}
+	lines := flattenExternalDataLines(data.RawSections)
+	if len(lines) == 0 {
+		return buildAllGapSummary()
+	}
+
+	quarterLines := pickEvidenceLines(lines, []string{"q1", "q2", "q3", "q4", "季度", "季报"}, 3)
+	annualLines := pickEvidenceLines(lines, []string{"年报", "年度", "fy", "annual"}, 3)
+	policyLines := pickEvidenceLines(lines, []string{"政策", "监管", "央行", "利率", "财政", "补贴", "关税"}, 3)
+	cycleLines := pickEvidenceLines(lines, []string{"周期", "景气", "库存", "产能", "供需", "cycle"}, 3)
+	operationLines := pickEvidenceLines(lines, []string{"营收", "净利润", "订单", "指引", "回购", "并购", "产线", "产品", "经营"}, 3)
+
+	var builder strings.Builder
+	missing := make([]string, 0)
+
+	writeSummarySection(&builder, "近5个季度财报", quarterLines, "未抓取到近5个季度财报", &missing)
+	writeSummarySection(&builder, "近3年年报", annualLines, "未抓取到近3年年报", &missing)
+	writeSummarySection(&builder, "行业宏观政策", policyLines, "未抓取到行业宏观政策", &missing)
+	writeSummarySection(&builder, "产业周期", cycleLines, "未抓取到产业周期信息", &missing)
+	writeSummarySection(&builder, "公司最新经营", operationLines, "未抓取到公司最新经营进展", &missing)
+
+	builder.WriteString("\n\n【数据缺口】")
+	if len(missing) == 0 {
+		builder.WriteString("\n- 无明确结构化缺口（建议继续刷新）")
+	} else {
+		for _, section := range missing {
+			builder.WriteString(fmt.Sprintf("\n- 缺口：%s", section))
+		}
+	}
+	return strings.TrimSpace(builder.String())
+}
+
+func writeSummarySection(builder *strings.Builder, header string, lines []string, gapNote string, missing *[]string) {
+	if builder.Len() > 0 {
+		builder.WriteString("\n\n")
+	}
+	builder.WriteString(fmt.Sprintf("【%s】", header))
+	if len(lines) == 0 {
+		builder.WriteString(fmt.Sprintf("\n- 缺口：%s", gapNote))
+		*missing = append(*missing, header)
+		return
+	}
+	for _, line := range lines {
+		builder.WriteString("\n- ")
+		builder.WriteString(line)
+	}
+}
+
+func buildAllGapSummary() string {
+	var builder strings.Builder
+	for idx, spec := range externalSummarySectionSpecs {
+		if idx > 0 {
+			builder.WriteString("\n\n")
+		}
+		builder.WriteString(fmt.Sprintf("【%s】\n- 缺口：%s", spec.Header, spec.GapNote))
+	}
+	builder.WriteString("\n\n【数据缺口】")
+	for _, spec := range externalSummarySectionSpecs {
+		builder.WriteString(fmt.Sprintf("\n- 缺口：%s数据不足", spec.Header))
+	}
+	return builder.String()
+}
+
+func flattenExternalDataLines(sections []externalDataSection) []string {
+	lines := make([]string, 0, len(sections)*3)
+	for _, section := range sections {
+		source := strings.TrimSpace(section.Source)
+		for _, rawLine := range strings.Split(section.Content, "\n") {
+			line := strings.TrimSpace(rawLine)
+			if line == "" {
+				continue
+			}
+			if len([]rune(line)) > 80 {
+				line = string([]rune(line)[:80]) + "..."
+			}
+			if source != "" {
+				line = fmt.Sprintf("%s: %s", source, line)
+			}
+			lines = append(lines, line)
+			if len(lines) >= 120 {
+				return lines
+			}
+		}
+	}
+	return lines
+}
+
+func pickEvidenceLines(lines []string, keywords []string, limit int) []string {
+	if limit <= 0 {
+		return nil
+	}
+	result := make([]string, 0, limit)
+	for _, line := range lines {
+		lowerLine := strings.ToLower(line)
+		if len(keywords) > 0 && !containsAnyLowerKeyword(lowerLine, keywords) {
+			continue
+		}
+		result = append(result, line)
+		if len(result) >= limit {
+			break
+		}
+	}
+	return result
+}
+
+func containsAnyLowerKeyword(text string, keywords []string) bool {
+	for _, keyword := range keywords {
+		if keyword == "" {
+			continue
+		}
+		if strings.Contains(text, strings.ToLower(keyword)) {
+			return true
+		}
+	}
+	return false
 }
 
 // buildDataSources returns the data sources for the given market.
@@ -393,10 +584,10 @@ func parseEastmoneyFinancials(body []byte) (string, error) {
 func parseEastmoneyResearch(body []byte) (string, error) {
 	var payload struct {
 		Data []struct {
-			Title       string `json:"title"`
-			StockName   string `json:"stockName"`
-			OrgSName    string `json:"orgSName"`
-			PublishDate string `json:"publishDate"`
+			Title        string `json:"title"`
+			StockName    string `json:"stockName"`
+			OrgSName     string `json:"orgSName"`
+			PublishDate  string `json:"publishDate"`
 			EmRatingName string `json:"emRatingName"`
 		} `json:"data"`
 	}
@@ -468,9 +659,9 @@ func parseYahooQuoteSummary(body []byte) (string, error) {
 	var payload struct {
 		QuoteSummary struct {
 			Result []struct {
-				FinancialData       map[string]any `json:"financialData"`
+				FinancialData        map[string]any `json:"financialData"`
 				DefaultKeyStatistics map[string]any `json:"defaultKeyStatistics"`
-				RecommendationTrend struct {
+				RecommendationTrend  struct {
 					Trend []struct {
 						Period     string `json:"period"`
 						StrongBuy  int    `json:"strongBuy"`
