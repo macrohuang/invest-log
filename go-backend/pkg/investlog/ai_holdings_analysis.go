@@ -725,6 +725,9 @@ func buildAICompletionsEndpoint(baseURL string) (string, error) {
 		endpoint = trimmed
 	case strings.HasSuffix(lower, "/v1"):
 		endpoint = trimmed + "/chat/completions"
+	case strings.Contains(lower, "perplexity.ai"):
+		// Perplexity uses /chat/completions directly without /v1 prefix.
+		endpoint = trimmed + "/chat/completions"
 	default:
 		endpoint = trimmed + "/v1/chat/completions"
 	}

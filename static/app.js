@@ -16,6 +16,10 @@ const aiAnalysisSettingsKey = 'aiHoldingsAnalysisSettings';
 const aiAnalysisAPIKeyStorageKey = 'aiHoldingsAnalysisApiKey';
 const defaultOpenAIBaseURL = 'https://api.openai.com/v1';
 const defaultGeminiBaseURL = 'https://generativelanguage.googleapis.com/v1beta';
+const perplexityAPIKeyStorageKey = 'aiPerplexityAPIKey';
+const symbolAnalysisUsePerplexityKey = 'symbolAnalysisUsePerplexity';
+const defaultPerplexityBaseURL = 'https://api.perplexity.ai';
+const defaultPerplexityModel = 'sonar-pro';
 
 const view = document.getElementById('view');
 const toastEl = document.getElementById('toast');
@@ -423,6 +427,32 @@ function setAIAnalysisAPIKey(apiKey) {
   }
   localStorage.setItem(aiAnalysisAPIKeyStorageKey, normalized);
   return normalized;
+}
+
+function getPerplexityAPIKey() {
+  return (localStorage.getItem(perplexityAPIKeyStorageKey) || '').trim();
+}
+
+function setPerplexityAPIKey(apiKey) {
+  const normalized = String(apiKey || '').trim();
+  if (!normalized) {
+    localStorage.removeItem(perplexityAPIKeyStorageKey);
+    return '';
+  }
+  localStorage.setItem(perplexityAPIKeyStorageKey, normalized);
+  return normalized;
+}
+
+function getSymbolAnalysisUsePerplexity() {
+  return localStorage.getItem(symbolAnalysisUsePerplexityKey) === 'true';
+}
+
+function setSymbolAnalysisUsePerplexity(enabled) {
+  if (enabled) {
+    localStorage.setItem(symbolAnalysisUsePerplexityKey, 'true');
+  } else {
+    localStorage.removeItem(symbolAnalysisUsePerplexityKey);
+  }
 }
 
 function isDefaultAIAnalysisSettings(settings) {
@@ -2026,17 +2056,34 @@ async function renderSymbolAnalysis() {
     return;
   }
 
+  const hasPerplexityKey = !!getPerplexityAPIKey();
+  const usePerplexity = hasPerplexityKey && getSymbolAnalysisUsePerplexity();
+  const perplexityToggleHTML = hasPerplexityKey
+    ? `<button class="btn secondary${usePerplexity ? ' active' : ''}" id="toggle-perplexity-provider" title="切换为 Perplexity sonar-pro 分析">Perplexity: ${usePerplexity ? 'ON' : 'OFF'}</button>`
+    : '';
+
   view.innerHTML = `
     <div class="section-title">${escapeHtml(symbol)} Analysis</div>
     <div class="section-sub">Multi-dimensional AI deep analysis · ${escapeHtml(currency)}</div>
     <div class="symbol-analysis-actions">
       <a href="#/holdings" class="btn secondary">Back to Holdings</a>
+      ${perplexityToggleHTML}
       <button class="btn primary" id="run-symbol-analysis">Run Analysis</button>
     </div>
     <div id="symbol-analysis-content">
       <div class="card">Loading latest analysis...</div>
     </div>
   `;
+
+  const toggleBtn = document.getElementById('toggle-perplexity-provider');
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', () => {
+      const current = getSymbolAnalysisUsePerplexity();
+      setSymbolAnalysisUsePerplexity(!current);
+      toggleBtn.textContent = `Perplexity: ${!current ? 'ON' : 'OFF'}`;
+      toggleBtn.classList.toggle('active', !current);
+    });
+  }
 
   const runBtn = document.getElementById('run-symbol-analysis');
   runBtn.addEventListener('click', async () => {
@@ -2149,12 +2196,27 @@ function renderSymbolAnalysisStreamingCard(streamState) {
 
 async function runSymbolAnalysis(symbol, currency, handlers = {}) {
   const settings = await loadAIAnalysisSettings();
-  const model = (settings.model || '').trim();
-  const baseUrl = normalizeAIBaseUrlForModel(settings.baseUrl, model);
+
+  // Determine provider: Perplexity sonar-pro or main AI
+  const perplexityKey = getPerplexityAPIKey();
+  const usePerplexity = !!perplexityKey && getSymbolAnalysisUsePerplexity();
+
+  let base_url, model, api_key;
+  if (usePerplexity) {
+    base_url = defaultPerplexityBaseURL;
+    model = defaultPerplexityModel;
+    api_key = perplexityKey;
+  } else {
+    const mainModel = (settings.model || '').trim();
+    base_url = normalizeAIBaseUrlForModel(settings.baseUrl, mainModel);
+    model = mainModel;
+    api_key = (settings.apiKey || '').trim();
+  }
+
   const normalizedSettings = {
-    baseUrl,
+    baseUrl: base_url,
     model,
-    apiKey: (settings.apiKey || '').trim(),
+    apiKey: api_key,
     riskProfile: (settings.riskProfile || 'balanced').trim(),
     horizon: (settings.horizon || 'medium').trim(),
     adviceStyle: (settings.adviceStyle || 'balanced').trim(),
@@ -2164,7 +2226,7 @@ async function runSymbolAnalysis(symbol, currency, handlers = {}) {
   if (!normalizedSettings.model || !normalizedSettings.apiKey) {
     localStorage.setItem('activeSettingsTab', 'api');
     window.location.hash = '#/settings';
-    showToast('Set AI model and API Key in Settings > API');
+    showToast(usePerplexity ? 'Set Perplexity API Key in Settings' : 'Set AI model and API Key in Settings > API');
     throw new Error('AI settings not configured');
   }
 
@@ -3886,6 +3948,7 @@ async function renderSettings() {
       </div>
     `;
 
+    const perplexityApiKey = getPerplexityAPIKey();
     const aiAnalysisSection = `
       <div class="card">
         <h3>AI Analysis</h3>
@@ -3946,6 +4009,13 @@ async function renderSettings() {
               <label>Strategy Prompt</label>
               <textarea id="ai-strategy-prompt" rows="4" placeholder="例如：优先控制回撤，新增标的仅考虑高现金流蓝筹。">${escapeHtml(aiSettings.strategyPrompt || '')}</textarea>
               <div class="section-sub">Optional. Used as your personal strategy preference in AI analysis.</div>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="field">
+              <label>Perplexity API Key</label>
+              <input id="perplexity-api-key" type="password" autocomplete="off" placeholder="pplx-..." value="${escapeHtml(perplexityApiKey)}">
+              <div class="section-sub">个股分析可选用 Perplexity sonar-pro。仅存本地，不上传服务器。</div>
             </div>
             <div class="actions">
               <button class="btn" id="save-ai-analysis" type="button">Save AI Settings</button>
@@ -4378,6 +4448,7 @@ function bindSettingsActions(assetTypes) {
       const adviceStyleInput = document.getElementById('ai-advice-style');
       const allowNewSymbolsInput = document.getElementById('ai-allow-new-symbols');
       const strategyPromptInput = document.getElementById('ai-strategy-prompt');
+      const perplexityApiKeyInput = document.getElementById('perplexity-api-key');
       const model = modelInput && modelInput.value ? modelInput.value.trim() : '';
       const rawBaseUrl = baseUrlInput && baseUrlInput.value ? baseUrlInput.value.trim() : '';
       const normalizedRawBaseUrl = normalizeAIBaseUrl(rawBaseUrl);
@@ -4400,6 +4471,8 @@ function bindSettingsActions(assetTypes) {
         allowNewSymbols: allowNewSymbolsInput ? !!allowNewSymbolsInput.checked : true,
         strategyPrompt: strategyPromptInput && strategyPromptInput.value ? strategyPromptInput.value.trim() : '',
       };
+
+      setPerplexityAPIKey(perplexityApiKeyInput && perplexityApiKeyInput.value ? perplexityApiKeyInput.value.trim() : '');
 
       saveAIAnalysis.disabled = true;
       try {
