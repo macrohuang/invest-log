@@ -1,0 +1,65 @@
+/* ===== Responsive Breakpoints ===== */
+
+@media (max-width: 960px) {
+  .topbar {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .summary-pill {
+    margin-left: 0;
+  }
+  .grid.two {
+    grid-template-columns: 1fr;
+  }
+  .nav {
+    flex-wrap: wrap;
+  }
+  .top-actions {
+    width: 100%;
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+  .chart-row {
+    grid-template-columns: 1fr;
+  }
+  .chart-row > div:nth-child(3),
+  .chart-row > div:nth-child(4) {
+    justify-self: flex-end;
+  }
+  .allocation-controls {
+    grid-template-columns: repeat(2, minmax(80px, 1fr));
+  }
+  .allocation-controls button {
+    grid-column: 1 / -1;
+  }
+  .actions-column {
+    width: auto;
+    max-width: none;
+    min-width: 200px;
+  }
+  .holdings-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .pnl-column {
+    min-width: 118px;
+  }
+  .pie-layout {
+    grid-template-columns: 1fr;
+  }
+  .pie-chart {
+    margin: 0 auto;
+  }
+}
+
+@media (max-width: 700px) {
+  .symbol-analysis-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orb,
+  .view {
+    animation: none;
+  }
+}

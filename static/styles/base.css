@@ -1,0 +1,16 @@
+/* ===== Global Reset & Body ===== */
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: "Manrope", "Segoe UI", sans-serif;
+  background: radial-gradient(circle at top left, #fff6e7 0%, transparent 55%),
+    radial-gradient(circle at 80% 20%, #e8f5f8 0%, transparent 55%),
+    linear-gradient(120deg, var(--bg-0), var(--bg-1));
+  color: var(--ink-0);
+  min-height: 100vh;
+}

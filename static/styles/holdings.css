@@ -1,0 +1,118 @@
+/* ===== Holdings & Account Groups ===== */
+
+/* Account groups */
+.account-groups-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.account-group {
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+
+.account-group.alt {
+  background: rgba(0, 0, 0, 0.025);
+}
+
+.account-header {
+  display: flex;
+  align-items: center;
+  padding: 10px 14px;
+  font-size: 13px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.account-header .account-name {
+  flex: 1;
+  font-weight: 600;
+  color: var(--ink-0);
+}
+
+.account-header .account-total {
+  margin-left: 12px;
+  font-weight: 600;
+  color: var(--ink-1);
+}
+
+.account-header .account-percent {
+  margin-left: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.account-symbols {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Symbol row */
+.symbol-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto auto;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 14px;
+  cursor: pointer;
+  transition: background 0.15s;
+  font-size: 13px;
+}
+
+.symbol-row:hover {
+  background: rgba(0, 0, 0, 0.03);
+}
+
+.symbol-row.highlighted {
+  background: rgba(16, 185, 129, 0.12);
+}
+
+.symbol-row .symbol-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.symbol-row .symbol-name {
+  font-weight: 500;
+  color: var(--ink-0);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.symbol-row .symbol-code {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.symbol-row .symbol-value,
+.symbol-row .symbol-percent,
+.symbol-row .symbol-pnl {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.symbol-row .symbol-value {
+  min-width: 80px;
+}
+
+.symbol-row .symbol-percent {
+  min-width: 55px;
+  color: var(--muted);
+}
+
+.symbol-row .symbol-pnl {
+  min-width: 70px;
+}
+
+.symbol-row .symbol-pnl.positive {
+  color: var(--accent-cool);
+}
+
+.symbol-row .symbol-pnl.negative {
+  color: var(--accent-strong);
+}

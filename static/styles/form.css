@@ -1,0 +1,138 @@
+/* ===== Forms & Filter Controls ===== */
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 24px;
+}
+
+.pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.inline-link {
+  color: var(--accent-strong);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.inline-link:hover,
+.inline-link:focus {
+  text-decoration: underline;
+}
+
+.form {
+  display: grid;
+  gap: 14px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+}
+
+.field input,
+.field select,
+.field textarea {
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(29, 31, 27, 0.2);
+  background: white;
+  font-size: 14px;
+  font-family: "Manrope", "Segoe UI", sans-serif;
+}
+
+.form-row {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+/* Symbol filter popover */
+.symbols-filter-row {
+  align-items: end;
+  margin-bottom: 12px;
+}
+
+.symbols-filter-actions {
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.filter-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+  margin-left: 4px;
+  cursor: pointer;
+}
+
+.filter-trigger:hover,
+.filter-trigger.active {
+  color: var(--accent-strong);
+}
+
+.filter-popover {
+  display: none;
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 240px;
+  max-width: 320px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(29, 31, 27, 0.12);
+  background: rgba(255, 255, 255, 0.98);
+  box-shadow: var(--shadow-soft);
+}
+
+.filter-popover.show {
+  display: block;
+}
+
+.filter-list {
+  max-height: 220px;
+  overflow: auto;
+  padding-right: 4px;
+  margin-bottom: 8px;
+}
+
+.filter-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--ink-0);
+  padding: 4px 0;
+}
+
+.filter-item input {
+  margin: 0;
+}
+
+.filter-actions {
+  display: flex;
+  gap: 8px;
+}

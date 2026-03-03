@@ -1,0 +1,20 @@
+/* ===== Design Tokens ===== */
+
+:root {
+  --bg-0: #f4efe6;
+  --bg-1: #dfe9ee;
+  --ink-0: #1d1f1b;
+  --ink-1: #3f463e;
+  --muted: #6b6f66;
+  --accent: #f06c3b;
+  --accent-strong: #ef4444;
+  --accent-cool: #10b981;
+  --card: #ffffff;
+  --shadow: 0 20px 30px rgba(29, 31, 27, 0.20);
+  --shadow-soft: 0 10px 24px rgba(29, 31, 27, 0.08);
+  --radius-lg: 16px;
+  --radius-md: 14px;
+  --radius-sm: 10px;
+  --border: 1px solid rgba(29, 31, 27, 0.08);
+  color-scheme: light;
+}
