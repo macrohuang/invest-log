@@ -57,6 +57,7 @@ type aiSettingsPayload struct {
 	AdviceStyle     string `json:"advice_style"`
 	AllowNewSymbols *bool  `json:"allow_new_symbols"`
 	StrategyPrompt  string `json:"strategy_prompt"`
+	APIKey          string `json:"api_key"`
 }
 
 type aiSymbolAnalysisPayload struct {

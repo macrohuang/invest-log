@@ -478,6 +478,7 @@ async function persistAIAnalysisSettings(settings) {
       advice_style: normalized.adviceStyle,
       allow_new_symbols: normalized.allowNewSymbols,
       strategy_prompt: normalized.strategyPrompt,
+      api_key: String(settings.apiKey || '').trim(),
     }),
   });
   return normalizeAIAnalysisSettings(saved || normalized);
@@ -486,58 +487,69 @@ async function persistAIAnalysisSettings(settings) {
 async function loadAIAnalysisSettings(options = {}) {
   const forceRefresh = !!options.forceRefresh;
   const legacySettings = loadLegacyAIAnalysisSettings();
-  const apiKey = getAIAnalysisAPIKey(legacySettings);
 
   if (!forceRefresh && state.aiSettingsLoaded && state.aiSettings) {
     return {
       ...state.aiSettings,
-      apiKey,
+      apiKey: state.aiSettings.apiKey || getAIAnalysisAPIKey(legacySettings),
     };
   }
 
   let normalized = defaultAIAnalysisSettings();
+  let apiKey = '';
   let loadedFromServer = false;
   try {
     const remote = await fetchJSON('/api/ai-settings');
     normalized = normalizeAIAnalysisSettings(remote);
+    apiKey = String(remote.api_key || '').trim();
     loadedFromServer = true;
   } catch (err) {
     if (legacySettings) {
       normalized = normalizeAIAnalysisSettings(legacySettings);
     }
+    apiKey = getAIAnalysisAPIKey(legacySettings);
   }
 
-  if (loadedFromServer && legacySettings) {
-    const legacyNormalized = normalizeAIAnalysisSettings(legacySettings);
-    if (isDefaultAIAnalysisSettings(normalized) && !isDefaultAIAnalysisSettings(legacyNormalized)) {
-      try {
-        normalized = await persistAIAnalysisSettings(legacyNormalized);
-      } catch (err) {
-        // Keep server settings when migration write fails.
+  if (loadedFromServer) {
+    // Migrate: if backend has no API key but localStorage does, save it to backend.
+    if (!apiKey) {
+      const localKey = getAIAnalysisAPIKey(legacySettings);
+      if (localKey) {
+        try {
+          await persistAIAnalysisSettings({ ...normalized, apiKey: localKey });
+          apiKey = localKey;
+        } catch (_) {
+          apiKey = localKey;
+        }
       }
     }
-    localStorage.removeItem(aiAnalysisSettingsKey);
+
+    if (legacySettings) {
+      const legacyNormalized = normalizeAIAnalysisSettings(legacySettings);
+      if (isDefaultAIAnalysisSettings(normalized) && !isDefaultAIAnalysisSettings(legacyNormalized)) {
+        try {
+          normalized = await persistAIAnalysisSettings({ ...legacyNormalized, apiKey });
+        } catch (err) {
+          // Keep server settings when migration write fails.
+        }
+      }
+      localStorage.removeItem(aiAnalysisSettingsKey);
+    }
   }
 
-  state.aiSettings = normalized;
+  state.aiSettings = { ...normalized, apiKey };
   state.aiSettingsLoaded = true;
-  return {
-    ...normalized,
-    apiKey,
-  };
+  return state.aiSettings;
 }
 
 async function saveAIAnalysisSettings(settings) {
-  const normalized = normalizeAIAnalysisSettings(settings);
-  const saved = await persistAIAnalysisSettings(normalized);
-  state.aiSettings = saved;
+  const saved = await persistAIAnalysisSettings(settings);
+  const apiKey = String(settings && settings.apiKey ? settings.apiKey : '').trim();
+  state.aiSettings = { ...saved, apiKey };
   state.aiSettingsLoaded = true;
-  const apiKey = setAIAnalysisAPIKey(settings && settings.apiKey ? settings.apiKey : '');
+  setAIAnalysisAPIKey(apiKey);  // keep localStorage in sync as fallback
   localStorage.removeItem(aiAnalysisSettingsKey);
-  return {
-    ...saved,
-    apiKey,
-  };
+  return state.aiSettings;
 }
 
 function formatActionLabel(action) {

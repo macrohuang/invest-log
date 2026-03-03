@@ -166,6 +166,7 @@ func initDatabase(db *sql.DB) error {
 			advice_style TEXT NOT NULL DEFAULT 'balanced',
 			allow_new_symbols INTEGER NOT NULL DEFAULT 1 CHECK(allow_new_symbols IN (0, 1)),
 			strategy_prompt TEXT NOT NULL DEFAULT '',
+			api_key TEXT NOT NULL DEFAULT '',
 			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)
 	`); err != nil {
@@ -174,6 +175,14 @@ func initDatabase(db *sql.DB) error {
 
 	if _, err := tx.Exec("INSERT INTO ai_settings (id) VALUES (1) ON CONFLICT(id) DO NOTHING"); err != nil {
 		return err
+	}
+
+	if hasAPIKey, err := tableHasColumn(tx, "ai_settings", "api_key"); err != nil {
+		return err
+	} else if !hasAPIKey {
+		if err := exec(tx, "ALTER TABLE ai_settings ADD COLUMN api_key TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
 	}
 
 	hasAssetTypeCheck, err := allocationSettingsHasAssetTypeCheck(tx)

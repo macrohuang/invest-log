@@ -386,6 +386,7 @@ func (h *handler) setAISettings(w http.ResponseWriter, r *http.Request) {
 		AdviceStyle:     payload.AdviceStyle,
 		AllowNewSymbols: allowNewSymbols,
 		StrategyPrompt:  payload.StrategyPrompt,
+		APIKey:          payload.APIKey,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())

@@ -58,6 +58,7 @@ func normalizeAISettings(settings AISettings) AISettings {
 	normalized.Horizon = strings.ToLower(strings.TrimSpace(normalized.Horizon))
 	normalized.AdviceStyle = strings.ToLower(strings.TrimSpace(normalized.AdviceStyle))
 	normalized.StrategyPrompt = strings.TrimSpace(normalized.StrategyPrompt)
+	normalized.APIKey = strings.TrimSpace(normalized.APIKey)
 
 	if _, ok := validAIRiskProfiles[normalized.RiskProfile]; !ok {
 		normalized.RiskProfile = defaultAISettingsRiskProfile
@@ -71,13 +72,13 @@ func normalizeAISettings(settings AISettings) AISettings {
 	return normalized
 }
 
-// GetAISettings returns persisted AI settings (excluding API key).
+// GetAISettings returns persisted AI settings.
 func (c *Core) GetAISettings() (AISettings, error) {
 	settings := defaultAISettings()
 	var allowNewSymbols int
 
 	err := c.db.QueryRow(`
-		SELECT base_url, model, risk_profile, horizon, advice_style, allow_new_symbols, strategy_prompt
+		SELECT base_url, model, risk_profile, horizon, advice_style, allow_new_symbols, strategy_prompt, api_key
 		FROM ai_settings
 		WHERE id = 1
 	`).Scan(
@@ -88,6 +89,7 @@ func (c *Core) GetAISettings() (AISettings, error) {
 		&settings.AdviceStyle,
 		&allowNewSymbols,
 		&settings.StrategyPrompt,
+		&settings.APIKey,
 	)
 	if err == sql.ErrNoRows {
 		return settings, nil
@@ -99,7 +101,7 @@ func (c *Core) GetAISettings() (AISettings, error) {
 	return normalizeAISettings(settings), nil
 }
 
-// SetAISettings persists AI settings (excluding API key).
+// SetAISettings persists AI settings.
 func (c *Core) SetAISettings(settings AISettings) (AISettings, error) {
 	normalized := normalizeAISettings(settings)
 	allowNewSymbols := 0
@@ -109,9 +111,9 @@ func (c *Core) SetAISettings(settings AISettings) (AISettings, error) {
 
 	_, err := c.db.Exec(`
 		INSERT INTO ai_settings (
-			id, base_url, model, risk_profile, horizon, advice_style, allow_new_symbols, strategy_prompt, updated_at
+			id, base_url, model, risk_profile, horizon, advice_style, allow_new_symbols, strategy_prompt, api_key, updated_at
 		)
-		VALUES (1, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+		VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
 		ON CONFLICT(id) DO UPDATE SET
 			base_url = excluded.base_url,
 			model = excluded.model,
@@ -120,8 +122,9 @@ func (c *Core) SetAISettings(settings AISettings) (AISettings, error) {
 			advice_style = excluded.advice_style,
 			allow_new_symbols = excluded.allow_new_symbols,
 			strategy_prompt = excluded.strategy_prompt,
+			api_key = excluded.api_key,
 			updated_at = CURRENT_TIMESTAMP
-	`, normalized.BaseURL, normalized.Model, normalized.RiskProfile, normalized.Horizon, normalized.AdviceStyle, allowNewSymbols, normalized.StrategyPrompt)
+	`, normalized.BaseURL, normalized.Model, normalized.RiskProfile, normalized.Horizon, normalized.AdviceStyle, allowNewSymbols, normalized.StrategyPrompt, normalized.APIKey)
 	if err != nil {
 		return AISettings{}, err
 	}
