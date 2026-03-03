@@ -510,17 +510,6 @@ func normalizeHoldingsAnalysisRequest(req HoldingsAnalysisRequest) (HoldingsAnal
 	return normalized, nil
 }
 
-func normalizeEnum(raw, fallback string, allowed map[string]struct{}) (string, error) {
-	if raw == "" {
-		return fallback, nil
-	}
-	normalized := strings.ToLower(raw)
-	if _, ok := allowed[normalized]; !ok {
-		return "", fmt.Errorf("unsupported value: %s", raw)
-	}
-	return normalized, nil
-}
-
 func (c *Core) buildHoldingsAnalysisPromptInput(currency string) (*holdingsAnalysisPromptInput, error) {
 	bySymbol, err := c.GetHoldingsBySymbol()
 	if err != nil {
