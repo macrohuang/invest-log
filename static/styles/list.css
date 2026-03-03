@@ -1,0 +1,67 @@
+/* ===== Lists & Allocation Controls ===== */
+
+.list {
+  display: grid;
+  gap: 12px;
+}
+
+.list-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.75);
+  border: var(--border);
+}
+
+.allocation-item {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+
+.allocation-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(80px, 1fr)) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.fx-controls {
+  grid-template-columns: minmax(120px, 1fr) auto;
+}
+
+.allocation-controls input {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(29, 31, 27, 0.2);
+}
+
+/* Progress bar */
+.bar {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(29, 31, 27, 0.1);
+  overflow: hidden;
+}
+
+.bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--accent-cool));
+}
+
+/* Allocation tab toolbar */
+.alloc-tab-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.alloc-tab-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 4px;
+}

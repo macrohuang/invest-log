@@ -1,0 +1,47 @@
+/* ===== Ambient Background Orbs ===== */
+
+.ambient {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+}
+
+.orb {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(0);
+  opacity: 0.65;
+  animation: drift 18s ease-in-out infinite;
+}
+
+.orb-a {
+  width: 420px;
+  height: 420px;
+  background: radial-gradient(circle, rgba(240, 108, 59, 0.25), transparent 70%);
+  top: -120px;
+  left: -80px;
+}
+
+.orb-b {
+  width: 520px;
+  height: 520px;
+  background: radial-gradient(circle, rgba(26, 166, 183, 0.3), transparent 70%);
+  bottom: -200px;
+  right: -120px;
+  animation-delay: 2s;
+}
+
+.orb-c {
+  width: 320px;
+  height: 320px;
+  background: radial-gradient(circle, rgba(196, 75, 34, 0.25), transparent 70%);
+  top: 40%;
+  left: 60%;
+  animation-delay: 4s;
+}
+
+@keyframes drift {
+  0%, 100% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(-18px, 12px, 0); }
+}

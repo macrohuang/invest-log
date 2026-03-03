@@ -1,0 +1,79 @@
+/* ===== Utilities ===== */
+
+/* Pill badges */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(26, 166, 183, 0.12);
+  color: var(--accent-cool);
+  font-weight: 600;
+}
+
+.pill.negative {
+  background: rgba(196, 75, 34, 0.16);
+  color: var(--accent-strong);
+}
+
+.pill.positive {
+  background: rgba(26, 166, 183, 0.18);
+  color: var(--accent-cool);
+}
+
+/* Transaction type tags */
+.tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.tag.buy { background: rgba(26, 166, 183, 0.15); color: var(--accent-cool); }
+.tag.sell { background: rgba(240, 108, 59, 0.2); color: var(--accent-strong); }
+.tag.other { background: rgba(29, 31, 27, 0.08); color: var(--muted); }
+
+/* P&L color utilities */
+.total-pnl-percent {
+  font-size: 12px;
+  font-weight: 500;
+  opacity: 0.9;
+}
+
+.pnl-positive {
+  color: var(--accent-cool);
+}
+
+.pnl-negative {
+  color: var(--accent-strong);
+}
+
+/* Toggle switch */
+.toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.toggle input {
+  accent-color: var(--accent);
+}
+
+/* Alert inline text */
+.alert {
+  color: var(--accent-strong);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+/* Privacy mode — blur sensitive values */
+.privacy [data-sensitive] {
+  color: transparent;
+  text-shadow: 0 0 8px rgba(29, 31, 27, 0.55);
+}
