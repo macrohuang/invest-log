@@ -78,6 +78,8 @@ async function renderHoldings() {
           ? `<div class="pnl-cell"><span class="pnl-value ${pnlRowClass}" data-sensitive>${formatMoneyPlain(s.unrealized_pnl)}</span>${pnlPercentLabel}</div>`
           : '<span class="section-sub">—</span>';
         const accountSort = (s.account_name || s.account_id || '').toString();
+        const symbolLabel = (s.symbol || 'Unknown symbol').toString();
+        const actionA11yLabel = `${symbolLabel} ${currency} actions`;
         return `
           <tr data-account="${escapeHtml(accountSort.toLowerCase())}" data-market="${s.market_value || 0}" data-pnl="${s.unrealized_pnl || 0}">
             <td><strong>${escapeHtml(s.display_name)}</strong><br><a class="symbol-link section-sub" href="${symbolLink}">${escapeHtml(s.symbol)}</a></td>
@@ -88,8 +90,15 @@ async function renderHoldings() {
             <td class="num" data-sensitive>${formatMoneyPlain(s.market_value)}</td>
             <td class="num pnl-column">${pnlMarkup}</td>
             <td class="actions-column">
-              <div class="actions holdings-actions">
-                <select class="btn trade-select" data-symbol="${escapeHtml(s.symbol)}" data-currency="${currency}" data-account="${escapeHtml(s.account_id || '')}" data-asset-type="${escapeHtml(s.asset_type || '')}">
+              <div class="actions holdings-actions" role="group" aria-label="${escapeHtml(actionA11yLabel)}">
+                <select
+                  class="btn trade-select holdings-action-control holdings-action-trade"
+                  data-symbol="${escapeHtml(s.symbol)}"
+                  data-currency="${currency}"
+                  data-account="${escapeHtml(s.account_id || '')}"
+                  data-asset-type="${escapeHtml(s.asset_type || '')}"
+                  aria-label="Trade action for ${escapeHtml(symbolLabel)} in ${currency}"
+                >
                   <option value="">Trade</option>
                   <option value="BUY">Buy</option>
                   <option value="SELL">Sell</option>
@@ -97,9 +106,38 @@ async function renderHoldings() {
                   <option value="TRANSFER_IN">Transfer In</option>
                   <option value="TRANSFER_OUT">Transfer Out</option>
                 </select>
-                <button class="btn secondary" data-action="update" data-symbol="${escapeHtml(s.symbol)}" data-currency="${currency}" data-asset-type="${escapeHtml(s.asset_type || '')}" ${updateDisabled}>Update</button>
-                <button class="btn tertiary" data-action="manual" data-symbol="${escapeHtml(s.symbol)}" data-currency="${currency}">Manual</button>
-                <button class="btn tertiary" data-action="symbol-ai" data-symbol="${escapeHtml(s.symbol)}" data-currency="${currency}">AI</button>
+                <button
+                  type="button"
+                  class="btn secondary holdings-action-control holdings-action-update"
+                  data-action="update"
+                  data-symbol="${escapeHtml(s.symbol)}"
+                  data-currency="${currency}"
+                  data-asset-type="${escapeHtml(s.asset_type || '')}"
+                  aria-label="Update price for ${escapeHtml(symbolLabel)} in ${currency}"
+                  ${updateDisabled}
+                >
+                  Update
+                </button>
+                <button
+                  type="button"
+                  class="btn tertiary holdings-action-control holdings-action-manual"
+                  data-action="manual"
+                  data-symbol="${escapeHtml(s.symbol)}"
+                  data-currency="${currency}"
+                  aria-label="Set manual price for ${escapeHtml(symbolLabel)} in ${currency}"
+                >
+                  Manual
+                </button>
+                <button
+                  type="button"
+                  class="btn tertiary holdings-action-control holdings-action-ai"
+                  data-action="symbol-ai"
+                  data-symbol="${escapeHtml(s.symbol)}"
+                  data-currency="${currency}"
+                  aria-label="Run AI analysis for ${escapeHtml(symbolLabel)} in ${currency}"
+                >
+                  AI
+                </button>
               </div>
             </td>
           </tr>

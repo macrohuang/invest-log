@@ -3,31 +3,39 @@
 .btn {
   padding: 10px 16px;
   border-radius: 999px;
-  border: none;
+  border: 1px solid transparent;
   cursor: pointer;
   font-weight: 600;
   background: var(--accent-cool);
   color: white;
+  transition: background-color 0.18s ease, color 0.18s ease, border-color 0.18s ease, box-shadow 0.18s ease, transform 0.12s ease;
 }
 
 .btn.secondary {
   background: rgba(29, 31, 27, 0.1);
   color: var(--ink-0);
+  border-color: rgba(29, 31, 27, 0.08);
 }
 
 .btn.tertiary {
   background: rgba(26, 115, 232, 0.12);
   color: #1a73e8;
+  border-color: rgba(26, 115, 232, 0.14);
 }
 
 .btn.danger {
   background: rgba(196, 75, 34, 0.2);
   color: var(--accent-strong);
+  border-color: rgba(196, 75, 34, 0.18);
 }
 
 .btn[disabled] {
   opacity: 0.55;
   cursor: not-allowed;
+}
+
+.btn:not([disabled]):active {
+  transform: translateY(1px);
 }
 
 select.btn {
@@ -43,9 +51,9 @@ select.btn.trade-select {
 }
 
 .actions-column {
-  width: 248px;
-  min-width: 248px;
-  max-width: 248px;
+  width: 236px;
+  min-width: 236px;
+  max-width: 236px;
 }
 
 .pnl-column {
@@ -53,56 +61,89 @@ select.btn.trade-select {
 }
 
 /* Holdings-specific action grid */
-.holdings-actions {
+.actions.holdings-actions {
+  --holding-action-height: 34px;
+  --holding-action-gap: 6px;
+
   width: 100%;
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  align-items: center;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  grid-template-areas:
+    "trade update"
+    "manual ai";
+  align-items: stretch;
   justify-items: stretch;
-  gap: 6px;
+  gap: var(--holding-action-gap);
 }
 
-.holdings-actions .btn,
-.holdings-actions .trade-select {
-  height: 32px;
+.actions.holdings-actions .holdings-action-control {
+  height: var(--holding-action-height);
   width: 100%;
   min-width: 0;
   padding: 0 10px;
-  border-radius: 8px;
+  border-radius: 10px;
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.01em;
   text-align: center;
 }
 
-.holdings-actions .trade-select {
+.actions.holdings-actions .holdings-action-trade {
+  grid-area: trade;
+}
+
+.actions.holdings-actions .holdings-action-update {
+  grid-area: update;
+}
+
+.actions.holdings-actions .holdings-action-manual {
+  grid-area: manual;
+}
+
+.actions.holdings-actions .holdings-action-ai {
+  grid-area: ai;
+}
+
+.actions.holdings-actions .trade-select {
   background-color: #1a73e8;
+  background-image: linear-gradient(135deg, #1a73e8, #1461c6);
+  border-color: rgba(20, 97, 198, 0.62);
   color: white;
 }
 
-.holdings-actions .btn.secondary {
-  background: rgba(32, 33, 36, 0.08);
+.actions.holdings-actions .btn.secondary {
+  background: rgba(60, 64, 67, 0.08);
   color: #3c4043;
+  border-color: rgba(60, 64, 67, 0.22);
 }
 
-.holdings-actions .btn.tertiary {
-  background: rgba(26, 115, 232, 0.11);
-  color: #1a73e8;
+.actions.holdings-actions .btn.tertiary {
+  background: rgba(26, 115, 232, 0.09);
+  color: #174ea6;
+  border-color: rgba(26, 115, 232, 0.18);
 }
 
-.holdings-actions .tag {
+.actions.holdings-actions .btn:hover:not([disabled]),
+.actions.holdings-actions .trade-select:hover {
+  box-shadow: 0 2px 8px rgba(29, 31, 27, 0.14);
+}
+
+.actions.holdings-actions .btn:focus-visible,
+.actions.holdings-actions .trade-select:focus-visible {
+  outline: 2px solid rgba(26, 115, 232, 0.48);
+  outline-offset: 1px;
+  box-shadow: 0 0 0 3px rgba(26, 115, 232, 0.2);
+}
+
+.actions.holdings-actions .btn[disabled] {
+  opacity: 1;
+  background: #edf0f2;
+  border-color: rgba(60, 64, 67, 0.2);
+  color: #80868b;
+  box-shadow: none;
+}
+
+.actions.holdings-actions .tag {
   white-space: nowrap;
   margin-left: 2px;
-}
-
-.holdings-actions .secondary,
-.holdings-actions .tertiary {
-  min-width: 0;
-  padding: 0 10px;
-}
-
-.holdings-actions .btn:focus-visible,
-.holdings-actions .trade-select:focus-visible {
-  outline: 2px solid rgba(26, 115, 232, 0.35);
-  outline-offset: 1px;
 }
