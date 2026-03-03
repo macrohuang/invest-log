@@ -31,6 +31,8 @@ func TestBuildAICompletionsEndpoint(t *testing.T) {
 		{name: "responses endpoint", input: "https://example.com/v1/responses", want: "https://example.com/v1/responses"},
 		{name: "missing scheme", input: "example.com/api", want: "https://example.com/api/v1/chat/completions"},
 		{name: "invalid scheme", input: "ftp://example.com", wantErr: "invalid base_url scheme"},
+		{name: "perplexity base", input: "https://api.perplexity.ai", want: "https://api.perplexity.ai/chat/completions"},
+		{name: "perplexity with trailing slash", input: "https://api.perplexity.ai/", want: "https://api.perplexity.ai/chat/completions"},
 	}
 
 	for _, tc := range tests {
