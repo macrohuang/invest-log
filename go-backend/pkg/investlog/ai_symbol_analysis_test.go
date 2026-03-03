@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -472,6 +473,204 @@ func TestAnalyzeSymbol_SynthesisUsesPositionAndPreferences(t *testing.T) {
 	}
 	if !strings.Contains(synthesisPrompt, `"total_shares"`) && !strings.Contains(synthesisPrompt, `"holdings_quantity"`) {
 		t.Fatalf("expected synthesis prompt to include holdings quantity context, got: %s", synthesisPrompt)
+	}
+}
+
+func TestAnalyzeSymbol_UsesRetrievalProviderOnlyForExternalSummary(t *testing.T) {
+	core, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	testAccount(t, core, "acc-retrieval", "Main")
+	testBuyTransaction(t, core, "AAPL", 10, 100, "USD", "acc-retrieval")
+
+	origAI := aiChatCompletion
+	defer func() { aiChatCompletion = origAI }()
+
+	origFetch := fetchExternalDataFn
+	defer func() { fetchExternalDataFn = origFetch }()
+	fetchExternalDataFn = func(_ context.Context, _, _ string, _ *slog.Logger) *symbolExternalData {
+		return &symbolExternalData{
+			Symbol:      "AAPL",
+			Market:      "us",
+			FetchedAt:   time.Now(),
+			RawSections: []externalDataSection{{Source: "stub", Type: "news", Content: "headline"}},
+		}
+	}
+
+	origSummarize := summarizeExternalDataFn
+	defer func() { summarizeExternalDataFn = origSummarize }()
+
+	var summaryEndpoint string
+	var summaryAPIKey string
+	var summaryModel string
+	summarizeExternalDataFn = func(_ context.Context, _ *symbolExternalData, endpoint, apiKey, model string, _ *slog.Logger) string {
+		summaryEndpoint = endpoint
+		summaryAPIKey = apiKey
+		summaryModel = model
+		return "latest external summary"
+	}
+
+	var mu sync.Mutex
+	seenModels := make([]string, 0, 4)
+	aiChatCompletion = func(ctx context.Context, req aiChatCompletionRequest) (aiChatCompletionResult, error) {
+		mu.Lock()
+		seenModels = append(seenModels, req.Model)
+		mu.Unlock()
+		return dimensionStubRouter(ctx, req)
+	}
+
+	result, err := core.AnalyzeSymbol(SymbolAnalysisRequest{
+		BaseURL:          "https://api.openai.com/v1",
+		APIKey:           "main-key",
+		Model:            "gpt-4o",
+		Symbol:           "AAPL",
+		Currency:         "USD",
+		RetrievalBaseURL: "https://api.perplexity.ai",
+		RetrievalAPIKey:  "pplx-key",
+		RetrievalModel:   "sonar-pro",
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeSymbol failed: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+
+	if summaryEndpoint != "https://api.perplexity.ai/chat/completions" {
+		t.Fatalf("expected retrieval endpoint from Perplexity, got %q", summaryEndpoint)
+	}
+	if summaryAPIKey != "pplx-key" {
+		t.Fatalf("expected retrieval api key pplx-key, got %q", summaryAPIKey)
+	}
+	if summaryModel != "sonar-pro" {
+		t.Fatalf("expected retrieval model sonar-pro, got %q", summaryModel)
+	}
+
+	if result.Model != "gpt-4o" {
+		t.Fatalf("expected result model to stay main model gpt-4o, got %q", result.Model)
+	}
+
+	if len(seenModels) == 0 {
+		t.Fatal("expected framework/synthesis model calls")
+	}
+	for _, model := range seenModels {
+		if model != "gpt-4o" {
+			t.Fatalf("expected framework/synthesis to use main model gpt-4o, got %q", model)
+		}
+	}
+}
+
+func TestAnalyzeSymbol_UsesRetrievalProviderWhenExternalDataMissing(t *testing.T) {
+	core, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	testAccount(t, core, "acc-retrieval-missing", "Main")
+	testBuyTransaction(t, core, "AAPL", 10, 100, "USD", "acc-retrieval-missing")
+
+	origAI := aiChatCompletion
+	defer func() { aiChatCompletion = origAI }()
+
+	origFetch := fetchExternalDataFn
+	defer func() { fetchExternalDataFn = origFetch }()
+	fetchExternalDataFn = func(_ context.Context, _, _ string, _ *slog.Logger) *symbolExternalData {
+		return nil
+	}
+
+	origSummarize := summarizeExternalDataFn
+	defer func() { summarizeExternalDataFn = origSummarize }()
+	summarizeExternalDataFn = func(_ context.Context, _ *symbolExternalData, _, _, _ string, _ *slog.Logger) string {
+		t.Fatal("summarizeExternalDataFn should not be called when external data is nil")
+		return ""
+	}
+
+	var retrievalCalls int32
+	var mu sync.Mutex
+	mainModelCalls := make([]string, 0, 4)
+	aiChatCompletion = func(ctx context.Context, req aiChatCompletionRequest) (aiChatCompletionResult, error) {
+		if req.Model == "sonar-pro" {
+			atomic.AddInt32(&retrievalCalls, 1)
+			return aiChatCompletionResult{Model: "sonar-pro", Content: "【价格与估值】\n- AAPL 最新估值区间稳定"}, nil
+		}
+		mu.Lock()
+		mainModelCalls = append(mainModelCalls, req.Model)
+		mu.Unlock()
+		return dimensionStubRouter(ctx, req)
+	}
+
+	result, err := core.AnalyzeSymbol(SymbolAnalysisRequest{
+		BaseURL:          "https://api.openai.com/v1",
+		APIKey:           "main-key",
+		Model:            "gpt-4o",
+		Symbol:           "AAPL",
+		Currency:         "USD",
+		RetrievalBaseURL: "https://api.perplexity.ai",
+		RetrievalAPIKey:  "pplx-key",
+		RetrievalModel:   "sonar-pro",
+	})
+	if err != nil {
+		t.Fatalf("AnalyzeSymbol failed: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if got := atomic.LoadInt32(&retrievalCalls); got == 0 {
+		t.Fatal("expected retrieval model call when external data is missing")
+	}
+	if result.Model != "gpt-4o" {
+		t.Fatalf("expected result model to stay main model gpt-4o, got %q", result.Model)
+	}
+	if len(mainModelCalls) == 0 {
+		t.Fatal("expected main model calls for framework/synthesis")
+	}
+	for _, model := range mainModelCalls {
+		if model != "gpt-4o" {
+			t.Fatalf("expected framework/synthesis to use main model gpt-4o, got %q", model)
+		}
+	}
+}
+
+func TestResolveExternalSummaryProvider_FallsBackWhenRetrievalConfigIncomplete(t *testing.T) {
+	core, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	endpoint, apiKey, model := core.resolveExternalSummaryProvider(SymbolAnalysisRequest{
+		APIKey:          "main-key",
+		Model:           "gpt-4o",
+		RetrievalAPIKey: "pplx-key",
+		RetrievalModel:  "sonar-pro",
+	}, "https://api.openai.com/v1/chat/completions")
+
+	if endpoint != "https://api.openai.com/v1/chat/completions" {
+		t.Fatalf("expected primary endpoint fallback, got %q", endpoint)
+	}
+	if apiKey != "main-key" {
+		t.Fatalf("expected primary api key fallback, got %q", apiKey)
+	}
+	if model != "gpt-4o" {
+		t.Fatalf("expected primary model fallback, got %q", model)
+	}
+}
+
+func TestResolveExternalSummaryProvider_FallsBackWhenRetrievalBaseURLInvalid(t *testing.T) {
+	core, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	endpoint, apiKey, model := core.resolveExternalSummaryProvider(SymbolAnalysisRequest{
+		APIKey:           "main-key",
+		Model:            "gpt-4o",
+		RetrievalBaseURL: "://bad-url",
+		RetrievalAPIKey:  "pplx-key",
+		RetrievalModel:   "sonar-pro",
+	}, "https://api.openai.com/v1/chat/completions")
+
+	if endpoint != "https://api.openai.com/v1/chat/completions" {
+		t.Fatalf("expected primary endpoint fallback, got %q", endpoint)
+	}
+	if apiKey != "main-key" {
+		t.Fatalf("expected primary api key fallback, got %q", apiKey)
+	}
+	if model != "gpt-4o" {
+		t.Fatalf("expected primary model fallback, got %q", model)
 	}
 }
 
@@ -960,14 +1159,17 @@ func TestNormalizeSymbolAnalysisRequest(t *testing.T) {
 
 	// Trimming and uppercasing.
 	req, err := normalizeSymbolAnalysisRequest(SymbolAnalysisRequest{
-		APIKey:         "  my-key  ",
-		Model:          "  gpt-4o  ",
-		Symbol:         "  aapl  ",
-		Currency:       "  usd  ",
-		RiskProfile:    "  AGGRESSIVE  ",
-		Horizon:        "  LONG  ",
-		AdviceStyle:    "  conservative  ",
-		StrategyPrompt: "  偏好低波动  ",
+		APIKey:           "  my-key  ",
+		Model:            "  gpt-4o  ",
+		RetrievalBaseURL: "  https://api.perplexity.ai  ",
+		RetrievalAPIKey:  "  pplx-key  ",
+		RetrievalModel:   "  sonar-pro  ",
+		Symbol:           "  aapl  ",
+		Currency:         "  usd  ",
+		RiskProfile:      "  AGGRESSIVE  ",
+		Horizon:          "  LONG  ",
+		AdviceStyle:      "  conservative  ",
+		StrategyPrompt:   "  偏好低波动  ",
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -977,6 +1179,15 @@ func TestNormalizeSymbolAnalysisRequest(t *testing.T) {
 	}
 	if req.Model != "gpt-4o" {
 		t.Fatalf("expected trimmed model, got %q", req.Model)
+	}
+	if req.RetrievalBaseURL != "https://api.perplexity.ai" {
+		t.Fatalf("expected trimmed retrieval base url, got %q", req.RetrievalBaseURL)
+	}
+	if req.RetrievalAPIKey != "pplx-key" {
+		t.Fatalf("expected trimmed retrieval api key, got %q", req.RetrievalAPIKey)
+	}
+	if req.RetrievalModel != "sonar-pro" {
+		t.Fatalf("expected trimmed retrieval model, got %q", req.RetrievalModel)
 	}
 	if req.Symbol != "AAPL" {
 		t.Fatalf("expected uppercased symbol AAPL, got %q", req.Symbol)
@@ -1014,6 +1225,10 @@ func TestNormalizeSymbolAnalysisRequest(t *testing.T) {
 	}
 	if defaults.AdviceStyle != "balanced" {
 		t.Fatalf("expected default advice_style balanced, got %q", defaults.AdviceStyle)
+	}
+	if defaults.RetrievalBaseURL != "" || defaults.RetrievalAPIKey != "" || defaults.RetrievalModel != "" {
+		t.Fatalf("expected empty retrieval defaults, got base=%q key=%q model=%q",
+			defaults.RetrievalBaseURL, defaults.RetrievalAPIKey, defaults.RetrievalModel)
 	}
 
 	// Missing api_key

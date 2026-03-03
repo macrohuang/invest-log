@@ -275,11 +275,14 @@ func TestAISymbolAnalysisStreamEndpoint_Success(t *testing.T) {
 	defer server.Close()
 
 	rr := doStreamRequest(t, router, http.MethodPost, "/api/ai/symbol-analysis/stream", map[string]any{
-		"base_url": server.URL,
-		"api_key":  "key",
-		"model":    "mock-model",
-		"symbol":   "AAPL",
-		"currency": "USD",
+		"base_url":           server.URL,
+		"api_key":            "key",
+		"model":              "mock-model",
+		"retrieval_base_url": server.URL,
+		"retrieval_api_key":  "pplx-key",
+		"retrieval_model":    "sonar-pro",
+		"symbol":             "AAPL",
+		"currency":           "USD",
 	})
 	if rr.status != http.StatusOK {
 		t.Fatalf("expected 200, got %d, body: %s", rr.status, rr.body)
