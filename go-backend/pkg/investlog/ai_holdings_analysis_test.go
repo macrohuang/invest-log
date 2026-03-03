@@ -135,6 +135,31 @@ func TestShouldFallbackToAltEndpoint(t *testing.T) {
 	}
 }
 
+func TestShouldFallbackToNonStreaming(t *testing.T) {
+	t.Parallel()
+
+	if !shouldFallbackToNonStreaming(errors.New("unexpected end of JSON input")) {
+		t.Fatal("expected fallback for json decode error")
+	}
+	if !shouldFallbackToNonStreaming(errors.New("decode json failed")) {
+		t.Fatal("expected fallback for generic decode json error")
+	}
+	if shouldFallbackToNonStreaming(errors.New("bad request")) {
+		t.Fatal("did not expect fallback for unrelated error")
+	}
+}
+
+func TestSupportsResponsesFallbackModel(t *testing.T) {
+	t.Parallel()
+
+	if supportsResponsesFallbackModel("sonar-pro") {
+		t.Fatal("expected sonar-pro to skip responses fallback")
+	}
+	if !supportsResponsesFallbackModel("gpt-4.1") {
+		t.Fatal("expected gpt model to allow responses fallback")
+	}
+}
+
 func TestIsTimeoutError(t *testing.T) {
 	t.Parallel()
 
@@ -308,6 +333,84 @@ func TestRequestAIChatCompletion_FallbackToResponses(t *testing.T) {
 	}
 	if !sawResponses {
 		t.Fatal("expected fallback request to responses endpoint")
+	}
+}
+
+func TestRequestAIChatCompletion_StreamDecodeFallbackToOneShot(t *testing.T) {
+	t.Parallel()
+
+	var streamCalls int
+	var oneShotCalls int
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var reqBody map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		if reqBody["stream"] == true {
+			streamCalls++
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"id":"broken"`))
+			return
+		}
+
+		oneShotCalls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"model-stream-fallback","choices":[{"message":{"content":"{\"overall_summary\":\"ok\"}"}}]}`))
+	}))
+	defer ts.Close()
+
+	result, err := requestAIChatCompletion(context.Background(), aiChatCompletionRequest{
+		EndpointURL:  ts.URL + "/chat/completions",
+		APIKey:       "key",
+		Model:        "model-stream-fallback",
+		SystemPrompt: "sys",
+		UserPrompt:   "user",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if streamCalls == 0 {
+		t.Fatal("expected streaming request")
+	}
+	if oneShotCalls == 0 {
+		t.Fatal("expected one-shot fallback request")
+	}
+	if result.Model != "model-stream-fallback" {
+		t.Fatalf("unexpected model: %q", result.Model)
+	}
+	if !strings.Contains(result.Content, "overall_summary") {
+		t.Fatalf("unexpected content: %q", result.Content)
+	}
+}
+
+func TestRequestAIChatCompletion_SonarSkipsResponsesFallback(t *testing.T) {
+	t.Parallel()
+
+	var responsesCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/responses") {
+			responsesCalls++
+		}
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":{"message":"not found"}}`))
+	}))
+	defer server.Close()
+
+	_, err := requestAIChatCompletion(context.Background(), aiChatCompletionRequest{
+		EndpointURL:  server.URL + "/chat/completions",
+		APIKey:       "key",
+		Model:        "sonar-pro",
+		SystemPrompt: "sys",
+		UserPrompt:   "user",
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if responsesCalls != 0 {
+		t.Fatalf("expected no responses fallback request, got %d", responsesCalls)
+	}
+	if strings.Contains(err.Error(), "responses fallback failed") {
+		t.Fatalf("unexpected responses fallback error: %v", err)
 	}
 }
 

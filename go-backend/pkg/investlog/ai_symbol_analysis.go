@@ -1048,12 +1048,17 @@ func (c *Core) AnalyzeSymbol(req SymbolAnalysisRequest) (*SymbolAnalysisResult, 
 	return c.analyzeSymbol(req, nil)
 }
 
-// AnalyzeSymbolWithStream runs symbol analysis and emits model delta chunks.
+// AnalyzeSymbolWithStream runs symbol analysis with stream envelope events.
+// It suppresses intermediate model token deltas to avoid noisy UI output.
 func (c *Core) AnalyzeSymbolWithStream(req SymbolAnalysisRequest, onDelta func(string)) (*SymbolAnalysisResult, error) {
-	return c.analyzeSymbol(req, onDelta)
+	_ = onDelta
+	return c.analyzeSymbol(req, nil)
 }
 
 func (c *Core) analyzeSymbol(req SymbolAnalysisRequest, onDelta func(string)) (*SymbolAnalysisResult, error) {
+	// Suppress intermediate token output for symbol analysis stream.
+	onDelta = nil
+
 	normalizedReq, err := normalizeSymbolAnalysisRequest(req)
 	if err != nil {
 		return nil, err

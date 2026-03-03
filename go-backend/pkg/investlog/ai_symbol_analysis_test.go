@@ -271,7 +271,7 @@ func TestAnalyzeSymbol_EndToEnd(t *testing.T) {
 	}
 }
 
-func TestAnalyzeSymbolWithStream_EmitsDelta(t *testing.T) {
+func TestAnalyzeSymbolWithStream_SuppressesIntermediateDelta(t *testing.T) {
 	core, cleanup := setupTestDB(t)
 	defer cleanup()
 
@@ -312,19 +312,8 @@ func TestAnalyzeSymbolWithStream_EmitsDelta(t *testing.T) {
 		t.Fatal("expected non-nil result")
 	}
 
-	text := streamed.String()
-	hasFrameworkDelta := false
-	for frameworkID := range result.Dimensions {
-		if strings.Contains(text, "["+frameworkID+"]") {
-			hasFrameworkDelta = true
-			break
-		}
-	}
-	if !hasFrameworkDelta {
-		t.Fatalf("expected at least one dimension delta prefix, got: %s", text)
-	}
-	if !strings.Contains(text, "[synthesis]") {
-		t.Fatalf("expected synthesis delta prefix, got: %s", text)
+	if text := streamed.String(); text != "" {
+		t.Fatalf("expected no intermediate stream delta, got: %s", text)
 	}
 }
 

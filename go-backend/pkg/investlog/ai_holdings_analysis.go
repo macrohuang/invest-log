@@ -1183,6 +1183,11 @@ func requestAIChatCompletion(ctx context.Context, req aiChatCompletionRequest) (
 		}
 	}
 
+	if allowResponsesFallback && !supportsResponsesFallbackModel(req.Model) {
+		logger.Info("ai analyze: skip responses fallback for model", "model", req.Model)
+		allowResponsesFallback = false
+	}
+
 	if !allowResponsesFallback {
 		if len(sameEndpointErrors) > 0 {
 			return aiChatCompletionResult{}, fmt.Errorf("chat completion failed: %s; same-endpoint responses attempts failed: %s", strings.Join(chatErrors, " | "), strings.Join(sameEndpointErrors, " | "))
@@ -1309,8 +1314,9 @@ func requestAIByChatCompletions(ctx context.Context, req aiChatCompletionRequest
 	defer func() { _ = stream.Close() }()
 
 	var (
-		model   = strings.TrimSpace(req.Model)
-		builder strings.Builder
+		model                    = strings.TrimSpace(req.Model)
+		builder                  strings.Builder
+		streamFallbackErrMessage string
 	)
 	for stream.Next() {
 		chunk := stream.Current()
@@ -1334,18 +1340,27 @@ func requestAIByChatCompletions(ctx context.Context, req aiChatCompletionRequest
 		if isTimeoutError(streamErr) {
 			return aiChatCompletionResult{}, fmt.Errorf("ai upstream timeout on %s; try a faster model or retry later", endpoint)
 		}
-		var upstreamErr *openai.Error
-		if errors.As(streamErr, &upstreamErr) {
-			message := strings.TrimSpace(upstreamErr.Message)
-			if message == "" {
-				message = strings.TrimSpace(upstreamErr.RawJSON())
+		if shouldFallbackToNonStreaming(streamErr) {
+			streamFallbackErrMessage = strings.TrimSpace(streamErr.Error())
+			logger := req.Logger
+			if logger == nil {
+				logger = slog.Default()
 			}
-			if message == "" {
-				message = strings.TrimSpace(streamErr.Error())
+			logger.Warn("ai analyze: chat stream decode failed, fallback to one-shot", "endpoint", endpoint, "err", streamErr)
+		} else {
+			var upstreamErr *openai.Error
+			if errors.As(streamErr, &upstreamErr) {
+				message := strings.TrimSpace(upstreamErr.Message)
+				if message == "" {
+					message = strings.TrimSpace(upstreamErr.RawJSON())
+				}
+				if message == "" {
+					message = strings.TrimSpace(streamErr.Error())
+				}
+				return aiChatCompletionResult{}, fmt.Errorf("ai upstream error: %s", message)
 			}
-			return aiChatCompletionResult{}, fmt.Errorf("ai upstream error: %s", message)
+			return aiChatCompletionResult{}, fmt.Errorf("ai request failed: %w", streamErr)
 		}
-		return aiChatCompletionResult{}, fmt.Errorf("ai request failed: %w", streamErr)
 	}
 
 	content := strings.TrimSpace(builder.String())
@@ -1368,6 +1383,9 @@ func requestAIByChatCompletions(ctx context.Context, req aiChatCompletionRequest
 		MaxTokens:           openai.Int(aiMaxOutputTokens),
 	})
 	if err != nil {
+		if streamFallbackErrMessage != "" {
+			return aiChatCompletionResult{}, fmt.Errorf("ai request failed: stream decode error: %s; one-shot retry failed: %w", streamFallbackErrMessage, err)
+		}
 		if isTimeoutError(err) {
 			return aiChatCompletionResult{}, fmt.Errorf("ai upstream timeout on %s; try a faster model or retry later", endpoint)
 		}
@@ -1641,6 +1659,35 @@ func shouldFallbackToAltEndpoint(err error) bool {
 	}
 	message := strings.ToLower(err.Error())
 	return strings.Contains(message, "not found") || strings.Contains(message, "404") || strings.Contains(message, "unknown path")
+}
+
+func shouldFallbackToNonStreaming(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "unexpected end of json input") {
+		return true
+	}
+	if strings.Contains(message, "invalid character") && strings.Contains(message, "json") {
+		return true
+	}
+	if strings.Contains(message, "decode") && strings.Contains(message, "json") {
+		return true
+	}
+	return false
+}
+
+func supportsResponsesFallbackModel(model string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(model))
+	if normalized == "" {
+		return true
+	}
+	// Perplexity sonar models are chat-completions-only and reject /responses.
+	return !strings.HasPrefix(normalized, "sonar")
 }
 
 func isTimeoutError(err error) bool {
