@@ -67,12 +67,15 @@ func TestSymbolAnalysisEndpoint_Success(t *testing.T) {
 	defer server.Close()
 
 	rr := doRequest(router, http.MethodPost, "/api/ai/symbol-analysis", map[string]any{
-		"base_url":        server.URL,
-		"api_key":         "test-key",
-		"model":           "mock-model",
-		"symbol":          "AAPL",
-		"currency":        "USD",
-		"strategy_prompt": "长期持有科技股",
+		"base_url":           server.URL,
+		"api_key":            "test-key",
+		"model":              "mock-model",
+		"retrieval_base_url": server.URL,
+		"retrieval_api_key":  "pplx-key",
+		"retrieval_model":    "sonar-pro",
+		"symbol":             "AAPL",
+		"currency":           "USD",
+		"strategy_prompt":    "长期持有科技股",
 	})
 	if rr.Code != http.StatusOK {
 		t.Fatalf("POST /api/ai/symbol-analysis: expected 200, got %d, body: %s", rr.Code, rr.Body.String())

@@ -15,6 +15,9 @@ func normalizeSymbolAnalysisRequest(req SymbolAnalysisRequest) (SymbolAnalysisRe
 	if normalized.Model == "" {
 		return SymbolAnalysisRequest{}, fmt.Errorf("model is required")
 	}
+	normalized.RetrievalBaseURL = strings.TrimSpace(req.RetrievalBaseURL)
+	normalized.RetrievalAPIKey = strings.TrimSpace(req.RetrievalAPIKey)
+	normalized.RetrievalModel = strings.TrimSpace(req.RetrievalModel)
 	normalized.Symbol = strings.TrimSpace(strings.ToUpper(req.Symbol))
 	if normalized.Symbol == "" {
 		return SymbolAnalysisRequest{}, fmt.Errorf("symbol is required")

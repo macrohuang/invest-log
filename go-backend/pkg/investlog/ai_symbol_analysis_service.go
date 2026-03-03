@@ -54,12 +54,27 @@ func (c *Core) analyzeSymbol(req SymbolAnalysisRequest, onDelta func(string)) (*
 
 	// Fetch and summarize external data (graceful degradation on failure).
 	var enrichedContext string
+	summaryEndpoint, summaryAPIKey, summaryModel := c.resolveExternalSummaryProvider(normalizedReq, endpointURL)
 	externalData := fetchExternalDataFn(ctx, normalizedReq.Symbol, normalizedReq.Currency, c.Logger())
 	if externalData != nil {
-		summary := summarizeExternalDataFn(ctx, externalData, endpointURL, normalizedReq.APIKey, normalizedReq.Model, c.Logger())
+		summary := summarizeExternalDataFn(ctx, externalData, summaryEndpoint, summaryAPIKey, summaryModel, c.Logger())
 		if summary != "" {
 			enrichedContext = summary
 			externalData.Summary = summary
+		}
+	}
+	if strings.TrimSpace(enrichedContext) == "" && isResolvedRetrievalProvider(normalizedReq, summaryEndpoint, summaryAPIKey, summaryModel) {
+		retrievalContext := c.retrieveLatestSymbolContext(
+			ctx,
+			summaryEndpoint,
+			summaryAPIKey,
+			summaryModel,
+			symbolContextJSON,
+			normalizedReq.Symbol,
+			normalizedReq.Currency,
+		)
+		if retrievalContext != "" {
+			enrichedContext = retrievalContext
 		}
 	}
 
@@ -176,4 +191,98 @@ func (c *Core) analyzeSymbol(req SymbolAnalysisRequest, onDelta func(string)) (*
 	}
 
 	return result, nil
+}
+
+func (c *Core) resolveExternalSummaryProvider(req SymbolAnalysisRequest, defaultEndpoint string) (string, string, string) {
+	endpoint := defaultEndpoint
+	apiKey := req.APIKey
+	model := req.Model
+
+	if strings.TrimSpace(req.RetrievalBaseURL) == "" ||
+		strings.TrimSpace(req.RetrievalAPIKey) == "" ||
+		strings.TrimSpace(req.RetrievalModel) == "" {
+		return endpoint, apiKey, model
+	}
+
+	retrievalEndpoint, err := buildAICompletionsEndpoint(req.RetrievalBaseURL)
+	if err != nil {
+		c.Logger().Warn("symbol analysis retrieval config invalid, fallback to primary model",
+			"base_url", req.RetrievalBaseURL,
+			"model", req.RetrievalModel,
+			"err", err,
+		)
+		return endpoint, apiKey, model
+	}
+
+	return retrievalEndpoint, req.RetrievalAPIKey, req.RetrievalModel
+}
+
+func isRetrievalProviderConfigured(req SymbolAnalysisRequest) bool {
+	return strings.TrimSpace(req.RetrievalBaseURL) != "" &&
+		strings.TrimSpace(req.RetrievalAPIKey) != "" &&
+		strings.TrimSpace(req.RetrievalModel) != ""
+}
+
+func isResolvedRetrievalProvider(req SymbolAnalysisRequest, endpoint, apiKey, model string) bool {
+	if !isRetrievalProviderConfigured(req) {
+		return false
+	}
+	retrievalEndpoint, err := buildAICompletionsEndpoint(req.RetrievalBaseURL)
+	if err != nil {
+		return false
+	}
+	return endpoint == retrievalEndpoint &&
+		apiKey == req.RetrievalAPIKey &&
+		model == req.RetrievalModel
+}
+
+func (c *Core) retrieveLatestSymbolContext(
+	ctx context.Context,
+	endpoint, apiKey, model, symbolContext, symbol, currency string,
+) string {
+	systemPrompt := `你是投资研究实时检索助手。
+必须联网检索并整理该标的的最新公开信息，只输出事实，不做投资建议。`
+
+	userPrompt := fmt.Sprintf(`请检索并整理以下标的的最新信息：
+symbol: %s
+currency: %s
+持仓上下文(JSON):
+%s
+
+输出格式（纯文本）：
+【价格与估值】
+- ...
+【财报与经营进展】
+- ...
+【行业与政策】
+- ...
+【近期催化与风险】
+- ...
+【来源与日期】
+- 来源名 + 日期(YYYY-MM-DD)
+
+规则：
+- 优先最近90天信息，尽量给出具体日期。
+- 缺失信息必须写“缺口：...”。
+- 禁止编造来源。`, symbol, currency, symbolContext)
+
+	result, err := aiChatCompletion(ctx, aiChatCompletionRequest{
+		EndpointURL:  endpoint,
+		APIKey:       apiKey,
+		Model:        model,
+		SystemPrompt: systemPrompt,
+		UserPrompt:   userPrompt,
+		Logger:       c.Logger(),
+	})
+	if err != nil {
+		c.Logger().Warn("symbol retrieval context failed",
+			"symbol", symbol,
+			"currency", currency,
+			"model", model,
+			"err", err,
+		)
+		return ""
+	}
+
+	return strings.TrimSpace(result.Content)
 }
