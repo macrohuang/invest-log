@@ -157,12 +157,9 @@ func TestAIHoldingsAnalysisStreamEndpoint(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("event: content_block_delta\n"))
-		_, _ = w.Write([]byte(`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"{\"overall_summary\":\"ok\""}}` + "\n\n"))
-		_, _ = w.Write([]byte("event: content_block_delta\n"))
-		_, _ = w.Write([]byte(`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":",\"risk_level\":\"balanced\",\"key_findings\":[\"x\"],\"recommendations\":[],\"disclaimer\":\"d\"}"}}` + "\n\n"))
-		_, _ = w.Write([]byte("event: message_stop\n"))
-		_, _ = w.Write([]byte(`data: {"type":"message_stop"}` + "\n\n"))
+		_, _ = w.Write([]byte("data: {\"model\":\"claude-3-5-sonnet-20241022\",\"choices\":[{\"delta\":{\"content\":\"{\\\"overall_summary\\\":\\\"ok\\\"\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"model\":\"claude-3-5-sonnet-20241022\",\"choices\":[{\"delta\":{\"content\":\",\\\"risk_level\\\":\\\"balanced\\\",\\\"key_findings\\\":[\\\"x\\\"],\\\"recommendations\\\":[],\\\"disclaimer\\\":\\\"d\\\"}\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer server.Close()
 

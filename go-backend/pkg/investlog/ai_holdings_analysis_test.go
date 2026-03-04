@@ -11,8 +11,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"google.golang.org/genai"
 )
 
 func TestBuildAICompletionsEndpoint(t *testing.T) {
@@ -423,8 +421,8 @@ func TestRequestAIChatCompletionStream_ClaudeSSE(t *testing.T) {
 		if r.Method != http.MethodPost {
 			t.Fatalf("expected POST, got %s", r.Method)
 		}
-		if got := r.Header.Get("x-api-key"); got != "key" {
-			t.Fatalf("expected x-api-key header, got %q", got)
+		if got := r.Header.Get("Authorization"); got != "Bearer key" {
+			t.Fatalf("expected Authorization Bearer header, got %q", got)
 		}
 
 		var reqBody map[string]any
@@ -439,17 +437,14 @@ func TestRequestAIChatCompletionStream_ClaudeSSE(t *testing.T) {
 		}
 
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("event: content_block_delta\n"))
-		_, _ = w.Write([]byte(`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"{\"overall_summary\":\"ok\""}}` + "\n\n"))
-		_, _ = w.Write([]byte("event: content_block_delta\n"))
-		_, _ = w.Write([]byte(`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":",\"risk_level\":\"balanced\",\"key_findings\":[\"x\"],\"recommendations\":[],\"disclaimer\":\"d\"}"}}` + "\n\n"))
-		_, _ = w.Write([]byte("event: message_stop\n"))
-		_, _ = w.Write([]byte(`data: {"type":"message_stop"}` + "\n\n"))
+		_, _ = w.Write([]byte("data: {\"model\":\"claude-3-5-sonnet-20241022\",\"choices\":[{\"delta\":{\"content\":\"{\\\"overall_summary\\\":\\\"ok\\\"\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"model\":\"claude-3-5-sonnet-20241022\",\"choices\":[{\"delta\":{\"content\":\",\\\"risk_level\\\":\\\"balanced\\\",\\\"key_findings\\\":[\\\"x\\\"],\\\"recommendations\\\":[],\\\"disclaimer\\\":\\\"d\\\"}\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer server.Close()
 
 	var chunks []string
-	result, err := requestAIChatCompletionStream(context.Background(), aiChatCompletionRequest{
+	_, err := requestAIChatCompletionStream(context.Background(), aiChatCompletionRequest{
 		EndpointURL:  server.URL + "/v1/chat/completions",
 		APIKey:       "key",
 		Model:        "claude-3-5-sonnet-20241022",
@@ -462,18 +457,138 @@ func TestRequestAIChatCompletionStream_ClaudeSSE(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if receivedPath != "/v1/messages" {
-		t.Fatalf("expected anthropic messages endpoint, got %s", receivedPath)
+	if receivedPath != "/v1/chat/completions" {
+		t.Fatalf("expected /v1/chat/completions endpoint, got %s", receivedPath)
 	}
 	joined := strings.Join(chunks, "")
 	if joined == "" {
 		t.Fatal("expected streamed chunks")
 	}
-	if result.Content != joined {
-		t.Fatalf("expected content to equal joined chunks; content=%q chunks=%q", result.Content, joined)
+	if !strings.Contains(joined, "overall_summary") {
+		t.Fatalf("unexpected streamed content: %q", joined)
+	}
+}
+
+func TestRequestAIChatCompletion_GeminiStreamGenerateContent(t *testing.T) {
+	t.Parallel()
+
+	var receivedPath string
+	var receivedAlt string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		receivedAlt = r.URL.Query().Get("alt")
+		if r.Method != http.MethodPost {
+			t.Fatalf("expected POST, got %s", r.Method)
+		}
+		if got := r.Header.Get("x-goog-api-key"); got != "gem-key" {
+			t.Fatalf("expected x-goog-api-key header, got %q", got)
+		}
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Fatalf("expected empty Authorization header, got %q", got)
+		}
+
+		var reqBody map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		if _, ok := reqBody["model"]; ok {
+			t.Fatalf("gemini payload should not include model field")
+		}
+		systemInstruction, ok := reqBody["systemInstruction"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected systemInstruction, got %T", reqBody["systemInstruction"])
+		}
+		sysParts, ok := systemInstruction["parts"].([]any)
+		if !ok || len(sysParts) == 0 {
+			t.Fatalf("expected non-empty system_instruction parts")
+		}
+		sysPart0, ok := sysParts[0].(map[string]any)
+		if !ok || sysPart0["text"] != "sys prompt" {
+			t.Fatalf("unexpected system_instruction content: %v", sysParts[0])
+		}
+		contents, ok := reqBody["contents"].([]any)
+		if !ok || len(contents) == 0 {
+			t.Fatalf("expected non-empty contents field")
+		}
+		content0, ok := contents[0].(map[string]any)
+		if !ok {
+			t.Fatalf("unexpected contents[0] type: %T", contents[0])
+		}
+		contentParts, ok := content0["parts"].([]any)
+		if !ok || len(contentParts) == 0 {
+			t.Fatalf("expected non-empty contents parts")
+		}
+		contentPart0, ok := contentParts[0].(map[string]any)
+		if !ok || contentPart0["text"] != "user prompt" {
+			t.Fatalf("unexpected user content: %v", contentParts[0])
+		}
+		if _, ok := reqBody["generationConfig"]; ok {
+			t.Fatalf("did not expect generationConfig in gemini payload")
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"{\\\"overall_summary\\\":\\\"ok\\\"\"}]}}],\"modelVersion\":\"gemini-2.5-flash\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\",\\\"risk_level\\\":\\\"balanced\\\",\\\"key_findings\\\":[],\\\"recommendations\\\":[],\\\"disclaimer\\\":\\\"d\\\"}\"}]}}],\"modelVersion\":\"gemini-2.5-flash\"}\n\n"))
+	}))
+	defer server.Close()
+
+	baseEndpoint, err := buildAICompletionsEndpoint(server.URL + "/api/gemini")
+	if err != nil {
+		t.Fatalf("build endpoint failed: %v", err)
+	}
+
+	result, err := requestAIChatCompletion(context.Background(), aiChatCompletionRequest{
+		EndpointURL:  baseEndpoint,
+		APIKey:       "gem-key",
+		Model:        "gemini-2.5-flash",
+		SystemPrompt: "sys prompt",
+		UserPrompt:   "user prompt",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if receivedPath != "/api/gemini/v1beta/models/gemini-2.5-flash:streamGenerateContent" {
+		t.Fatalf("unexpected gemini endpoint path: %s", receivedPath)
+	}
+	if receivedAlt != "sse" {
+		t.Fatalf("expected alt=sse, got %q", receivedAlt)
+	}
+	if result.Model != "gemini-2.5-flash" {
+		t.Fatalf("unexpected model: %q", result.Model)
 	}
 	if !strings.Contains(result.Content, "overall_summary") {
-		t.Fatalf("unexpected streamed content: %q", result.Content)
+		t.Fatalf("unexpected content: %q", result.Content)
+	}
+}
+
+func TestRequestAIChatCompletion_GeminiBaseWithV1beta(t *testing.T) {
+	t.Parallel()
+
+	var receivedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"{\\\"overall_summary\\\":\\\"ok\\\"}\"}]}}],\"modelVersion\":\"gemini-2.5-flash\"}\n\n"))
+	}))
+	defer server.Close()
+
+	baseEndpoint, err := buildAICompletionsEndpoint(server.URL + "/api/gemini/v1beta")
+	if err != nil {
+		t.Fatalf("build endpoint failed: %v", err)
+	}
+
+	_, err = requestAIChatCompletion(context.Background(), aiChatCompletionRequest{
+		EndpointURL:  baseEndpoint,
+		APIKey:       "gem-key",
+		Model:        "gemini-2.5-flash",
+		SystemPrompt: "sys prompt",
+		UserPrompt:   "user prompt",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if receivedPath != "/api/gemini/v1beta/models/gemini-2.5-flash:streamGenerateContent" {
+		t.Fatalf("unexpected gemini endpoint path: %s", receivedPath)
 	}
 }
 
@@ -516,14 +631,8 @@ func TestRequestAIChatCompletion_ClaudeNonStreamingUsesSDK(t *testing.T) {
 		receivedPath = r.URL.Path
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{
-			"id":"msg_1",
-			"type":"message",
-			"role":"assistant",
 			"model":"claude-3-5-sonnet-20241022",
-			"content":[{"type":"text","text":"{\"overall_summary\":\"ok\",\"risk_level\":\"balanced\",\"key_findings\":[],\"recommendations\":[],\"disclaimer\":\"d\"}"}],
-			"stop_reason":"end_turn",
-			"stop_sequence":null,
-			"usage":{"input_tokens":1,"output_tokens":1}
+			"choices":[{"message":{"content":"{\"overall_summary\":\"ok\",\"risk_level\":\"balanced\",\"key_findings\":[],\"recommendations\":[],\"disclaimer\":\"d\"}"}}]
 		}`))
 	}))
 	defer server.Close()
@@ -538,8 +647,8 @@ func TestRequestAIChatCompletion_ClaudeNonStreamingUsesSDK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if receivedPath != "/v1/messages" {
-		t.Fatalf("expected sdk request path /v1/messages, got %s", receivedPath)
+	if receivedPath != "/v1/chat/completions" {
+		t.Fatalf("expected /v1/chat/completions, got %s", receivedPath)
 	}
 	if !strings.Contains(result.Content, "overall_summary") {
 		t.Fatalf("unexpected content: %q", result.Content)
@@ -1112,8 +1221,8 @@ func TestRequestAIChatCompletionStream_CallbackError(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("event: content_block_delta\n"))
-		_, _ = w.Write([]byte(`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"x"}}` + "\n\n"))
+		_, _ = w.Write([]byte("data: {\"model\":\"claude-3-5-sonnet-20241022\",\"choices\":[{\"delta\":{\"content\":\"x\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer server.Close()
 
@@ -1597,310 +1706,39 @@ func TestParseAIErrorMessage(t *testing.T) {
 	}
 }
 
-func TestIsGeminiRequest(t *testing.T) {
+func TestFormatAIRequestForLog_MasksAuthHeadersAndKeepsBody(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name     string
-		endpoint string
-		model    string
-		want     bool
-	}{
-		{name: "model starts with gemini", endpoint: "https://example.com/v1/chat/completions", model: "gemini-2.5-flash", want: true},
-		{name: "googleapis endpoint", endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", model: "custom-model", want: true},
-		{name: "path contains gemini", endpoint: "https://example.com/gemini/v1/chat/completions", model: "custom-model", want: true},
-		{name: "non gemini model and endpoint", endpoint: "https://api.openai.com/v1/chat/completions", model: "gpt-4o-mini", want: false},
-	}
-
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			got := isGeminiRequest(tc.endpoint, tc.model)
-			if got != tc.want {
-				t.Fatalf("got %v want %v", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestRequestAIChatCompletion_UsesGeminiClient(t *testing.T) {
-	t.Parallel()
-
-	original := aiGeminiCompletion
-	defer func() { aiGeminiCompletion = original }()
-
-	called := false
-	aiGeminiCompletion = func(ctx context.Context, req aiChatCompletionRequest, onDelta func(string) error) (aiChatCompletionResult, error) {
-		called = true
-		if onDelta != nil {
-			t.Fatal("non-stream chat completion should not pass onDelta callback")
-		}
-		return aiChatCompletionResult{
-			Model:   "gemini-2.5-flash",
-			Content: `{"overall_summary":"ok","risk_level":"balanced","key_findings":[],"recommendations":[],"disclaimer":"d"}`,
-		}, nil
-	}
-
-	result, err := requestAIChatCompletion(context.Background(), aiChatCompletionRequest{
-		EndpointURL:  "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-		APIKey:       "key",
-		Model:        "gemini-2.5-flash",
-		SystemPrompt: "sys",
-		UserPrompt:   "user",
-	})
+	body := []byte(`{
+		"model":"gemini-2.5-flash",
+		"systemInstruction":{"parts":[{"text":"sys"}]},
+		"contents":[{"parts":[{"text":"user"}]}]
+	}`)
+	req, err := http.NewRequest(http.MethodPost, "https://api.example.com/v1beta/models/gemini:streamGenerateContent?alt=sse", bytes.NewReader(body))
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("build request failed: %v", err)
 	}
-	if !called {
-		t.Fatal("expected gemini completion path to be called")
-	}
-	if result.Model != "gemini-2.5-flash" {
-		t.Fatalf("unexpected model: %s", result.Model)
-	}
-}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-goog-api-key", "AIzaSySecretValue123456")
+	req.Header.Set("Authorization", "Bearer sk-test-secret-key-123456")
 
-func TestParseGeminiBaseURLAndVersion(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name        string
-		endpoint    string
-		wantBaseURL string
-		wantVersion string
-		wantErr     string
-	}{
-		{
-			name:        "gemini openai compatible endpoint",
-			endpoint:    "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-			wantBaseURL: "https://generativelanguage.googleapis.com/",
-			wantVersion: "v1beta",
-		},
-		{
-			name:        "proxy endpoint with prefix",
-			endpoint:    "https://proxy.example.com/gateway/v1/chat/completions",
-			wantBaseURL: "https://proxy.example.com/gateway/",
-			wantVersion: "v1",
-		},
-		{
-			name:     "invalid scheme",
-			endpoint: "ftp://example.com/v1/chat/completions",
-			wantErr:  "invalid gemini endpoint scheme",
-		},
+	logged := formatAIRequestForLog(req, body)
+	if strings.Contains(logged, "AIzaSySecretValue123456") {
+		t.Fatalf("x-goog-api-key should be masked, got %s", logged)
 	}
-
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			gotBaseURL, gotVersion, err := parseGeminiBaseURLAndVersion(tc.endpoint)
-			if tc.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-					t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if gotBaseURL != tc.wantBaseURL {
-				t.Fatalf("base url got %q want %q", gotBaseURL, tc.wantBaseURL)
-			}
-			if gotVersion != tc.wantVersion {
-				t.Fatalf("version got %q want %q", gotVersion, tc.wantVersion)
-			}
-		})
+	if strings.Contains(logged, "sk-test-secret-key-123456") {
+		t.Fatalf("authorization token should be masked, got %s", logged)
 	}
-}
-
-func TestBuildGeminiClientConfig(t *testing.T) {
-	t.Parallel()
-
-	config, err := buildGeminiClientConfig("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions", "test-key")
-	if err != nil {
-		t.Fatalf("buildGeminiClientConfig failed: %v", err)
+	if !strings.Contains(logged, "\"X-Goog-Api-Key\"") {
+		t.Fatalf("expected X-Goog-Api-Key in logged output: %s", logged)
 	}
-	if config == nil {
-		t.Fatal("expected config")
+	if !strings.Contains(logged, "\"Authorization\"") {
+		t.Fatalf("expected Authorization in logged output: %s", logged)
 	}
-	if config.Backend != genai.BackendGeminiAPI {
-		t.Fatalf("expected BackendGeminiAPI, got %v", config.Backend)
+	if !strings.Contains(logged, "\"systemInstruction\"") {
+		t.Fatalf("expected request body in logged output: %s", logged)
 	}
-	if config.APIKey != "test-key" {
-		t.Fatalf("unexpected api key: %q", config.APIKey)
-	}
-	if config.HTTPOptions.BaseURL != "https://generativelanguage.googleapis.com" {
-		t.Fatalf("unexpected base url: %q", config.HTTPOptions.BaseURL)
-	}
-	if config.HTTPOptions.APIVersion != "v1beta" {
-		t.Fatalf("unexpected api version: %q", config.HTTPOptions.APIVersion)
-	}
-}
-
-func TestBuildGeminiClientConfig_FallbackFromOpenAIDefault(t *testing.T) {
-	t.Parallel()
-
-	config, err := buildGeminiClientConfig("https://api.openai.com/v1/chat/completions", "test-key")
-	if err != nil {
-		t.Fatalf("buildGeminiClientConfig failed: %v", err)
-	}
-	if config.HTTPOptions.BaseURL != "https://generativelanguage.googleapis.com" {
-		t.Fatalf("unexpected fallback base url: %q", config.HTTPOptions.BaseURL)
-	}
-	if config.HTTPOptions.APIVersion != "v1beta" {
-		t.Fatalf("unexpected fallback api version: %q", config.HTTPOptions.APIVersion)
-	}
-}
-
-func TestShouldFallbackToGeminiDefaultBaseURL(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		endpoint string
-		want     bool
-	}{
-		{
-			name:     "empty endpoint",
-			endpoint: "",
-			want:     true,
-		},
-		{
-			name:     "openai default endpoint",
-			endpoint: "https://api.openai.com/v1/chat/completions",
-			want:     true,
-		},
-		{
-			name:     "gemini endpoint",
-			endpoint: "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-			want:     false,
-		},
-		{
-			name:     "custom provider endpoint",
-			endpoint: "https://openrouter.ai/api/v1/chat/completions",
-			want:     false,
-		},
-	}
-
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			got := shouldFallbackToGeminiDefaultBaseURL(tc.endpoint)
-			if got != tc.want {
-				t.Fatalf("got %v want %v", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestRequestAIChatCompletionStream_UsesGeminiClient(t *testing.T) {
-	t.Parallel()
-
-	original := aiGeminiCompletion
-	defer func() { aiGeminiCompletion = original }()
-
-	var chunks []string
-	aiGeminiCompletion = func(ctx context.Context, req aiChatCompletionRequest, onDelta func(string) error) (aiChatCompletionResult, error) {
-		if onDelta == nil {
-			t.Fatal("expected onDelta callback")
-		}
-		if err := onDelta("chunk-1"); err != nil {
-			return aiChatCompletionResult{}, err
-		}
-		if err := onDelta("chunk-2"); err != nil {
-			return aiChatCompletionResult{}, err
-		}
-		return aiChatCompletionResult{Model: req.Model, Content: "done"}, nil
-	}
-
-	result, err := requestAIChatCompletionStream(context.Background(), aiChatCompletionRequest{
-		EndpointURL:  "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-		APIKey:       "key",
-		Model:        "gemini-2.5-flash",
-		SystemPrompt: "sys",
-		UserPrompt:   "user",
-	}, func(chunk string) error {
-		chunks = append(chunks, chunk)
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(chunks) != 2 {
-		t.Fatalf("expected 2 chunks, got %d", len(chunks))
-	}
-	if result.Content != "done" {
-		t.Fatalf("unexpected result content: %q", result.Content)
-	}
-}
-
-func TestRequestAIByGeminiNative_NonStream(t *testing.T) {
-	t.Parallel()
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			t.Fatalf("expected POST, got %s", r.Method)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"modelVersion":"gemini-2.5-flash",
-			"candidates":[
-				{"content":{"parts":[{"text":"{\"overall_summary\":\"ok\",\"risk_level\":\"balanced\",\"key_findings\":[],\"recommendations\":[],\"disclaimer\":\"d\"}"}]}}
-			]
-		}`))
-	}))
-	defer server.Close()
-
-	result, err := requestAIByGeminiNative(context.Background(), aiChatCompletionRequest{
-		EndpointURL:  server.URL + "/v1beta/openai/chat/completions",
-		APIKey:       "key",
-		Model:        "gemini-2.5-flash",
-		SystemPrompt: "sys",
-		UserPrompt:   "user",
-	}, nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result.Model != "gemini-2.5-flash" {
-		t.Fatalf("unexpected model: %q", result.Model)
-	}
-	if !strings.Contains(result.Content, "overall_summary") {
-		t.Fatalf("unexpected content: %q", result.Content)
-	}
-}
-
-func TestRequestAIByGeminiNative_Stream(t *testing.T) {
-	t.Parallel()
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.Contains(r.URL.Path, ":streamGenerateContent") {
-			t.Fatalf("expected stream path, got %s", r.URL.Path)
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("data: {\"modelVersion\":\"gemini-2.5-flash\",\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"{\\\"overall_summary\\\":\\\"ok\\\"\"}]}}]}\n\n"))
-		_, _ = w.Write([]byte("data: {\"modelVersion\":\"gemini-2.5-flash\",\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"{\\\"overall_summary\\\":\\\"ok\\\",\\\"risk_level\\\":\\\"balanced\\\",\\\"key_findings\\\":[],\\\"recommendations\\\":[],\\\"disclaimer\\\":\\\"d\\\"}\"}]}}]}\n\n"))
-	}))
-	defer server.Close()
-
-	var chunks []string
-	result, err := requestAIByGeminiNative(context.Background(), aiChatCompletionRequest{
-		EndpointURL:  server.URL + "/v1beta/openai/chat/completions",
-		APIKey:       "key",
-		Model:        "gemini-2.5-flash",
-		SystemPrompt: "sys",
-		UserPrompt:   "user",
-	}, func(chunk string) error {
-		chunks = append(chunks, chunk)
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(chunks) == 0 {
-		t.Fatal("expected stream chunks")
-	}
-	if !strings.Contains(result.Content, "overall_summary") {
-		t.Fatalf("unexpected content: %q", result.Content)
+	if !strings.Contains(logged, "\"contents\"") {
+		t.Fatalf("expected request body contents in logged output: %s", logged)
 	}
 }

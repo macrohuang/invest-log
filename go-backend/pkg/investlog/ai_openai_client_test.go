@@ -8,47 +8,6 @@ import (
 	"testing"
 )
 
-func TestNormalizeAIClientBaseURL(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		input   string
-		want    string
-		wantErr string
-	}{
-		{name: "empty uses default", input: "", want: "https://api.openai.com/v1"},
-		{name: "base without v1", input: "https://example.com", want: "https://example.com/v1"},
-		{name: "base with v1", input: "https://example.com/v1", want: "https://example.com/v1"},
-		{name: "chat completions suffix", input: "https://example.com/v1/chat/completions", want: "https://example.com/v1"},
-		{name: "chat completions suffix without v1", input: "https://example.com/chat/completions", want: "https://example.com"},
-		{name: "responses suffix", input: "https://example.com/v1/responses", want: "https://example.com/v1"},
-		{name: "missing scheme", input: "example.com/api", want: "https://example.com/api/v1"},
-		{name: "invalid scheme", input: "ftp://example.com", wantErr: "invalid base_url scheme"},
-	}
-
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			got, err := normalizeAIClientBaseURL(tc.input)
-			if tc.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
-					t.Fatalf("expected error contains %q, got %v", tc.wantErr, err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if got != tc.want {
-				t.Fatalf("got %q want %q", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestRequestAIByChatCompletions_StreamingDelta(t *testing.T) {
 	t.Parallel()
 

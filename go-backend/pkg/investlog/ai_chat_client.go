@@ -1,6 +1,7 @@
 package investlog
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -11,22 +12,18 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
-
-	openai "github.com/openai/openai-go"
-	openaioption "github.com/openai/openai-go/option"
 )
 
 const (
 	defaultAIBaseURL      = "https://api.openai.com/v1"
-	defaultGeminiBaseURL  = "https://generativelanguage.googleapis.com/v1beta"
 	aiRequestTimeout      = 5 * time.Minute
 	aiTotalRequestTimeout = 15 * time.Minute
 	maxAIResponseBodySize = 2 << 20
 	aiMaxOutputTokens     = 128000
 	aiMaxInputTokens      = 200000
-	aiAnthropicMaxTokens  = 8192
 )
 
 type aiChatCompletionRequest struct {
@@ -46,7 +43,6 @@ type aiChatCompletionResult struct {
 
 var aiChatCompletion = requestAIChatCompletion
 var aiChatCompletionStream = requestAIChatCompletionStream
-var aiGeminiCompletion = requestAIByGeminiNative
 
 // normalizeEnum validates and normalizes an enum value against an allowed set.
 // Returns fallback if raw is empty, or an error if raw is not in allowed.
@@ -81,60 +77,6 @@ func cleanupModelJSON(content string) string {
 		trimmed = trimmed[start : end+1]
 	}
 	return strings.TrimSpace(trimmed)
-}
-
-func normalizeAIClientBaseURL(baseURL string) (string, error) {
-	trimmed := strings.TrimSpace(baseURL)
-	if trimmed == "" {
-		trimmed = defaultAIBaseURL
-	}
-	if !strings.Contains(trimmed, "://") {
-		trimmed = "https://" + trimmed
-	}
-	trimmed = strings.TrimRight(trimmed, "/")
-
-	parsed, err := url.Parse(trimmed)
-	if err != nil {
-		return "", fmt.Errorf("invalid base_url: %w", err)
-	}
-	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return "", fmt.Errorf("invalid base_url scheme: %s", parsed.Scheme)
-	}
-	if parsed.Host == "" {
-		return "", fmt.Errorf("invalid base_url host")
-	}
-
-	originalPath := strings.TrimRight(parsed.Path, "/")
-	path := strings.ToLower(originalPath)
-	trimmedPath := originalPath
-
-	hasCompletionsSuffix := strings.HasSuffix(path, "/chat/completions")
-	hasResponsesSuffix := strings.HasSuffix(path, "/responses")
-
-	switch {
-	case hasCompletionsSuffix:
-		trimmedPath = strings.TrimRight(originalPath[:len(originalPath)-len("/chat/completions")], "/")
-	case hasResponsesSuffix:
-		trimmedPath = strings.TrimRight(originalPath[:len(originalPath)-len("/responses")], "/")
-	}
-
-	switch {
-	case trimmedPath == "":
-		if !hasCompletionsSuffix && !hasResponsesSuffix {
-			trimmedPath = "/v1"
-		}
-	case strings.HasSuffix(strings.ToLower(trimmedPath), "/v1"):
-		// keep path as-is
-	case !hasCompletionsSuffix && !hasResponsesSuffix:
-		trimmedPath += "/v1"
-	}
-
-	parsed.Path = trimmedPath
-	parsed.RawPath = ""
-	parsed.RawQuery = ""
-	parsed.Fragment = ""
-
-	return strings.TrimRight(parsed.String(), "/"), nil
 }
 
 func buildAICompletionsEndpoint(baseURL string) (string, error) {
@@ -176,24 +118,237 @@ func buildAICompletionsEndpoint(baseURL string) (string, error) {
 	return endpoint, nil
 }
 
+func shouldUseGeminiAPI(endpoint, model string) bool {
+	lowerEndpoint := strings.ToLower(strings.TrimSpace(endpoint))
+	lowerModel := strings.ToLower(strings.TrimSpace(model))
+
+	if strings.Contains(lowerEndpoint, "/v1beta/models/") ||
+		strings.Contains(lowerEndpoint, ":streamgeneratecontent") ||
+		strings.Contains(lowerEndpoint, "generativelanguage.googleapis.com") ||
+		strings.Contains(lowerEndpoint, "/gemini") {
+		return true
+	}
+
+	if strings.HasPrefix(lowerModel, "gemini") &&
+		!strings.Contains(lowerEndpoint, "openai.com") &&
+		!strings.Contains(lowerEndpoint, "perplexity.ai") {
+		return true
+	}
+
+	return false
+}
+
+func normalizeGeminiModelName(model string) string {
+	trimmed := strings.TrimSpace(model)
+	trimmed = strings.TrimPrefix(trimmed, "models/")
+	return strings.TrimSpace(trimmed)
+}
+
+func stripKnownAIEndpointSuffix(path string) string {
+	trimmed := strings.TrimRight(path, "/")
+	lower := strings.ToLower(trimmed)
+
+	switch {
+	case strings.HasSuffix(lower, "/v1/chat/completions"):
+		return trimmed[:len(trimmed)-len("/v1/chat/completions")]
+	case strings.HasSuffix(lower, "/chat/completions"):
+		return trimmed[:len(trimmed)-len("/chat/completions")]
+	case strings.HasSuffix(lower, "/v1/responses"):
+		return trimmed[:len(trimmed)-len("/v1/responses")]
+	case strings.HasSuffix(lower, "/responses"):
+		return trimmed[:len(trimmed)-len("/responses")]
+	case strings.HasSuffix(lower, "/v1"):
+		return trimmed[:len(trimmed)-len("/v1")]
+	default:
+		return trimmed
+	}
+}
+
+func buildGeminiStreamEndpoint(endpoint, model string) (string, error) {
+	modelName := normalizeGeminiModelName(model)
+	if modelName == "" {
+		return "", errors.New("gemini model is required")
+	}
+
+	trimmed := strings.TrimSpace(endpoint)
+	if trimmed == "" {
+		return "", errors.New("gemini endpoint is required")
+	}
+	if !strings.Contains(trimmed, "://") {
+		trimmed = "https://" + trimmed
+	}
+
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return "", fmt.Errorf("invalid gemini endpoint: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("invalid gemini endpoint scheme: %s", parsed.Scheme)
+	}
+	if parsed.Host == "" {
+		return "", errors.New("invalid gemini endpoint host")
+	}
+
+	basePath := stripKnownAIEndpointSuffix(parsed.Path)
+	basePath = stripGeminiVersionSuffix(basePath)
+	lowerBasePath := strings.ToLower(basePath)
+	if idx := strings.Index(lowerBasePath, "/v1beta/models/"); idx >= 0 {
+		basePath = basePath[:idx]
+	}
+	lowerBasePath = strings.ToLower(basePath)
+	if idx := strings.Index(lowerBasePath, ":streamgeneratecontent"); idx >= 0 {
+		basePath = basePath[:idx]
+	}
+	lowerBasePath = strings.ToLower(basePath)
+	if idx := strings.Index(lowerBasePath, ":generatecontent"); idx >= 0 {
+		basePath = basePath[:idx]
+	}
+	basePath = strings.TrimRight(basePath, "/")
+
+	parsed.Path = basePath + "/v1beta/models/" + url.PathEscape(modelName) + ":streamGenerateContent"
+	if !strings.HasPrefix(parsed.Path, "/") {
+		parsed.Path = "/" + parsed.Path
+	}
+	query := parsed.Query()
+	query.Set("alt", "sse")
+	parsed.RawQuery = query.Encode()
+
+	return parsed.String(), nil
+}
+
+func stripGeminiVersionSuffix(path string) string {
+	trimmed := strings.TrimRight(path, "/")
+	lower := strings.ToLower(trimmed)
+
+	switch {
+	case strings.HasSuffix(lower, "/v1beta/openai"):
+		return trimmed[:len(trimmed)-len("/v1beta/openai")]
+	case strings.HasSuffix(lower, "/v1/openai"):
+		return trimmed[:len(trimmed)-len("/v1/openai")]
+	case strings.HasSuffix(lower, "/v1beta"):
+		return trimmed[:len(trimmed)-len("/v1beta")]
+	case strings.HasSuffix(lower, "/v1"):
+		return trimmed[:len(trimmed)-len("/v1")]
+	default:
+		return trimmed
+	}
+}
+
+func setAIAuthHeader(httpReq *http.Request, endpoint, model, apiKey string) {
+	if shouldUseGeminiAPI(endpoint, model) {
+		httpReq.Header.Set("x-goog-api-key", apiKey)
+		return
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+apiKey)
+}
+
+func maskSecretForLog(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return ""
+	}
+	if len(trimmed) <= 6 {
+		return strings.Repeat("*", len(trimmed))
+	}
+	return trimmed[:3] + strings.Repeat("*", len(trimmed)-6) + trimmed[len(trimmed)-3:]
+}
+
+func maskHeaderValueForLog(key, value string) string {
+	lowerKey := strings.ToLower(strings.TrimSpace(key))
+	trimmedValue := strings.TrimSpace(value)
+
+	switch lowerKey {
+	case "x-goog-api-key", "x-api-key":
+		return maskSecretForLog(trimmedValue)
+	case "authorization":
+		lowerValue := strings.ToLower(trimmedValue)
+		if strings.HasPrefix(lowerValue, "bearer ") && len(trimmedValue) >= len("Bearer ") {
+			token := strings.TrimSpace(trimmedValue[len("Bearer "):])
+			return "Bearer " + maskSecretForLog(token)
+		}
+		return maskSecretForLog(trimmedValue)
+	default:
+		return trimmedValue
+	}
+}
+
+func formatAIRequestForLog(httpReq *http.Request, body []byte) string {
+	logPayload := map[string]any{
+		"method": httpReq.Method,
+		"url":    httpReq.URL.String(),
+	}
+
+	headerKeys := make([]string, 0, len(httpReq.Header))
+	for key := range httpReq.Header {
+		headerKeys = append(headerKeys, key)
+	}
+	sort.Strings(headerKeys)
+
+	headers := make(map[string]string, len(httpReq.Header))
+	for _, key := range headerKeys {
+		values := httpReq.Header.Values(key)
+		joined := strings.TrimSpace(strings.Join(values, ", "))
+		headers[key] = maskHeaderValueForLog(key, joined)
+	}
+	logPayload["headers"] = headers
+
+	trimmedBody := bytes.TrimSpace(body)
+	if len(trimmedBody) > 0 {
+		var decoded any
+		if err := json.Unmarshal(trimmedBody, &decoded); err == nil {
+			logPayload["body"] = decoded
+		} else {
+			logPayload["body_raw"] = string(trimmedBody)
+		}
+	}
+
+	encoded, err := json.MarshalIndent(logPayload, "", "  ")
+	if err != nil {
+		return fmt.Sprintf(`{"error":"marshal ai request log failed","detail":%q}`, err.Error())
+	}
+	return string(encoded)
+}
+
+func logAIRequestJSON(logger *slog.Logger, httpReq *http.Request, body []byte) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Info("ai request json", "request", formatAIRequestForLog(httpReq, body))
+}
+
 func requestAIChatCompletionStream(ctx context.Context, req aiChatCompletionRequest, onDelta func(string) error) (aiChatCompletionResult, error) {
 	if onDelta == nil {
 		return requestAIChatCompletion(ctx, req)
 	}
 
-	if isGeminiRequest(req.EndpointURL, req.Model) {
-		return aiGeminiCompletion(ctx, req, onDelta)
+	// Bridge the external onDelta callback into req.OnDelta so that
+	// requestAIByChatCompletions relays SSE chunks through it.
+	streamed := false
+	var streamErr error
+	bridged := req
+	originalOnDelta := req.OnDelta
+	bridged.OnDelta = func(delta string) {
+		streamed = true
+		if originalOnDelta != nil {
+			originalOnDelta(delta)
+		}
+		if streamErr == nil {
+			streamErr = onDelta(delta)
+		}
 	}
 
-	if shouldUseAnthropicSDK(req.EndpointURL, req.Model) {
-		return requestAIByAnthropic(ctx, req, onDelta)
+	result, err := requestAIChatCompletion(ctx, bridged)
+	// Check callback error first — it takes priority.
+	if streamErr != nil {
+		return aiChatCompletionResult{}, fmt.Errorf("stream callback failed: %w", streamErr)
 	}
-
-	result, err := requestAIChatCompletion(ctx, req)
 	if err != nil {
 		return aiChatCompletionResult{}, err
 	}
-	if result.Content != "" {
+
+	// If content wasn't delivered through streaming (e.g., responses/hybrid
+	// fallback paths that don't call OnDelta), relay as a single chunk.
+	if !streamed && result.Content != "" {
 		if err := onDelta(result.Content); err != nil {
 			return aiChatCompletionResult{}, fmt.Errorf("stream callback failed: %w", err)
 		}
@@ -202,20 +357,21 @@ func requestAIChatCompletionStream(ctx context.Context, req aiChatCompletionRequ
 }
 
 func requestAIChatCompletion(ctx context.Context, req aiChatCompletionRequest) (aiChatCompletionResult, error) {
-	if isGeminiRequest(req.EndpointURL, req.Model) {
-		return aiGeminiCompletion(ctx, req, nil)
-	}
-
-	if shouldUseAnthropicSDK(req.EndpointURL, req.Model) {
-		return requestAIByAnthropic(ctx, req, nil)
-	}
-
 	logger := req.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
 
 	endpoint := strings.TrimSpace(req.EndpointURL)
+	if shouldUseGeminiAPI(endpoint, req.Model) {
+		geminiEndpoint, err := buildGeminiStreamEndpoint(endpoint, req.Model)
+		if err != nil {
+			return aiChatCompletionResult{}, err
+		}
+		logger.Info("ai analyze: use gemini stream endpoint", "endpoint", geminiEndpoint, "model", req.Model)
+		return requestAIByGeminiStream(ctx, req, geminiEndpoint)
+	}
+
 	if strings.HasSuffix(strings.ToLower(endpoint), "/responses") {
 		return requestAIByResponsesCandidates(ctx, req, endpoint)
 	}
@@ -369,136 +525,354 @@ func toAltResponsesEndpoint(endpoint string) string {
 func requestAIByChatCompletions(ctx context.Context, req aiChatCompletionRequest, endpoint string) (aiChatCompletionResult, error) {
 	logAIPromptDebug(req.Logger, endpoint, req.Model, req.SystemPrompt, req.UserPrompt)
 
-	baseURL, err := normalizeAIClientBaseURL(endpoint)
-	if err != nil {
-		return aiChatCompletionResult{}, err
+	logger := req.Logger
+	if logger == nil {
+		logger = slog.Default()
 	}
 
-	client := openai.NewClient(
-		openaioption.WithBaseURL(baseURL),
-		openaioption.WithAPIKey(req.APIKey),
-		openaioption.WithRequestTimeout(aiRequestTimeout),
-		openaioption.WithMaxRetries(0),
-	)
-
-	stream := client.Chat.Completions.NewStreaming(ctx, openai.ChatCompletionNewParams{
-		Messages: []openai.ChatCompletionMessageParamUnion{
-			openai.SystemMessage(req.SystemPrompt),
-			openai.UserMessage(req.UserPrompt),
+	// Build streaming request payload.
+	payload := map[string]any{
+		"model": req.Model,
+		"messages": []map[string]string{
+			{"role": "system", "content": req.SystemPrompt},
+			{"role": "user", "content": req.UserPrompt},
 		},
-		Model:               openai.ChatModel(req.Model),
-		Temperature:         openai.Float(0.2),
-		MaxCompletionTokens: openai.Int(aiMaxOutputTokens),
-		MaxTokens:           openai.Int(aiMaxOutputTokens),
-	})
-	defer func() { _ = stream.Close() }()
-
-	var (
-		model                    = strings.TrimSpace(req.Model)
-		builder                  strings.Builder
-		streamFallbackErrMessage string
-	)
-	for stream.Next() {
-		chunk := stream.Current()
-		if strings.TrimSpace(chunk.Model) != "" {
-			model = strings.TrimSpace(chunk.Model)
-		}
-		if len(chunk.Choices) == 0 {
-			continue
-		}
-		delta := chunk.Choices[0].Delta.Content
-		if delta == "" {
-			continue
-		}
-		builder.WriteString(delta)
-		if req.OnDelta != nil {
-			req.OnDelta(delta)
-		}
+		"temperature":           0.2,
+		"stream":                true,
+		"max_completion_tokens": aiMaxOutputTokens,
+		"max_tokens":            aiMaxOutputTokens,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return aiChatCompletionResult{}, fmt.Errorf("marshal ai request: %w", err)
 	}
 
-	if streamErr := stream.Err(); streamErr != nil {
-		if isTimeoutError(streamErr) {
-			return aiChatCompletionResult{}, fmt.Errorf("ai upstream timeout on %s; try a faster model or retry later", endpoint)
+	requestCtx, cancel := context.WithTimeout(ctx, aiRequestTimeout)
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return aiChatCompletionResult{}, fmt.Errorf("build ai request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	setAIAuthHeader(httpReq, endpoint, req.Model, req.APIKey)
+	logAIRequestJSON(logger, httpReq, body)
+
+	client := &http.Client{Timeout: aiRequestTimeout}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return aiChatCompletionResult{}, fmt.Errorf("ai request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// Non-2xx: extract error message.
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxAIResponseBodySize))
+		logAIRawResponseDebug(logger, endpoint, resp.StatusCode, respBody)
+		message := parseAIErrorMessage(respBody)
+		if message == "" {
+			message = strings.TrimSpace(string(respBody))
 		}
-		if shouldFallbackToNonStreaming(streamErr) {
-			streamFallbackErrMessage = strings.TrimSpace(streamErr.Error())
-			logger := req.Logger
-			if logger == nil {
-				logger = slog.Default()
+		if message == "" {
+			message = fmt.Sprintf("status %d", resp.StatusCode)
+		}
+		return aiChatCompletionResult{}, fmt.Errorf("ai upstream error: %s", message)
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+
+	// SSE streaming response.
+	if strings.Contains(contentType, "text/event-stream") {
+		model := strings.TrimSpace(req.Model)
+		fullContent, parsedModel, err := parseSSEStream(resp.Body, func(m, delta string) error {
+			if m != "" {
+				model = m
 			}
-			logger.Warn("ai analyze: chat stream decode failed, fallback to one-shot", "endpoint", endpoint, "err", streamErr)
+			if req.OnDelta != nil {
+				req.OnDelta(delta)
+			}
+			return nil
+		})
+		if err != nil {
+			if isTimeoutError(err) {
+				return aiChatCompletionResult{}, fmt.Errorf("ai upstream timeout on %s; try a faster model or retry later", endpoint)
+			}
+			// Stream decode failed — try one-shot fallback.
+			logger.Warn("ai analyze: chat stream decode failed, fallback to one-shot", "endpoint", endpoint, "err", err)
 		} else {
-			var upstreamErr *openai.Error
-			if errors.As(streamErr, &upstreamErr) {
-				message := strings.TrimSpace(upstreamErr.Message)
-				if message == "" {
-					message = strings.TrimSpace(upstreamErr.RawJSON())
+			content := strings.TrimSpace(fullContent)
+			if content != "" {
+				if parsedModel != "" {
+					model = parsedModel
 				}
-				if message == "" {
-					message = strings.TrimSpace(streamErr.Error())
+				if model == "" {
+					model = req.Model
 				}
-				return aiChatCompletionResult{}, fmt.Errorf("ai upstream error: %s", message)
+				return aiChatCompletionResult{Model: model, Content: content}, nil
 			}
-			return aiChatCompletionResult{}, fmt.Errorf("ai request failed: %w", streamErr)
+		}
+	} else if strings.Contains(contentType, "application/json") {
+		// Non-streaming JSON response (some providers ignore stream:true).
+		respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxAIResponseBodySize))
+		if err != nil {
+			return aiChatCompletionResult{}, fmt.Errorf("read ai response: %w", err)
+		}
+		logAIRawResponseDebug(logger, endpoint, resp.StatusCode, respBody)
+		model, content, err := decodeAIModelAndContent(respBody)
+		if err == nil && content != "" {
+			if req.OnDelta != nil {
+				req.OnDelta(content)
+			}
+			return aiChatCompletionResult{Model: model, Content: content}, nil
+		}
+		// JSON decode failed or content empty — fall through to one-shot retry.
+		if err != nil {
+			logger.Warn("ai analyze: json response decode failed, fallback to one-shot", "endpoint", endpoint, "err", err)
 		}
 	}
 
-	content := strings.TrimSpace(builder.String())
-	if content != "" {
+	// Fallback: retry as non-streaming one-shot.
+	payload["stream"] = false
+	return requestAIByPayload(ctx, req, endpoint, payload)
+}
+
+func buildGeminiStreamPayload(req aiChatCompletionRequest) map[string]any {
+	payload := map[string]any{
+		"contents": []map[string]any{
+			{
+				"parts": []map[string]string{
+					{"text": req.UserPrompt},
+				},
+			},
+		},
+	}
+
+	if strings.TrimSpace(req.SystemPrompt) != "" {
+		payload["systemInstruction"] = map[string]any{
+			"parts": []map[string]string{
+				{"text": req.SystemPrompt},
+			},
+		}
+	}
+
+	return payload
+}
+
+func requestAIByGeminiStream(ctx context.Context, req aiChatCompletionRequest, endpoint string) (aiChatCompletionResult, error) {
+	logAIPromptDebug(req.Logger, endpoint, req.Model, req.SystemPrompt, req.UserPrompt)
+
+	logger := req.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	payload := buildGeminiStreamPayload(req)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return aiChatCompletionResult{}, fmt.Errorf("marshal gemini request: %w", err)
+	}
+
+	requestCtx, cancel := context.WithTimeout(ctx, aiRequestTimeout)
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(requestCtx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return aiChatCompletionResult{}, fmt.Errorf("build gemini request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
+	setAIAuthHeader(httpReq, endpoint, req.Model, req.APIKey)
+	logAIRequestJSON(logger, httpReq, body)
+
+	client := &http.Client{Timeout: aiRequestTimeout}
+	resp, err := client.Do(httpReq)
+	if err != nil {
+		return aiChatCompletionResult{}, fmt.Errorf("ai request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, maxAIResponseBodySize))
+		logAIRawResponseDebug(logger, endpoint, resp.StatusCode, respBody)
+		message := parseAIErrorMessage(respBody)
+		if message == "" {
+			message = strings.TrimSpace(string(respBody))
+		}
+		if message == "" {
+			message = fmt.Sprintf("status %d", resp.StatusCode)
+		}
+		return aiChatCompletionResult{}, fmt.Errorf("ai upstream error: %s", message)
+	}
+
+	contentType := resp.Header.Get("Content-Type")
+	model := strings.TrimSpace(req.Model)
+	if strings.Contains(contentType, "text/event-stream") {
+		fullContent, parsedModel, err := parseSSEStream(resp.Body, func(m, delta string) error {
+			if m != "" {
+				model = m
+			}
+			if req.OnDelta != nil {
+				req.OnDelta(delta)
+			}
+			return nil
+		})
+		if err != nil {
+			if isTimeoutError(err) {
+				return aiChatCompletionResult{}, fmt.Errorf("ai upstream timeout on %s; try a faster model or retry later", endpoint)
+			}
+			return aiChatCompletionResult{}, err
+		}
+		content := strings.TrimSpace(fullContent)
+		if content == "" {
+			return aiChatCompletionResult{}, errors.New("ai response content is empty")
+		}
+		if parsedModel != "" {
+			model = parsedModel
+		}
 		if model == "" {
 			model = req.Model
 		}
 		return aiChatCompletionResult{Model: model, Content: content}, nil
 	}
 
-	// Fallback for providers/tests that ignore stream and return one-shot JSON.
-	resp, err := client.Chat.Completions.New(ctx, openai.ChatCompletionNewParams{
-		Messages: []openai.ChatCompletionMessageParamUnion{
-			openai.SystemMessage(req.SystemPrompt),
-			openai.UserMessage(req.UserPrompt),
-		},
-		Model:               openai.ChatModel(req.Model),
-		Temperature:         openai.Float(0.2),
-		MaxCompletionTokens: openai.Int(aiMaxOutputTokens),
-		MaxTokens:           openai.Int(aiMaxOutputTokens),
-	})
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxAIResponseBodySize))
 	if err != nil {
-		if streamFallbackErrMessage != "" {
-			return aiChatCompletionResult{}, fmt.Errorf("ai request failed: stream decode error: %s; one-shot retry failed: %w", streamFallbackErrMessage, err)
-		}
-		if isTimeoutError(err) {
-			return aiChatCompletionResult{}, fmt.Errorf("ai upstream timeout on %s; try a faster model or retry later", endpoint)
-		}
-		var upstreamErr *openai.Error
-		if errors.As(err, &upstreamErr) {
-			message := strings.TrimSpace(upstreamErr.Message)
-			if message == "" {
-				message = strings.TrimSpace(upstreamErr.RawJSON())
-			}
-			if message == "" {
-				message = strings.TrimSpace(err.Error())
-			}
-			return aiChatCompletionResult{}, fmt.Errorf("ai upstream error: %s", message)
-		}
-		return aiChatCompletionResult{}, fmt.Errorf("ai request failed: %w", err)
+		return aiChatCompletionResult{}, fmt.Errorf("read ai response: %w", err)
 	}
+	logAIRawResponseDebug(logger, endpoint, resp.StatusCode, respBody)
 
-	if resp != nil {
-		if strings.TrimSpace(resp.Model) != "" {
-			model = strings.TrimSpace(resp.Model)
-		}
-		if len(resp.Choices) > 0 {
-			content = strings.TrimSpace(resp.Choices[0].Message.Content)
-		}
+	decodedModel, content, err := decodeAIModelAndContent(respBody)
+	if err != nil {
+		return aiChatCompletionResult{}, err
 	}
 	if content == "" {
-		return aiChatCompletionResult{}, fmt.Errorf("ai response content is empty")
+		return aiChatCompletionResult{}, errors.New("ai response content is empty")
+	}
+	if decodedModel != "" {
+		model = decodedModel
 	}
 	if req.OnDelta != nil {
 		req.OnDelta(content)
 	}
-
 	return aiChatCompletionResult{Model: model, Content: content}, nil
+}
+
+// sseChunk represents one SSE chunk in the OpenAI chat completions streaming format.
+type sseChunk struct {
+	Model   string `json:"model"`
+	Choices []struct {
+		Delta struct {
+			Content string `json:"content"`
+		} `json:"delta"`
+	} `json:"choices"`
+}
+
+type geminiSSEChunk struct {
+	ModelVersion string `json:"modelVersion"`
+	Candidates   []struct {
+		Content struct {
+			Parts []struct {
+				Text string `json:"text"`
+			} `json:"parts"`
+		} `json:"content"`
+	} `json:"candidates"`
+}
+
+// parseSSEStream reads an SSE stream in OpenAI/Gemini-compatible formats and
+// calls onChunk for each content delta. It returns the accumulated content and
+// the last seen model identifier.
+func parseSSEStream(body io.Reader, onChunk func(model, delta string) error) (string, string, error) {
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
+
+	var (
+		builder strings.Builder
+		model   string
+	)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+
+		// Skip empty lines, event lines, and comment lines.
+		if line == "" || strings.HasPrefix(line, "event:") || strings.HasPrefix(line, ":") {
+			continue
+		}
+
+		if !strings.HasPrefix(line, "data: ") && !strings.HasPrefix(line, "data:") {
+			continue
+		}
+
+		data := strings.TrimPrefix(line, "data: ")
+		data = strings.TrimPrefix(data, "data:")
+		data = strings.TrimSpace(data)
+
+		if data == "[DONE]" {
+			break
+		}
+
+		chunkModel, delta, handled := extractOpenAIStyleSSEChunk(data)
+		if !handled {
+			chunkModel, delta, handled = extractGeminiStyleSSEChunk(data)
+		}
+		if !handled {
+			slog.Default().Warn("ai sse: failed to parse chunk", "data", data)
+			continue
+		}
+		if chunkModel != "" {
+			model = chunkModel
+		}
+		if delta == "" {
+			continue
+		}
+
+		builder.WriteString(delta)
+		if err := onChunk(model, delta); err != nil {
+			return builder.String(), model, fmt.Errorf("stream callback failed: %w", err)
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		return builder.String(), model, fmt.Errorf("ai sse read error: %w", err)
+	}
+
+	return builder.String(), model, nil
+}
+
+func extractOpenAIStyleSSEChunk(data string) (string, string, bool) {
+	var chunk sseChunk
+	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		return "", "", false
+	}
+
+	model := strings.TrimSpace(chunk.Model)
+	if len(chunk.Choices) == 0 {
+		return model, "", model != ""
+	}
+	return model, chunk.Choices[0].Delta.Content, true
+}
+
+func extractGeminiStyleSSEChunk(data string) (string, string, bool) {
+	var chunk geminiSSEChunk
+	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
+		return "", "", false
+	}
+
+	model := strings.TrimSpace(chunk.ModelVersion)
+	if len(chunk.Candidates) == 0 {
+		return model, "", model != ""
+	}
+
+	var builder strings.Builder
+	for _, candidate := range chunk.Candidates {
+		for _, part := range candidate.Content.Parts {
+			if part.Text == "" {
+				continue
+			}
+			builder.WriteString(part.Text)
+		}
+	}
+
+	return model, builder.String(), true
 }
 
 func requestAIByResponses(ctx context.Context, req aiChatCompletionRequest, endpoint string) (aiChatCompletionResult, error) {
@@ -551,7 +925,8 @@ func requestAIByPayload(ctx context.Context, req aiChatCompletionRequest, endpoi
 		return aiChatCompletionResult{}, fmt.Errorf("build ai request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+req.APIKey)
+	setAIAuthHeader(httpReq, endpoint, req.Model, req.APIKey)
+	logAIRequestJSON(req.Logger, httpReq, body)
 
 	respBody, err := executeAIRequest(httpReq, req.Logger)
 	if err != nil {
@@ -601,11 +976,17 @@ func decodeAIModelAndContent(body []byte) (string, string, error) {
 	}
 
 	model := asString(raw["model"])
+	if model == "" {
+		model = asString(raw["modelVersion"])
+	}
 	if outputText := asString(raw["output_text"]); outputText != "" {
 		return model, outputText, nil
 	}
 
 	if text := extractChoicesContent(raw["choices"]); text != "" {
+		return model, text, nil
+	}
+	if text := extractCandidatesContent(raw["candidates"]); text != "" {
 		return model, text, nil
 	}
 	if text := extractOutputContent(raw["output"]); text != "" {
@@ -656,6 +1037,23 @@ func extractOutputContent(value any) string {
 	return ""
 }
 
+func extractCandidatesContent(value any) string {
+	candidates, ok := value.([]any)
+	if !ok {
+		return ""
+	}
+	for _, candidate := range candidates {
+		candidateMap, ok := candidate.(map[string]any)
+		if !ok {
+			continue
+		}
+		if text := extractText(candidateMap["content"]); text != "" {
+			return text
+		}
+	}
+	return ""
+}
+
 func extractText(value any) string {
 	switch typed := value.(type) {
 	case string:
@@ -674,6 +1072,24 @@ func extractText(value any) string {
 		}
 		if text := asString(typed["value"]); text != "" {
 			return text
+		}
+		if parts, ok := typed["parts"].([]any); ok {
+			var builder strings.Builder
+			for _, part := range parts {
+				partMap, ok := part.(map[string]any)
+				if ok {
+					if text := asString(partMap["text"]); text != "" {
+						builder.WriteString(text)
+						continue
+					}
+				}
+				if text := extractText(part); text != "" {
+					builder.WriteString(text)
+				}
+			}
+			if builder.Len() > 0 {
+				return strings.TrimSpace(builder.String())
+			}
 		}
 		if text := asString(typed["content"]); text != "" {
 			return text
