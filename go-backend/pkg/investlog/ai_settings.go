@@ -6,7 +6,8 @@ import (
 )
 
 const (
-	defaultAISettingsBaseURL     = "https://api.openai.com/v1"
+	defaultAISettingsBaseURL     = defaultAIBaseURL
+	defaultAISettingsModel       = defaultAIModel
 	defaultAISettingsRiskProfile = "balanced"
 	defaultAISettingsHorizon     = "medium"
 	defaultAISettingsAdviceStyle = "balanced"
@@ -33,7 +34,7 @@ var validAIAdviceStyles = map[string]struct{}{
 func defaultAISettings() AISettings {
 	return AISettings{
 		BaseURL:         defaultAISettingsBaseURL,
-		Model:           "",
+		Model:           defaultAISettingsModel,
 		RiskProfile:     defaultAISettingsRiskProfile,
 		Horizon:         defaultAISettingsHorizon,
 		AdviceStyle:     defaultAISettingsAdviceStyle,
@@ -49,11 +50,8 @@ func trimTrailingSlash(value string) string {
 
 func normalizeAISettings(settings AISettings) AISettings {
 	normalized := settings
-	normalized.BaseURL = trimTrailingSlash(normalized.BaseURL)
-	if normalized.BaseURL == "" {
-		normalized.BaseURL = defaultAISettingsBaseURL
-	}
-	normalized.Model = strings.TrimSpace(normalized.Model)
+	normalized.BaseURL = normalizeAIBaseURL(normalized.BaseURL)
+	normalized.Model = normalizeAIModel(normalized.Model)
 	normalized.RiskProfile = strings.ToLower(strings.TrimSpace(normalized.RiskProfile))
 	normalized.Horizon = strings.ToLower(strings.TrimSpace(normalized.Horizon))
 	normalized.AdviceStyle = strings.ToLower(strings.TrimSpace(normalized.AdviceStyle))

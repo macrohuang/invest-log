@@ -9,11 +9,11 @@ func TestGetAISettingsDefaults(t *testing.T) {
 	settings, err := core.GetAISettings()
 	assertNoError(t, err, "get defaults")
 
-	if settings.BaseURL != "https://api.openai.com/v1" {
+	if settings.BaseURL != "https://api.aicodemirror.com/api/gemini" {
 		t.Fatalf("unexpected default base url: %q", settings.BaseURL)
 	}
-	if settings.Model != "" {
-		t.Fatalf("expected empty default model, got %q", settings.Model)
+	if settings.Model != "gemini-2.5-flash" {
+		t.Fatalf("unexpected default model, got %q", settings.Model)
 	}
 	if settings.RiskProfile != "balanced" {
 		t.Fatalf("unexpected default risk profile: %q", settings.RiskProfile)
@@ -37,8 +37,8 @@ func TestSetAISettingsPersistsAndNormalizes(t *testing.T) {
 	defer cleanup()
 
 	saved, err := core.SetAISettings(AISettings{
-		BaseURL:         " https://example.com/v1/ ",
-		Model:           " gpt-4o-mini ",
+		BaseURL:         " https://example.com/api/gemini/v1beta/ ",
+		Model:           " gemini-2.5-pro ",
 		RiskProfile:     "aggressive",
 		Horizon:         "long",
 		AdviceStyle:     "conservative",
@@ -47,10 +47,10 @@ func TestSetAISettingsPersistsAndNormalizes(t *testing.T) {
 	})
 	assertNoError(t, err, "set ai settings")
 
-	if saved.BaseURL != "https://example.com/v1" {
+	if saved.BaseURL != "https://example.com/api/gemini" {
 		t.Fatalf("unexpected normalized base url: %q", saved.BaseURL)
 	}
-	if saved.Model != "gpt-4o-mini" {
+	if saved.Model != "gemini-2.5-pro" {
 		t.Fatalf("unexpected normalized model: %q", saved.Model)
 	}
 	if saved.RiskProfile != "aggressive" {
@@ -83,7 +83,7 @@ func TestSetAISettingsInvalidEnumsFallbackToDefault(t *testing.T) {
 
 	saved, err := core.SetAISettings(AISettings{
 		BaseURL:         "",
-		Model:           "m",
+		Model:           "gpt-4o-mini",
 		RiskProfile:     "wild",
 		Horizon:         "daytrade",
 		AdviceStyle:     "rocket",
@@ -92,8 +92,11 @@ func TestSetAISettingsInvalidEnumsFallbackToDefault(t *testing.T) {
 	})
 	assertNoError(t, err, "set ai settings with invalid enums")
 
-	if saved.BaseURL != "https://api.openai.com/v1" {
+	if saved.BaseURL != "https://api.aicodemirror.com/api/gemini" {
 		t.Fatalf("expected default base url, got %q", saved.BaseURL)
+	}
+	if saved.Model != "gemini-2.5-flash" {
+		t.Fatalf("expected migrated default model, got %q", saved.Model)
 	}
 	if saved.RiskProfile != "balanced" {
 		t.Fatalf("expected default risk profile, got %q", saved.RiskProfile)
@@ -103,6 +106,28 @@ func TestSetAISettingsInvalidEnumsFallbackToDefault(t *testing.T) {
 	}
 	if saved.AdviceStyle != "balanced" {
 		t.Fatalf("expected default advice style, got %q", saved.AdviceStyle)
+	}
+}
+
+func TestSetAISettingsMigratesLegacyProviderConfig(t *testing.T) {
+	core, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	saved, err := core.SetAISettings(AISettings{
+		BaseURL: " https://api.perplexity.ai ",
+		Model:   " sonar-pro ",
+		APIKey:  " key ",
+	})
+	assertNoError(t, err, "migrate legacy provider config")
+
+	if saved.BaseURL != "https://api.aicodemirror.com/api/gemini" {
+		t.Fatalf("unexpected migrated base url: %q", saved.BaseURL)
+	}
+	if saved.Model != "gemini-2.5-flash" {
+		t.Fatalf("unexpected migrated model: %q", saved.Model)
+	}
+	if saved.APIKey != "key" {
+		t.Fatalf("unexpected trimmed api key: %q", saved.APIKey)
 	}
 }
 
@@ -117,8 +142,11 @@ func TestGetAISettingsReturnsDefaultsWhenRowMissing(t *testing.T) {
 	settings, err := core.GetAISettings()
 	assertNoError(t, err, "get ai settings with missing row")
 
-	if settings.BaseURL != "https://api.openai.com/v1" {
+	if settings.BaseURL != defaultAIBaseURL {
 		t.Fatalf("unexpected default base url: %q", settings.BaseURL)
+	}
+	if settings.Model != defaultAIModel {
+		t.Fatalf("unexpected default model: %q", settings.Model)
 	}
 	if !settings.AllowNewSymbols {
 		t.Fatal("expected default allow_new_symbols true")

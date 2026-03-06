@@ -38,7 +38,7 @@ func TestNormalizeAllocationAdviceRequest(t *testing.T) {
 		if req.BaseURL != defaultAIBaseURL {
 			t.Fatalf("expected default base url, got %q", req.BaseURL)
 		}
-		if req.APIKey != "key" || req.Model != "model" {
+		if req.APIKey != "key" || req.Model != defaultAIModel {
 			t.Fatalf("expected trimmed api key/model, got api_key=%q model=%q", req.APIKey, req.Model)
 		}
 		if len(req.Currencies) != 2 || req.Currencies[0] != "USD" || req.Currencies[1] != "HKD" {

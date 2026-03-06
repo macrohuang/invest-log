@@ -177,7 +177,7 @@ func (c *Core) getAllocationAdvice(req AllocationAdviceRequest, onDelta func(str
 }
 
 func normalizeAllocationAdviceRequest(req *AllocationAdviceRequest) error {
-	req.BaseURL = strings.TrimSpace(req.BaseURL)
+	req.BaseURL = normalizeAIBaseURL(req.BaseURL)
 	req.APIKey = strings.TrimSpace(req.APIKey)
 	req.Model = strings.TrimSpace(req.Model)
 
@@ -187,9 +187,7 @@ func normalizeAllocationAdviceRequest(req *AllocationAdviceRequest) error {
 	if req.Model == "" {
 		return fmt.Errorf("model is required")
 	}
-	if req.BaseURL == "" {
-		req.BaseURL = defaultAIBaseURL
-	}
+	req.Model = normalizeAIModel(req.Model)
 
 	if len(req.Currencies) == 0 {
 		req.Currencies = []string{"CNY", "USD", "HKD"}

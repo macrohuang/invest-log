@@ -67,15 +67,12 @@ func TestSymbolAnalysisEndpoint_Success(t *testing.T) {
 	defer server.Close()
 
 	rr := doRequest(router, http.MethodPost, "/api/ai/symbol-analysis", map[string]any{
-		"base_url":           server.URL,
-		"api_key":            "test-key",
-		"model":              "mock-model",
-		"retrieval_base_url": server.URL,
-		"retrieval_api_key":  "pplx-key",
-		"retrieval_model":    "sonar-pro",
-		"symbol":             "AAPL",
-		"currency":           "USD",
-		"strategy_prompt":    "长期持有科技股",
+		"base_url":        server.URL,
+		"api_key":         "test-key",
+		"model":           "gemini-2.5-flash",
+		"symbol":          "AAPL",
+		"currency":        "USD",
+		"strategy_prompt": "长期持有科技股",
 	})
 	if rr.Code != http.StatusOK {
 		t.Fatalf("POST /api/ai/symbol-analysis: expected 200, got %d, body: %s", rr.Code, rr.Body.String())
@@ -91,6 +88,23 @@ func TestSymbolAnalysisEndpoint_Success(t *testing.T) {
 	}
 	if synthesis["overall_rating"] == nil {
 		t.Fatalf("expected synthesis.overall_rating, got %v", synthesis)
+	}
+}
+
+func TestSymbolAnalysisEndpoint_RejectsLegacyRetrievalFields(t *testing.T) {
+	router, cleanup := setupTestRouter(t)
+	defer cleanup()
+
+	rr := doRequest(router, http.MethodPost, "/api/ai/symbol-analysis", map[string]any{
+		"base_url":           "https://api.aicodemirror.com/api/gemini",
+		"api_key":            "test-key",
+		"model":              "gemini-2.5-flash",
+		"retrieval_base_url": "https://api.perplexity.ai",
+		"symbol":             "AAPL",
+		"currency":           "USD",
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("legacy retrieval fields: expected 400, got %d, body: %s", rr.Code, rr.Body.String())
 	}
 }
 
@@ -180,7 +194,7 @@ func TestGetSymbolAnalysisHistory_Limit(t *testing.T) {
 	rr := doRequest(router, http.MethodPost, "/api/ai/symbol-analysis", map[string]any{
 		"base_url": server.URL,
 		"api_key":  "test-key",
-		"model":    "mock-model",
+		"model":    "gemini-2.5-flash",
 		"symbol":   "AAPL",
 		"currency": "USD",
 	})

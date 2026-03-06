@@ -54,21 +54,20 @@ func (c *Core) analyzeSymbol(req SymbolAnalysisRequest, onDelta func(string)) (*
 
 	// Fetch and summarize external data (graceful degradation on failure).
 	var enrichedContext string
-	summaryEndpoint, summaryAPIKey, summaryModel := c.resolveExternalSummaryProvider(normalizedReq, endpointURL)
 	externalData := fetchExternalDataFn(ctx, normalizedReq.Symbol, normalizedReq.Currency, c.Logger())
 	if externalData != nil {
-		summary := summarizeExternalDataFn(ctx, externalData, summaryEndpoint, summaryAPIKey, summaryModel, c.Logger())
+		summary := summarizeExternalDataFn(ctx, externalData, endpointURL, normalizedReq.APIKey, normalizedReq.Model, c.Logger())
 		if summary != "" {
 			enrichedContext = summary
 			externalData.Summary = summary
 		}
 	}
-	if strings.TrimSpace(enrichedContext) == "" && isResolvedRetrievalProvider(normalizedReq, summaryEndpoint, summaryAPIKey, summaryModel) {
+	if strings.TrimSpace(enrichedContext) == "" {
 		retrievalContext := c.retrieveLatestSymbolContext(
 			ctx,
-			summaryEndpoint,
-			summaryAPIKey,
-			summaryModel,
+			endpointURL,
+			normalizedReq.APIKey,
+			normalizedReq.Model,
 			symbolContextJSON,
 			normalizedReq.Symbol,
 			normalizedReq.Currency,
@@ -191,49 +190,6 @@ func (c *Core) analyzeSymbol(req SymbolAnalysisRequest, onDelta func(string)) (*
 	}
 
 	return result, nil
-}
-
-func (c *Core) resolveExternalSummaryProvider(req SymbolAnalysisRequest, defaultEndpoint string) (string, string, string) {
-	endpoint := defaultEndpoint
-	apiKey := req.APIKey
-	model := req.Model
-
-	if strings.TrimSpace(req.RetrievalBaseURL) == "" ||
-		strings.TrimSpace(req.RetrievalAPIKey) == "" ||
-		strings.TrimSpace(req.RetrievalModel) == "" {
-		return endpoint, apiKey, model
-	}
-
-	retrievalEndpoint, err := buildAICompletionsEndpoint(req.RetrievalBaseURL)
-	if err != nil {
-		c.Logger().Warn("symbol analysis retrieval config invalid, fallback to primary model",
-			"base_url", req.RetrievalBaseURL,
-			"model", req.RetrievalModel,
-			"err", err,
-		)
-		return endpoint, apiKey, model
-	}
-
-	return retrievalEndpoint, req.RetrievalAPIKey, req.RetrievalModel
-}
-
-func isRetrievalProviderConfigured(req SymbolAnalysisRequest) bool {
-	return strings.TrimSpace(req.RetrievalBaseURL) != "" &&
-		strings.TrimSpace(req.RetrievalAPIKey) != "" &&
-		strings.TrimSpace(req.RetrievalModel) != ""
-}
-
-func isResolvedRetrievalProvider(req SymbolAnalysisRequest, endpoint, apiKey, model string) bool {
-	if !isRetrievalProviderConfigured(req) {
-		return false
-	}
-	retrievalEndpoint, err := buildAICompletionsEndpoint(req.RetrievalBaseURL)
-	if err != nil {
-		return false
-	}
-	return endpoint == retrievalEndpoint &&
-		apiKey == req.RetrievalAPIKey &&
-		model == req.RetrievalModel
 }
 
 func (c *Core) retrieveLatestSymbolContext(

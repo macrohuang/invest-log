@@ -159,8 +159,8 @@ func initDatabase(db *sql.DB) error {
 	if err := exec(tx, `
 		CREATE TABLE IF NOT EXISTS ai_settings (
 			id INTEGER PRIMARY KEY CHECK(id = 1),
-			base_url TEXT NOT NULL DEFAULT 'https://api.openai.com/v1',
-			model TEXT NOT NULL DEFAULT '',
+			base_url TEXT NOT NULL DEFAULT 'https://api.aicodemirror.com/api/gemini',
+			model TEXT NOT NULL DEFAULT 'gemini-2.5-flash',
 			risk_profile TEXT NOT NULL DEFAULT 'balanced',
 			horizon TEXT NOT NULL DEFAULT 'medium',
 			advice_style TEXT NOT NULL DEFAULT 'balanced',

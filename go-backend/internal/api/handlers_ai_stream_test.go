@@ -275,14 +275,11 @@ func TestAISymbolAnalysisStreamEndpoint_Success(t *testing.T) {
 	defer server.Close()
 
 	rr := doStreamRequest(t, router, http.MethodPost, "/api/ai/symbol-analysis/stream", map[string]any{
-		"base_url":           server.URL,
-		"api_key":            "key",
-		"model":              "mock-model",
-		"retrieval_base_url": server.URL,
-		"retrieval_api_key":  "pplx-key",
-		"retrieval_model":    "sonar-pro",
-		"symbol":             "AAPL",
-		"currency":           "USD",
+		"base_url": server.URL,
+		"api_key":  "key",
+		"model":    "gemini-2.5-flash",
+		"symbol":   "AAPL",
+		"currency": "USD",
 	})
 	if rr.status != http.StatusOK {
 		t.Fatalf("expected 200, got %d, body: %s", rr.status, rr.body)
@@ -300,6 +297,23 @@ func TestAISymbolAnalysisStreamEndpoint_Success(t *testing.T) {
 	}
 	if !strings.Contains(body, "synthesis") {
 		t.Fatalf("expected synthesis in stream result, got body: %s", body)
+	}
+}
+
+func TestSymbolAnalysisStreamEndpoint_RejectsLegacyRetrievalFields(t *testing.T) {
+	router, cleanup := setupTestRouter(t)
+	defer cleanup()
+
+	rr := doStreamRequest(t, router, http.MethodPost, "/api/ai/symbol-analysis/stream", map[string]any{
+		"base_url":           "https://api.aicodemirror.com/api/gemini",
+		"api_key":            "key",
+		"model":              "gemini-2.5-flash",
+		"retrieval_base_url": "https://api.perplexity.ai",
+		"symbol":             "AAPL",
+		"currency":           "USD",
+	})
+	if rr.status != http.StatusBadRequest {
+		t.Fatalf("legacy retrieval fields: expected 400, got %d, body: %s", rr.status, rr.body)
 	}
 }
 
@@ -336,12 +350,12 @@ func TestAIAllocationAdviceStreamEndpoint_Success(t *testing.T) {
 	defer cleanup()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/chat/completions" {
+		if r.URL.Path != "/v1beta/models/gemini-2.5-flash:streamGenerateContent" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"mock-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"{\\\"summary\\\":\\\"ok\\\",\\\"rationale\\\":\\\"r\\\",\\\"allocations\\\":[\"},\"finish_reason\":null}]}\n\n"))
-		_, _ = w.Write([]byte("data: {\"id\":\"c1\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"mock-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"{\\\"currency\\\":\\\"USD\\\",\\\"asset_type\\\":\\\"stock\\\",\\\"label\\\":\\\"股票\\\",\\\"min_percent\\\":10,\\\"max_percent\\\":30,\\\"rationale\\\":\\\"x\\\"}],\\\"disclaimer\\\":\\\"仅供参考\\\"}\"},\"finish_reason\":null}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"{\\\"summary\\\":\\\"ok\\\",\\\"rationale\\\":\\\"r\\\",\\\"allocations\\\":[\"}]}}],\"modelVersion\":\"gemini-2.5-flash\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"{\\\"currency\\\":\\\"USD\\\",\\\"asset_type\\\":\\\"stock\\\",\\\"label\\\":\\\"股票\\\",\\\"min_percent\\\":10,\\\"max_percent\\\":30,\\\"rationale\\\":\\\"x\\\"}],\\\"disclaimer\\\":\\\"仅供参考\\\"}\"}]}}],\"modelVersion\":\"gemini-2.5-flash\"}\n\n"))
 		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer server.Close()
@@ -349,7 +363,7 @@ func TestAIAllocationAdviceStreamEndpoint_Success(t *testing.T) {
 	rr := doStreamRequest(t, router, http.MethodPost, "/api/ai/allocation-advice/stream", map[string]any{
 		"base_url":         server.URL,
 		"api_key":          "key",
-		"model":            "mock-model",
+		"model":            "gemini-2.5-flash",
 		"age_range":        "30s",
 		"invest_goal":      "balanced",
 		"risk_tolerance":   "balanced",

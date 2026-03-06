@@ -508,18 +508,15 @@ func (h *handler) analyzeSymbolWithAI(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result, err := h.core.AnalyzeSymbol(investlog.SymbolAnalysisRequest{
-		BaseURL:          payload.BaseURL,
-		APIKey:           payload.APIKey,
-		Model:            payload.Model,
-		RetrievalBaseURL: payload.RetrievalBaseURL,
-		RetrievalAPIKey:  payload.RetrievalAPIKey,
-		RetrievalModel:   payload.RetrievalModel,
-		Symbol:           payload.Symbol,
-		Currency:         payload.Currency,
-		RiskProfile:      payload.RiskProfile,
-		Horizon:          payload.Horizon,
-		AdviceStyle:      payload.AdviceStyle,
-		StrategyPrompt:   payload.StrategyPrompt,
+		BaseURL:        payload.BaseURL,
+		APIKey:         payload.APIKey,
+		Model:          payload.Model,
+		Symbol:         payload.Symbol,
+		Currency:       payload.Currency,
+		RiskProfile:    payload.RiskProfile,
+		Horizon:        payload.Horizon,
+		AdviceStyle:    payload.AdviceStyle,
+		StrategyPrompt: payload.StrategyPrompt,
 	})
 	if err != nil {
 		h.logger.Error("ai symbol analysis failed",
@@ -581,18 +578,15 @@ func (h *handler) analyzeSymbolWithAIStream(w http.ResponseWriter, r *http.Reque
 	}
 
 	result, err := h.core.AnalyzeSymbolWithStream(investlog.SymbolAnalysisRequest{
-		BaseURL:          payload.BaseURL,
-		APIKey:           payload.APIKey,
-		Model:            payload.Model,
-		RetrievalBaseURL: payload.RetrievalBaseURL,
-		RetrievalAPIKey:  payload.RetrievalAPIKey,
-		RetrievalModel:   payload.RetrievalModel,
-		Symbol:           payload.Symbol,
-		Currency:         payload.Currency,
-		RiskProfile:      payload.RiskProfile,
-		Horizon:          payload.Horizon,
-		AdviceStyle:      payload.AdviceStyle,
-		StrategyPrompt:   payload.StrategyPrompt,
+		BaseURL:        payload.BaseURL,
+		APIKey:         payload.APIKey,
+		Model:          payload.Model,
+		Symbol:         payload.Symbol,
+		Currency:       payload.Currency,
+		RiskProfile:    payload.RiskProfile,
+		Horizon:        payload.Horizon,
+		AdviceStyle:    payload.AdviceStyle,
+		StrategyPrompt: payload.StrategyPrompt,
 	}, func(delta string) {
 		if delta == "" {
 			return

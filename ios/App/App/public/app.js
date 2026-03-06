@@ -14,8 +14,9 @@ let _openPopover = null;
 
 const aiAnalysisSettingsKey = 'aiHoldingsAnalysisSettings';
 const aiAnalysisAPIKeyStorageKey = 'aiHoldingsAnalysisApiKey';
-const defaultOpenAIBaseURL = 'https://api.openai.com/v1';
-const defaultGeminiBaseURL = 'https://generativelanguage.googleapis.com/v1beta';
+const legacyOpenAIBaseURL = 'https://api.openai.com/v1';
+const legacyGoogleGeminiBaseURL = 'https://generativelanguage.googleapis.com/v1beta';
+const defaultGeminiBaseURL = 'https://api.aicodemirror.com/api/gemini';
 
 const view = document.getElementById('view');
 const toastEl = document.getElementById('toast');
@@ -323,8 +324,8 @@ function getRouteQuery() {
 
 function defaultAIAnalysisSettings() {
   return {
-    baseUrl: defaultOpenAIBaseURL,
-    model: '',
+    baseUrl: defaultGeminiBaseURL,
+    model: 'gemini-2.5-flash',
     riskProfile: 'balanced',
     horizon: 'medium',
     adviceStyle: 'balanced',
@@ -342,13 +343,18 @@ function isGeminiModel(value) {
   return String(value || '').trim().toLowerCase().startsWith('gemini');
 }
 
-function normalizeAIBaseUrl(value, fallback = defaultOpenAIBaseURL) {
+function normalizeAIBaseUrl(value, fallback = defaultGeminiBaseURL) {
   return trimTrailingSlash(String(value || '').trim()) || fallback;
 }
 
 function normalizeAIBaseUrlForModel(value, model) {
-  const normalizedBaseUrl = normalizeAIBaseUrl(value);
-  if (isGeminiModel(model) && normalizedBaseUrl.toLowerCase() === defaultOpenAIBaseURL) {
+  const normalizedBaseUrl = normalizeAIBaseUrl(value, defaultGeminiBaseURL);
+  const lowerBaseUrl = normalizedBaseUrl.toLowerCase();
+  if (
+    lowerBaseUrl === legacyOpenAIBaseURL ||
+    lowerBaseUrl === legacyGoogleGeminiBaseURL ||
+    lowerBaseUrl === 'https://api.perplexity.ai'
+  ) {
     return defaultGeminiBaseURL;
   }
   return normalizedBaseUrl;
@@ -358,7 +364,8 @@ function normalizeAIAnalysisSettings(raw) {
   const defaults = defaultAIAnalysisSettings();
   const source = raw && typeof raw === 'object' ? raw : {};
 
-  const model = String(source.model || '').trim();
+  const rawModel = String(source.model || '').trim();
+  const model = isGeminiModel(rawModel) ? rawModel : defaults.model;
   const baseUrlRaw = source.baseUrl || source.base_url || defaults.baseUrl;
   const baseUrl = normalizeAIBaseUrlForModel(baseUrlRaw, model);
   const riskProfile = normalizeChoice(source.riskProfile || source.risk_profile, ['conservative', 'balanced', 'aggressive'], defaults.riskProfile);
@@ -448,6 +455,7 @@ async function persistAIAnalysisSettings(settings) {
       advice_style: normalized.adviceStyle,
       allow_new_symbols: normalized.allowNewSymbols,
       strategy_prompt: normalized.strategyPrompt,
+      api_key: String(settings.apiKey || '').trim(),
     }),
   });
   return normalizeAIAnalysisSettings(saved || normalized);
@@ -456,59 +464,74 @@ async function persistAIAnalysisSettings(settings) {
 async function loadAIAnalysisSettings(options = {}) {
   const forceRefresh = !!options.forceRefresh;
   const legacySettings = loadLegacyAIAnalysisSettings();
-  const apiKey = getAIAnalysisAPIKey(legacySettings);
 
   if (!forceRefresh && state.aiSettingsLoaded && state.aiSettings) {
     return {
       ...state.aiSettings,
-      apiKey,
+      apiKey: state.aiSettings.apiKey || getAIAnalysisAPIKey(legacySettings),
     };
   }
 
   let normalized = defaultAIAnalysisSettings();
+  let apiKey = '';
   let loadedFromServer = false;
   try {
     const remote = await fetchJSON('/api/ai-settings');
     normalized = normalizeAIAnalysisSettings(remote);
+    apiKey = String(remote.api_key || '').trim();
     loadedFromServer = true;
   } catch (err) {
     if (legacySettings) {
       normalized = normalizeAIAnalysisSettings(legacySettings);
     }
+    apiKey = getAIAnalysisAPIKey(legacySettings);
   }
 
-  if (loadedFromServer && legacySettings) {
-    const legacyNormalized = normalizeAIAnalysisSettings(legacySettings);
-    if (isDefaultAIAnalysisSettings(normalized) && !isDefaultAIAnalysisSettings(legacyNormalized)) {
-      try {
-        normalized = await persistAIAnalysisSettings(legacyNormalized);
-      } catch (err) {
-        // Keep server settings when migration write fails.
+  if (loadedFromServer) {
+    localStorage.removeItem('aiPerplexityAPIKey');
+    localStorage.removeItem('aiSymbolAnalysisUsePerplexity');
+
+    // Migrate: if backend has no API key but localStorage does, save it to backend.
+    if (!apiKey) {
+      const localKey = getAIAnalysisAPIKey(legacySettings);
+      if (localKey) {
+        try {
+          await persistAIAnalysisSettings({ ...normalized, apiKey: localKey });
+          apiKey = localKey;
+        } catch (_) {
+          apiKey = localKey;
+        }
       }
     }
-    localStorage.removeItem(aiAnalysisSettingsKey);
+
+    if (legacySettings) {
+      const legacyNormalized = normalizeAIAnalysisSettings(legacySettings);
+      if (isDefaultAIAnalysisSettings(normalized) && !isDefaultAIAnalysisSettings(legacyNormalized)) {
+        try {
+          normalized = await persistAIAnalysisSettings({ ...legacyNormalized, apiKey });
+        } catch (err) {
+          // Keep server settings when migration write fails.
+        }
+      }
+      localStorage.removeItem(aiAnalysisSettingsKey);
+    }
   }
 
-  state.aiSettings = normalized;
+  state.aiSettings = { ...normalized, apiKey };
   state.aiSettingsLoaded = true;
-  return {
-    ...normalized,
-    apiKey,
-  };
+  return state.aiSettings;
 }
 
 async function saveAIAnalysisSettings(settings) {
-  const normalized = normalizeAIAnalysisSettings(settings);
-  const saved = await persistAIAnalysisSettings(normalized);
-  state.aiSettings = saved;
+  const saved = await persistAIAnalysisSettings(settings);
+  const apiKey = String(settings && settings.apiKey ? settings.apiKey : '').trim();
+  state.aiSettings = { ...saved, apiKey };
   state.aiSettingsLoaded = true;
-  const apiKey = setAIAnalysisAPIKey(settings && settings.apiKey ? settings.apiKey : '');
+  setAIAnalysisAPIKey(apiKey);  // keep localStorage in sync as fallback
   localStorage.removeItem(aiAnalysisSettingsKey);
-  return {
-    ...saved,
-    apiKey,
-  };
+  return state.aiSettings;
 }
+
 
 function formatActionLabel(action) {
   const normalized = String(action || '').toLowerCase();
@@ -3889,22 +3912,22 @@ async function renderSettings() {
     const aiAnalysisSection = `
       <div class="card">
         <h3>AI Analysis</h3>
-        <div class="section-sub">Provider base URL, model, and API key for AI analysis (Gemini supported).</div>
+        <div class="section-sub">Gemini-only base URL, model, and API key for AI analysis.</div>
         <div class="form">
           <div class="form-row">
             <div class="field">
               <label>AI Base URL</label>
-              <input id="ai-base-url" type="text" placeholder="${defaultOpenAIBaseURL}" value="${escapeHtml(aiSettings.baseUrl || defaultOpenAIBaseURL)}">
+              <input id="ai-base-url" type="text" placeholder="${defaultGeminiBaseURL}" value="${escapeHtml(aiSettings.baseUrl || defaultGeminiBaseURL)}">
             </div>
             <div class="field">
               <label>Model</label>
-              <input id="ai-model" type="text" placeholder="gpt-4o-mini" value="${escapeHtml(aiSettings.model || '')}">
+              <input id="ai-model" type="text" placeholder="gemini-2.5-flash" value="${escapeHtml(aiSettings.model || 'gemini-2.5-flash')}">
             </div>
           </div>
           <div class="form-row">
             <div class="field">
               <label>API Key</label>
-              <input id="ai-api-key" type="password" autocomplete="off" placeholder="sk-..." value="${escapeHtml(aiSettings.apiKey || '')}">
+              <input id="ai-api-key" type="password" autocomplete="off" placeholder="AIza..." value="${escapeHtml(aiSettings.apiKey || '')}">
             </div>
           </div>
           <div class="form-row">
@@ -4383,7 +4406,7 @@ function bindSettingsActions(assetTypes) {
       const normalizedRawBaseUrl = normalizeAIBaseUrl(rawBaseUrl);
       const normalizedBaseUrl = normalizeAIBaseUrlForModel(rawBaseUrl, model);
       const autoAdjustedGeminiBaseURL = isGeminiModel(model) &&
-        normalizedRawBaseUrl.toLowerCase() === defaultOpenAIBaseURL &&
+        normalizedRawBaseUrl.toLowerCase() === legacyOpenAIBaseURL &&
         normalizedBaseUrl === defaultGeminiBaseURL;
 
       if (baseUrlInput) {

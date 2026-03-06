@@ -1,7 +1,7 @@
 function defaultAIAnalysisSettings() {
   return {
-    baseUrl: defaultOpenAIBaseURL,
-    model: '',
+    baseUrl: defaultGeminiBaseURL,
+    model: 'gemini-2.5-flash',
     riskProfile: 'balanced',
     horizon: 'medium',
     adviceStyle: 'balanced',
@@ -19,13 +19,18 @@ function isGeminiModel(value) {
   return String(value || '').trim().toLowerCase().startsWith('gemini');
 }
 
-function normalizeAIBaseUrl(value, fallback = defaultOpenAIBaseURL) {
+function normalizeAIBaseUrl(value, fallback = defaultGeminiBaseURL) {
   return trimTrailingSlash(String(value || '').trim()) || fallback;
 }
 
 function normalizeAIBaseUrlForModel(value, model) {
-  const normalizedBaseUrl = normalizeAIBaseUrl(value);
-  if (isGeminiModel(model) && normalizedBaseUrl.toLowerCase() === defaultOpenAIBaseURL) {
+  const normalizedBaseUrl = normalizeAIBaseUrl(value, defaultGeminiBaseURL);
+  const lowerBaseUrl = normalizedBaseUrl.toLowerCase();
+  if (
+    lowerBaseUrl === legacyOpenAIBaseURL ||
+    lowerBaseUrl === legacyGoogleGeminiBaseURL ||
+    lowerBaseUrl === 'https://api.perplexity.ai'
+  ) {
     return defaultGeminiBaseURL;
   }
   return normalizedBaseUrl;
@@ -35,7 +40,8 @@ function normalizeAIAnalysisSettings(raw) {
   const defaults = defaultAIAnalysisSettings();
   const source = raw && typeof raw === 'object' ? raw : {};
 
-  const model = String(source.model || '').trim();
+  const rawModel = String(source.model || '').trim();
+  const model = isGeminiModel(rawModel) ? rawModel : defaults.model;
   const baseUrlRaw = source.baseUrl || source.base_url || defaults.baseUrl;
   const baseUrl = normalizeAIBaseUrlForModel(baseUrlRaw, model);
   const riskProfile = normalizeChoice(source.riskProfile || source.risk_profile, ['conservative', 'balanced', 'aggressive'], defaults.riskProfile);
@@ -102,32 +108,6 @@ function setAIAnalysisAPIKey(apiKey) {
   return normalized;
 }
 
-function getPerplexityAPIKey() {
-  return (localStorage.getItem(perplexityAPIKeyStorageKey) || '').trim();
-}
-
-function setPerplexityAPIKey(apiKey) {
-  const normalized = String(apiKey || '').trim();
-  if (!normalized) {
-    localStorage.removeItem(perplexityAPIKeyStorageKey);
-    return '';
-  }
-  localStorage.setItem(perplexityAPIKeyStorageKey, normalized);
-  return normalized;
-}
-
-function getSymbolAnalysisUsePerplexity() {
-  return localStorage.getItem(symbolAnalysisUsePerplexityKey) === 'true';
-}
-
-function setSymbolAnalysisUsePerplexity(enabled) {
-  if (enabled) {
-    localStorage.setItem(symbolAnalysisUsePerplexityKey, 'true');
-  } else {
-    localStorage.removeItem(symbolAnalysisUsePerplexityKey);
-  }
-}
-
 function isDefaultAIAnalysisSettings(settings) {
   const defaults = defaultAIAnalysisSettings();
   return settings.baseUrl === defaults.baseUrl &&
@@ -184,6 +164,9 @@ async function loadAIAnalysisSettings(options = {}) {
   }
 
   if (loadedFromServer) {
+    localStorage.removeItem('aiPerplexityAPIKey');
+    localStorage.removeItem('aiSymbolAnalysisUsePerplexity');
+
     // Migrate: if backend has no API key but localStorage does, save it to backend.
     if (!apiKey) {
       const localKey = getAIAnalysisAPIKey(legacySettings);

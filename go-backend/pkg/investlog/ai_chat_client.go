@@ -18,11 +18,12 @@ import (
 )
 
 const (
-	defaultAIBaseURL      = "https://api.openai.com/v1"
+	defaultAIBaseURL      = "https://api.aicodemirror.com/api/gemini"
 	aiRequestTimeout      = 5 * time.Minute
 	aiTotalRequestTimeout = 15 * time.Minute
 	maxAIResponseBodySize = 2 << 20
 	aiMaxOutputTokens     = 128000
+	geminiMaxOutputTokens = 32768
 	aiMaxInputTokens      = 200000
 )
 
@@ -644,6 +645,10 @@ func buildGeminiStreamPayload(req aiChatCompletionRequest) map[string]any {
 					{"text": req.UserPrompt},
 				},
 			},
+		},
+		"generationConfig": map[string]any{
+			"temperature":     0.2,
+			"maxOutputTokens": geminiMaxOutputTokens,
 		},
 	}
 

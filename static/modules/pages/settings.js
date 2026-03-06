@@ -42,26 +42,25 @@ async function renderSettings() {
       </div>
     `;
 
-    const perplexityApiKey = getPerplexityAPIKey();
     const aiAnalysisSection = `
       <div class="card">
         <h3>AI Analysis</h3>
-        <div class="section-sub">Provider base URL, model, and API key for AI analysis (Gemini supported).</div>
+        <div class="section-sub">Gemini-only base URL, model, and API key for AI analysis.</div>
         <div class="form">
           <div class="form-row">
             <div class="field">
               <label>AI Base URL</label>
-              <input id="ai-base-url" type="text" placeholder="${defaultOpenAIBaseURL}" value="${escapeHtml(aiSettings.baseUrl || defaultOpenAIBaseURL)}">
+              <input id="ai-base-url" type="text" placeholder="${defaultGeminiBaseURL}" value="${escapeHtml(aiSettings.baseUrl || defaultGeminiBaseURL)}">
             </div>
             <div class="field">
               <label>Model</label>
-              <input id="ai-model" type="text" placeholder="gpt-4o-mini" value="${escapeHtml(aiSettings.model || '')}">
+              <input id="ai-model" type="text" placeholder="gemini-2.5-flash" value="${escapeHtml(aiSettings.model || 'gemini-2.5-flash')}">
             </div>
           </div>
           <div class="form-row">
             <div class="field">
               <label>API Key</label>
-              <input id="ai-api-key" type="password" autocomplete="off" placeholder="sk-..." value="${escapeHtml(aiSettings.apiKey || '')}">
+              <input id="ai-api-key" type="password" autocomplete="off" placeholder="AIza..." value="${escapeHtml(aiSettings.apiKey || '')}">
             </div>
           </div>
           <div class="form-row">
@@ -106,11 +105,6 @@ async function renderSettings() {
             </div>
           </div>
           <div class="form-row">
-            <div class="field">
-              <label>Perplexity API Key</label>
-              <input id="perplexity-api-key" type="password" autocomplete="off" placeholder="pplx-..." value="${escapeHtml(perplexityApiKey)}">
-              <div class="section-sub">个股分析可选用 Perplexity sonar-pro。仅存本地，不上传服务器。</div>
-            </div>
             <div class="actions">
               <button class="btn" id="save-ai-analysis" type="button">Save AI Settings</button>
             </div>
@@ -542,13 +536,12 @@ function bindSettingsActions(assetTypes) {
       const adviceStyleInput = document.getElementById('ai-advice-style');
       const allowNewSymbolsInput = document.getElementById('ai-allow-new-symbols');
       const strategyPromptInput = document.getElementById('ai-strategy-prompt');
-      const perplexityApiKeyInput = document.getElementById('perplexity-api-key');
       const model = modelInput && modelInput.value ? modelInput.value.trim() : '';
       const rawBaseUrl = baseUrlInput && baseUrlInput.value ? baseUrlInput.value.trim() : '';
       const normalizedRawBaseUrl = normalizeAIBaseUrl(rawBaseUrl);
       const normalizedBaseUrl = normalizeAIBaseUrlForModel(rawBaseUrl, model);
       const autoAdjustedGeminiBaseURL = isGeminiModel(model) &&
-        normalizedRawBaseUrl.toLowerCase() === defaultOpenAIBaseURL &&
+        normalizedRawBaseUrl.toLowerCase() === legacyOpenAIBaseURL &&
         normalizedBaseUrl === defaultGeminiBaseURL;
 
       if (baseUrlInput) {
@@ -565,9 +558,6 @@ function bindSettingsActions(assetTypes) {
         allowNewSymbols: allowNewSymbolsInput ? !!allowNewSymbolsInput.checked : true,
         strategyPrompt: strategyPromptInput && strategyPromptInput.value ? strategyPromptInput.value.trim() : '',
       };
-
-      setPerplexityAPIKey(perplexityApiKeyInput && perplexityApiKeyInput.value ? perplexityApiKeyInput.value.trim() : '');
-
       saveAIAnalysis.disabled = true;
       try {
         const saved = await saveAIAnalysisSettings(settings);
@@ -1321,4 +1311,3 @@ function showAIAdvisorModal(assetTypes) {
   overlay.classList.remove('hidden');
   renderCurrentStep();
 }
-

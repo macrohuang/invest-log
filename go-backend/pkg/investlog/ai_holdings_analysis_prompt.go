@@ -9,6 +9,7 @@ import (
 
 func normalizeHoldingsAnalysisRequest(req HoldingsAnalysisRequest) (HoldingsAnalysisRequest, error) {
 	normalized := req
+	normalized.BaseURL = normalizeAIBaseURL(req.BaseURL)
 	normalized.APIKey = strings.TrimSpace(req.APIKey)
 	if normalized.APIKey == "" {
 		return HoldingsAnalysisRequest{}, fmt.Errorf("api_key is required")
@@ -17,6 +18,7 @@ func normalizeHoldingsAnalysisRequest(req HoldingsAnalysisRequest) (HoldingsAnal
 	if normalized.Model == "" {
 		return HoldingsAnalysisRequest{}, fmt.Errorf("model is required")
 	}
+	normalized.Model = normalizeAIModel(normalized.Model)
 	currency := strings.ToUpper(strings.TrimSpace(req.Currency))
 	if currency != "" && !contains(Currencies, currency) {
 		return HoldingsAnalysisRequest{}, fmt.Errorf("invalid currency: %s", req.Currency)
