@@ -68,3 +68,4 @@ func cleanupModelJSON(content string) string {
 		trimmed = trimmed[start : end+1]
 	}
 	return strings.TrimSpace(trimmed)
+}
