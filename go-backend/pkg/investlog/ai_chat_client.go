@@ -9,7 +9,7 @@ import (
 
 const (
 	defaultAIBaseURL      = "https://api.aicodemirror.com/api/gemini"
-	aiRequestTimeout      = 5 * time.Minute
+	aiRequestTimeout      = 3 * time.Minute
 	aiTotalRequestTimeout = 15 * time.Minute
 	maxAIResponseBodySize = 2 << 20
 	aiMaxOutputTokens     = 128000

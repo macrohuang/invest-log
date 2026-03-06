@@ -54,11 +54,11 @@ func TestBuildAICompletionsEndpoint(t *testing.T) {
 	}
 }
 
-func TestAIRequestTimeoutIsFiveMinutes(t *testing.T) {
+func TestAIRequestTimeoutIsThreeMinutes(t *testing.T) {
 	t.Parallel()
 
-	if aiRequestTimeout != 5*time.Minute {
-		t.Fatalf("expected aiRequestTimeout to be 5m, got %s", aiRequestTimeout)
+	if aiRequestTimeout != 3*time.Minute {
+		t.Fatalf("expected aiRequestTimeout to be 3m, got %s", aiRequestTimeout)
 	}
 }
 
@@ -1751,5 +1751,37 @@ func TestFormatAIRequestForLog_MasksAuthHeadersAndKeepsBody(t *testing.T) {
 	}
 	if !strings.Contains(logged, "\"contents\"") {
 		t.Fatalf("expected request body contents in logged output: %s", logged)
+	}
+	if strings.Contains(logged, "\n") {
+		t.Fatalf("expected compact single-line JSON log, got %q", logged)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(logged), &decoded); err != nil {
+		t.Fatalf("expected valid json log, got error: %v", err)
+	}
+	if _, ok := decoded["body"]; !ok {
+		t.Fatalf("expected decoded body field in compact log: %v", decoded)
+	}
+}
+
+func TestFormatAIRequestForLog_KeepsRawBodyCompact(t *testing.T) {
+	t.Parallel()
+
+	body := []byte("line1\nline2")
+	req, err := http.NewRequest(http.MethodPost, "https://api.example.com/v1/chat", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("build request failed: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer sk-test-secret-key-123456")
+
+	logged := formatAIRequestForLog(req, body)
+	if strings.Contains(logged, "\n") {
+		t.Fatalf("expected escaped newline in compact raw body log, got %q", logged)
+	}
+	if !strings.Contains(logged, "\"body_raw\":\"line1\\nline2\"") {
+		t.Fatalf("expected escaped raw body in log output: %s", logged)
+	}
+	if strings.Contains(logged, "sk-test-secret-key-123456") {
+		t.Fatalf("authorization token should be masked, got %s", logged)
 	}
 }
