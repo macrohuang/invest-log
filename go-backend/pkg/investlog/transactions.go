@@ -391,7 +391,7 @@ func (c *Core) GetTransactionCount(filter TransactionFilter) (int, error) {
 }
 
 // DeleteTransaction deletes a transaction by ID.
-// If the transaction has a linked_transaction_id (paired transfer), the linked record is also deleted.
+// If the transaction has linked records, they are also deleted.
 func (c *Core) DeleteTransaction(id int64) (bool, error) {
 	tx, err := c.db.Begin()
 	if err != nil {
@@ -408,11 +408,32 @@ func (c *Core) DeleteTransaction(id int64) (bool, error) {
 		return false, err
 	}
 
-	if _, err := tx.Exec("DELETE FROM transactions WHERE id = ?", id); err != nil {
+	idsToDelete := []int64{id}
+	if linkedID.Valid && linkedID.Int64 != id {
+		idsToDelete = append(idsToDelete, linkedID.Int64)
+	}
+
+	rows, err := tx.Query("SELECT id FROM transactions WHERE linked_transaction_id = ?", id)
+	if err != nil {
 		return false, err
 	}
-	if linkedID.Valid {
-		_, _ = tx.Exec("DELETE FROM transactions WHERE id = ?", linkedID.Int64)
+	defer rows.Close()
+
+	for rows.Next() {
+		var relatedID int64
+		if err := rows.Scan(&relatedID); err != nil {
+			return false, err
+		}
+		if relatedID != id {
+			idsToDelete = append(idsToDelete, relatedID)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+
+	if _, err := tx.Exec("DELETE FROM transactions WHERE id IN ("+placeholders(len(idsToDelete))+")", int64SliceToAny(idsToDelete)...); err != nil {
+		return false, err
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -420,6 +441,21 @@ func (c *Core) DeleteTransaction(id int64) (bool, error) {
 	}
 	c.invalidateHoldingsCache()
 	return true, nil
+}
+
+func int64SliceToAny(values []int64) []any {
+	params := make([]any, len(values))
+	for i, value := range values {
+		params[i] = value
+	}
+	return params
+}
+
+func placeholders(count int) string {
+	if count <= 0 {
+		return ""
+	}
+	return strings.TrimSuffix(strings.Repeat("?,", count), ",")
 }
 
 func nullString(value *string) sql.NullString {

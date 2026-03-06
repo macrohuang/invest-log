@@ -593,6 +593,43 @@ func TestDeleteTransaction(t *testing.T) {
 	}
 }
 
+func TestDeleteTransaction_CascadesReverseLinkedRecord(t *testing.T) {
+	core, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	testAccount(t, core, "acct-a", "Account A")
+	testAccount(t, core, "acct-b", "Account B")
+
+	primaryID := testBuyTransaction(t, core, "AAPL", 100, 150, "USD", "acct-a")
+	linkedID := testBuyTransaction(t, core, "AAPL", 50, 155, "USD", "acct-b")
+
+	if _, err := core.db.Exec(
+		"UPDATE transactions SET linked_transaction_id = ? WHERE id = ?",
+		primaryID,
+		linkedID,
+	); err != nil {
+		t.Fatalf("set reverse linked transaction: %v", err)
+	}
+
+	deleted, err := core.DeleteTransaction(primaryID)
+	assertNoError(t, err, "delete transaction with reverse linked record")
+	if !deleted {
+		t.Fatal("expected transaction to be deleted")
+	}
+
+	tx, err := core.GetTransaction(primaryID)
+	assertNoError(t, err, "get primary transaction after delete")
+	if tx != nil {
+		t.Error("expected primary transaction to be deleted")
+	}
+
+	tx, err = core.GetTransaction(linkedID)
+	assertNoError(t, err, "get reverse linked transaction after delete")
+	if tx != nil {
+		t.Error("expected reverse linked transaction to be cascade deleted")
+	}
+}
+
 func TestGetCurrentShares(t *testing.T) {
 	core, cleanup := setupTestDB(t)
 	defer cleanup()
