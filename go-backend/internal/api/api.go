@@ -69,6 +69,7 @@ func NewRouter(core *investlog.Core) http.Handler {
 	r.Get("/api/holdings-by-currency", h.getHoldingsByCurrency)
 	r.Get("/api/holdings-by-symbol", h.getHoldingsBySymbol)
 	r.Get("/api/holdings-by-currency-account", h.getHoldingsByCurrencyAndAccount)
+	r.Post("/api/holdings/modify", h.modifyHolding)
 
 	// Transactions
 	r.Get("/api/transactions", h.getTransactions)

@@ -93,6 +93,13 @@ func initDatabase(db *sql.DB) error {
 			}
 		}
 	}
+	if hasModifyType, err := transactionsHasType(tx, "modify"); err != nil {
+		return err
+	} else if !hasModifyType {
+		if err := rebuildTransactionsWithForeignKeys(tx); err != nil {
+			return err
+		}
+	}
 
 	// Migrate: add linked_transaction_id for paired transfers
 	if hasLinkedTxnID, err := tableHasColumn(tx, "transactions", "linked_transaction_id"); err != nil {
@@ -374,7 +381,7 @@ func createTransactionsTable(tx *sql.Tx) error {
 			transaction_date DATE NOT NULL,
 			transaction_time TIME,
 			symbol_id INTEGER NOT NULL,
-			transaction_type TEXT NOT NULL CHECK(transaction_type IN ('BUY', 'SELL', 'DIVIDEND', 'SPLIT', 'TRANSFER_IN', 'TRANSFER_OUT', 'ADJUST', 'INCOME')),
+			transaction_type TEXT NOT NULL CHECK(transaction_type IN ('BUY', 'SELL', 'DIVIDEND', 'SPLIT', 'TRANSFER_IN', 'TRANSFER_OUT', 'ADJUST', 'MODIFY', 'INCOME')),
 			quantity REAL NOT NULL,
 			price REAL NOT NULL,
 			total_amount REAL NOT NULL,
@@ -461,6 +468,21 @@ func transactionsHasForeignKeys(tx *sql.Tx) (bool, error) {
 	hasSymbolFK := strings.Contains(normalized, "foreignkey(symbol_id)referencessymbols")
 	hasAccountFK := strings.Contains(normalized, "foreignkey(account_id)referencesaccounts")
 	return hasSymbolFK && hasAccountFK, nil
+}
+
+func transactionsHasType(tx *sql.Tx, transactionType string) (bool, error) {
+	var sqlText sql.NullString
+	if err := tx.QueryRow("SELECT sql FROM sqlite_master WHERE type='table' AND name='transactions'").Scan(&sqlText); err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil
+		}
+		return false, err
+	}
+	if !sqlText.Valid {
+		return false, nil
+	}
+	normalized := strings.ToLower(strings.Join(strings.Fields(sqlText.String), ""))
+	return strings.Contains(normalized, fmt.Sprintf("'%s'", strings.ToLower(transactionType))), nil
 }
 
 func rebuildTransactionsWithForeignKeys(tx *sql.Tx) error {

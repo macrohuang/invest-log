@@ -130,6 +130,22 @@ async function renderHoldings() {
                 </button>
                 <button
                   type="button"
+                  class="btn tertiary holdings-action-control holdings-action-modify"
+                  data-action="modify"
+                  data-symbol="${escapeHtml(s.symbol)}"
+                  data-display-name="${escapeHtml(symbolLabel)}"
+                  data-currency="${currency}"
+                  data-account="${escapeHtml(s.account_id || '')}"
+                  data-account-name="${escapeHtml(s.account_name || s.account_id || '')}"
+                  data-asset-type="${escapeHtml(s.asset_type || '')}"
+                  data-total-shares="${escapeHtml(String(s.total_shares ?? 0))}"
+                  data-avg-cost="${escapeHtml(String(s.avg_cost ?? 0))}"
+                  aria-label="Modify holding for ${escapeHtml(symbolLabel)} in ${currency}"
+                >
+                  Modify
+                </button>
+                <button
+                  type="button"
                   class="btn tertiary holdings-action-control holdings-action-ai"
                   data-action="symbol-ai"
                   data-symbol="${escapeHtml(s.symbol)}"
@@ -432,7 +448,10 @@ function bindHoldingsActions() {
       }
       const action = btn.dataset.action;
       const symbol = btn.dataset.symbol;
+      const displayName = btn.dataset.displayName || symbol;
       const currency = btn.dataset.currency;
+      const account = btn.dataset.account || '';
+      const accountName = btn.dataset.accountName || account;
       const assetType = btn.dataset.assetType || '';
 
       if (action === 'symbol-ai') {
@@ -468,6 +487,47 @@ function bindHoldingsActions() {
             body: JSON.stringify({ symbol, currency, price }),
           });
           showToast(`${symbol} saved`);
+        }
+        if (action === 'modify') {
+          const currentShares = Number(btn.dataset.totalShares || 0);
+          const currentAvgCost = Number(btn.dataset.avgCost || 0);
+          const sharesValue = await showPromptModal(
+            `Target shares for ${displayName} (${accountName}, ${currency})`,
+            String(currentShares),
+          );
+          if (sharesValue === null) {
+            return;
+          }
+          const avgCostValue = await showPromptModal(
+            `Target avg cost for ${displayName} (${currency})`,
+            String(currentAvgCost),
+          );
+          if (avgCostValue === null) {
+            return;
+          }
+          const targetShares = Number(sharesValue);
+          const targetAvgCost = Number(avgCostValue);
+          if (Number.isNaN(targetShares) || targetShares < 0) {
+            showToast('Invalid target shares');
+            return;
+          }
+          if (Number.isNaN(targetAvgCost) || targetAvgCost < 0) {
+            showToast('Invalid target avg cost');
+            return;
+          }
+          await fetchJSON('/api/holdings/modify', {
+            method: 'POST',
+            body: JSON.stringify({
+              symbol,
+              currency,
+              account_id: account,
+              account_name: accountName,
+              asset_type: assetType,
+              target_shares: targetShares,
+              target_avg_cost: targetAvgCost,
+            }),
+          });
+          showToast(`${symbol} modified`);
         }
         if (action === 'ai-analyze') {
           const typeSelect = document.querySelector(`[data-ai-type-currency="${currency}"]`);
@@ -511,6 +571,8 @@ function bindHoldingsActions() {
             message = trimmed;
           }
           showToast(message);
+        } else if (action === 'modify') {
+          showToast('Modify holding failed');
         } else {
           showToast('Price update failed');
         }
@@ -679,4 +741,3 @@ async function runAIHoldingsAnalysis(currency, analysisType) {
   state.aiAnalysisByCurrency[currency] = result;
   return true;
 }
-

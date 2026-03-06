@@ -271,11 +271,12 @@ func TestAddTransaction_AllTransactionTypes(t *testing.T) {
 	}{
 		{"SELL", 100, 11, true},
 		{"DIVIDEND", 50, 0, true},
-		{"SPLIT", 100, 0, true},          // Add 100 shares via split
-		{"TRANSFER_IN", 50, 10, true},    // Transfer in 50 shares
-		{"TRANSFER_OUT", 50, 10, true},   // Transfer out 50 shares
-		{"ADJUST", 0, 100, true},         // Value adjustment
-		{"INCOME", 1000, 1, true},        // Cash income (auto-sets symbol to CASH)
+		{"SPLIT", 100, 0, true},        // Add 100 shares via split
+		{"TRANSFER_IN", 50, 10, true},  // Transfer in 50 shares
+		{"TRANSFER_OUT", 50, 10, true}, // Transfer out 50 shares
+		{"ADJUST", 0, 100, true},       // Value adjustment
+		{"MODIFY", 0, 0, true},         // Holdings modification with total amount override
+		{"INCOME", 1000, 1, true},      // Cash income (auto-sets symbol to CASH)
 	}
 
 	for _, tt := range types {
@@ -288,6 +289,7 @@ func TestAddTransaction_AllTransactionTypes(t *testing.T) {
 				Currency:        "CNY",
 				AccountID:       "test-account",
 				AssetType:       "stock",
+				TotalAmount:     amountPtr(NewAmount(tt.qty * tt.price)),
 			})
 			if tt.wantPass {
 				assertNoError(t, err, tt.txType)
@@ -296,6 +298,45 @@ func TestAddTransaction_AllTransactionTypes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestModifyHolding_CreatesModifyTransactionAndUpdatesHolding(t *testing.T) {
+	core, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	testAccount(t, core, "test-account", "Test Account")
+	testBuyTransaction(t, core, "AAPL", 100, 10, "USD", "test-account")
+
+	id, err := core.ModifyHolding(ModifyHoldingRequest{
+		Symbol:          "AAPL",
+		AccountID:       "test-account",
+		Currency:        "USD",
+		AssetType:       "stock",
+		TargetShares:    NewAmountFromInt(120),
+		TargetAvgCost:   NewAmountFromInt(12),
+		TransactionDate: "2024-02-01",
+	})
+	assertNoError(t, err, "ModifyHolding")
+
+	tx, err := core.GetTransaction(id)
+	assertNoError(t, err, "GetTransaction after ModifyHolding")
+	if tx == nil {
+		t.Fatal("modify transaction not found")
+	}
+	if tx.TransactionType != "MODIFY" {
+		t.Fatalf("expected transaction type MODIFY, got %s", tx.TransactionType)
+	}
+	assertFloatEquals(t, tx.Quantity, 20, "modify quantity delta")
+	assertFloatEquals(t, tx.TotalAmount, 440, "modify total amount delta")
+
+	holdings, err := core.GetHoldings("test-account")
+	assertNoError(t, err, "GetHoldings after ModifyHolding")
+	if len(holdings) != 1 {
+		t.Fatalf("expected 1 holding, got %d", len(holdings))
+	}
+	assertFloatEquals(t, holdings[0].TotalShares, 120, "holding shares after modify")
+	assertFloatEquals(t, holdings[0].AvgCost, 12, "holding avg cost after modify")
+	assertFloatEquals(t, holdings[0].TotalCost, 1440, "holding total cost after modify")
 }
 
 func TestAddTransaction_CashLinking(t *testing.T) {
