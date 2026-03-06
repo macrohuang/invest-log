@@ -120,16 +120,6 @@ async function renderHoldings() {
                 </button>
                 <button
                   type="button"
-                  class="btn tertiary holdings-action-control holdings-action-manual"
-                  data-action="manual"
-                  data-symbol="${escapeHtml(s.symbol)}"
-                  data-currency="${currency}"
-                  aria-label="Set manual price for ${escapeHtml(symbolLabel)} in ${currency}"
-                >
-                  Manual
-                </button>
-                <button
-                  type="button"
                   class="btn tertiary holdings-action-control holdings-action-modify"
                   data-action="modify"
                   data-symbol="${escapeHtml(s.symbol)}"
@@ -140,6 +130,7 @@ async function renderHoldings() {
                   data-asset-type="${escapeHtml(s.asset_type || '')}"
                   data-total-shares="${escapeHtml(String(s.total_shares ?? 0))}"
                   data-avg-cost="${escapeHtml(String(s.avg_cost ?? 0))}"
+                  data-latest-price="${escapeHtml(s.latest_price === null || s.latest_price === undefined ? '' : String(s.latest_price))}"
                   aria-label="Modify holding for ${escapeHtml(symbolLabel)} in ${currency}"
                 >
                   Modify
@@ -474,23 +465,10 @@ function bindHoldingsActions() {
           });
           showToast(`${symbol} updated`);
         }
-        if (action === 'manual') {
-          const value = await showPromptModal(`Manual price for ${symbol} (${currency})`);
-          if (!value) return;
-          const price = Number(value);
-          if (Number.isNaN(price)) {
-            showToast('Invalid price');
-            return;
-          }
-          await fetchJSON('/api/prices/manual', {
-            method: 'POST',
-            body: JSON.stringify({ symbol, currency, price }),
-          });
-          showToast(`${symbol} saved`);
-        }
         if (action === 'modify') {
           const currentShares = Number(btn.dataset.totalShares || 0);
           const currentAvgCost = Number(btn.dataset.avgCost || 0);
+          const latestPriceValue = btn.dataset.latestPrice || '';
           const sharesValue = await showPromptModal(
             `Target shares for ${displayName} (${accountName}, ${currency})`,
             String(currentShares),
@@ -515,19 +493,73 @@ function bindHoldingsActions() {
             showToast('Invalid target avg cost');
             return;
           }
-          await fetchJSON('/api/holdings/modify', {
-            method: 'POST',
-            body: JSON.stringify({
-              symbol,
-              currency,
-              account_id: account,
-              account_name: accountName,
-              asset_type: assetType,
-              target_shares: targetShares,
-              target_avg_cost: targetAvgCost,
-            }),
-          });
-          showToast(`${symbol} modified`);
+          let manualPrice = null;
+          const shouldSetManualPrice = await showConfirmModal(
+            `Set manual price for ${displayName} (${currency}) too?`,
+          );
+          if (shouldSetManualPrice) {
+            const manualPriceValue = await showPromptModal(
+              `Manual price for ${displayName} (${currency})`,
+              latestPriceValue,
+            );
+            if (manualPriceValue === null) {
+              return;
+            }
+            manualPrice = Number(manualPriceValue);
+            if (Number.isNaN(manualPrice)) {
+              showToast('Invalid manual price');
+              return;
+            }
+          }
+
+          const holdingsChanged = targetShares !== currentShares || targetAvgCost !== currentAvgCost;
+          const manualPriceChanged = manualPrice !== null;
+          if (!holdingsChanged && !manualPriceChanged) {
+            showToast('No changes to save');
+            return;
+          }
+
+          if (holdingsChanged) {
+            try {
+              await fetchJSON('/api/holdings/modify', {
+                method: 'POST',
+                body: JSON.stringify({
+                  symbol,
+                  currency,
+                  account_id: account,
+                  account_name: accountName,
+                  asset_type: assetType,
+                  target_shares: targetShares,
+                  target_avg_cost: targetAvgCost,
+                }),
+              });
+            } catch (err) {
+              showToast('Modify holding failed');
+              return;
+            }
+          }
+
+          if (manualPriceChanged) {
+            try {
+              await fetchJSON('/api/prices/manual', {
+                method: 'POST',
+                body: JSON.stringify({ symbol, currency, price: manualPrice }),
+              });
+            } catch (err) {
+              showToast('Manual price save failed');
+              return;
+            }
+          }
+
+          if (holdingsChanged && manualPriceChanged) {
+            showToast(`${symbol} modified and price saved`);
+          } else if (holdingsChanged) {
+            showToast(`${symbol} modified`);
+          } else {
+            showToast(`${symbol} saved`);
+          }
+          renderHoldings();
+          return;
         }
         if (action === 'ai-analyze') {
           const typeSelect = document.querySelector(`[data-ai-type-currency="${currency}"]`);

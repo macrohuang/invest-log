@@ -70,7 +70,7 @@ select.btn.trade-select {
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
   grid-template-areas:
     "trade update"
-    "manual ai";
+    "modify ai";
   align-items: stretch;
   justify-items: stretch;
   gap: var(--holding-action-gap);
@@ -96,12 +96,12 @@ select.btn.trade-select {
   grid-area: update;
 }
 
-.actions.holdings-actions .holdings-action-manual {
-  grid-area: manual;
-}
-
 .actions.holdings-actions .holdings-action-ai {
   grid-area: ai;
+}
+
+.actions.holdings-actions .holdings-action-modify {
+  grid-area: modify;
 }
 
 .actions.holdings-actions .trade-select {
