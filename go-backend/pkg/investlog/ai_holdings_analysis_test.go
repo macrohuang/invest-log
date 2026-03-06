@@ -22,7 +22,7 @@ func TestBuildAICompletionsEndpoint(t *testing.T) {
 		want    string
 		wantErr string
 	}{
-		{name: "empty uses default", input: "", want: "https://api.openai.com/v1/chat/completions"},
+		{name: "empty uses default", input: "", want: defaultAIBaseURL + "/v1/chat/completions"},
 		{name: "base without v1", input: "https://example.com", want: "https://example.com/v1/chat/completions"},
 		{name: "base with v1", input: "https://example.com/v1", want: "https://example.com/v1/chat/completions"},
 		{name: "already completions", input: "https://example.com/v1/chat/completions", want: "https://example.com/v1/chat/completions"},
@@ -522,8 +522,19 @@ func TestRequestAIChatCompletion_GeminiStreamGenerateContent(t *testing.T) {
 		if !ok || contentPart0["text"] != "user prompt" {
 			t.Fatalf("unexpected user content: %v", contentParts[0])
 		}
-		if _, ok := reqBody["generationConfig"]; ok {
-			t.Fatalf("did not expect generationConfig in gemini payload")
+		generationConfig, ok := reqBody["generationConfig"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected generationConfig, got %T", reqBody["generationConfig"])
+		}
+		if generationConfig["temperature"] == nil {
+			t.Fatalf("expected generationConfig.temperature, got %#v", generationConfig)
+		}
+		maxOutputTokens, ok := generationConfig["maxOutputTokens"].(float64)
+		if !ok {
+			t.Fatalf("expected numeric generationConfig.maxOutputTokens, got %#v", generationConfig)
+		}
+		if int(maxOutputTokens) != 32768 {
+			t.Fatalf("expected safe Gemini maxOutputTokens 32768, got %v", maxOutputTokens)
 		}
 
 		w.Header().Set("Content-Type", "text/event-stream")

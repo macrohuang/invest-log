@@ -19,8 +19,11 @@ func TestAISettingsEndpoints(t *testing.T) {
 	if err := json.NewDecoder(rr.Body).Decode(&defaults); err != nil {
 		t.Fatalf("decode defaults: %v", err)
 	}
-	if got := defaults["base_url"]; got != "https://api.openai.com/v1" {
+	if got := defaults["base_url"]; got != "https://api.aicodemirror.com/api/gemini" {
 		t.Fatalf("unexpected default base_url: %v", got)
+	}
+	if got := defaults["model"]; got != "gemini-2.5-flash" {
+		t.Fatalf("unexpected default model: %v", got)
 	}
 	if got := defaults["risk_profile"]; got != "balanced" {
 		t.Fatalf("unexpected default risk_profile: %v", got)
@@ -36,8 +39,8 @@ func TestAISettingsEndpoints(t *testing.T) {
 	}
 
 	rr = doRequest(router, http.MethodPut, "/api/ai-settings", map[string]any{
-		"base_url":          "https://example.com/v1/",
-		"model":             "gpt-4.1-mini",
+		"base_url":          "https://example.com/api/gemini/v1beta/",
+		"model":             "gemini-2.5-pro",
 		"risk_profile":      "aggressive",
 		"horizon":           "long",
 		"advice_style":      "conservative",
@@ -57,10 +60,10 @@ func TestAISettingsEndpoints(t *testing.T) {
 	if err := json.NewDecoder(rr.Body).Decode(&saved); err != nil {
 		t.Fatalf("decode saved: %v", err)
 	}
-	if got := saved["base_url"]; got != "https://example.com/v1" {
+	if got := saved["base_url"]; got != "https://example.com/api/gemini" {
 		t.Fatalf("unexpected persisted base_url: %v", got)
 	}
-	if got := saved["model"]; got != "gpt-4.1-mini" {
+	if got := saved["model"]; got != "gemini-2.5-pro" {
 		t.Fatalf("unexpected persisted model: %v", got)
 	}
 	if got := saved["risk_profile"]; got != "aggressive" {
@@ -77,6 +80,31 @@ func TestAISettingsEndpoints(t *testing.T) {
 	}
 	if got := saved["strategy_prompt"]; got != "focus on cashflow" {
 		t.Fatalf("unexpected persisted strategy_prompt: %v", got)
+	}
+}
+
+func TestAISettingsEndpoints_MigratesLegacyProviderConfig(t *testing.T) {
+	router, cleanup := setupTestRouter(t)
+	defer cleanup()
+
+	rr := doRequest(router, http.MethodPut, "/api/ai-settings", map[string]any{
+		"base_url": "https://api.openai.com/v1",
+		"model":    "gpt-4o-mini",
+		"api_key":  "legacy-key",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("PUT legacy ai settings: expected 200, got %d, body: %s", rr.Code, rr.Body.String())
+	}
+
+	var saved map[string]any
+	if err := json.NewDecoder(rr.Body).Decode(&saved); err != nil {
+		t.Fatalf("decode saved: %v", err)
+	}
+	if got := saved["base_url"]; got != "https://api.aicodemirror.com/api/gemini" {
+		t.Fatalf("unexpected migrated base_url: %v", got)
+	}
+	if got := saved["model"]; got != "gemini-2.5-flash" {
+		t.Fatalf("unexpected migrated model: %v", got)
 	}
 }
 
@@ -97,7 +125,7 @@ func TestAISettingsEndpointDefaultAllowNewSymbolsWhenOmitted(t *testing.T) {
 	defer cleanup()
 
 	rr := doRequest(router, http.MethodPut, "/api/ai-settings", map[string]any{
-		"model": "gpt-4o-mini",
+		"model": "gemini-2.5-flash",
 	})
 	if rr.Code != http.StatusOK {
 		t.Fatalf("PUT /api/ai-settings: expected 200, got %d, body: %s", rr.Code, rr.Body.String())

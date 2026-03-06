@@ -16,3 +16,5 @@ go-backend/coverage.out
 InvestLog-iPad-Unsigned.zip
 .claude/worktrees/**
 worktrees/**
+go-backend/.gocache/
+go-backend/coverage_*.out

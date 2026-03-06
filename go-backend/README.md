@@ -64,9 +64,10 @@ The SPA lives in the repo `static/` directory and calls the Go API. When running
 If you open `static/index.html` directly (file or Capacitor), set the API base in Settings or pass `?api=http://127.0.0.1:8000`.
 
 The Holdings page includes an `AI Analyze` action that calls
-`/api/ai/holdings-analysis`. It accepts OpenAI-compatible `base_url`, `model`,
+`/api/ai/holdings-analysis`. It accepts Gemini-only `base_url`, `model`,
 `api_key`, and optional `strategy_prompt`, and returns structured analysis plus
-symbol-level suggestions.
+symbol-level suggestions. The default provider endpoint is
+`https://api.aicodemirror.com/api/gemini`.
 
 ## macOS build
 

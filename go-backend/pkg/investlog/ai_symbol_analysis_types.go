@@ -81,18 +81,15 @@ JSON 字段必须包含：
 
 // SymbolAnalysisRequest defines inputs for per-symbol AI deep analysis.
 type SymbolAnalysisRequest struct {
-	BaseURL          string
-	APIKey           string
-	Model            string
-	RetrievalBaseURL string
-	RetrievalAPIKey  string
-	RetrievalModel   string
-	Symbol           string
-	Currency         string
-	RiskProfile      string
-	Horizon          string
-	AdviceStyle      string
-	StrategyPrompt   string
+	BaseURL        string
+	APIKey         string
+	Model          string
+	Symbol         string
+	Currency       string
+	RiskProfile    string
+	Horizon        string
+	AdviceStyle    string
+	StrategyPrompt string
 }
 
 // SymbolDimensionResult is one dimension's analysis output.

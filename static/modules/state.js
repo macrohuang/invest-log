@@ -14,12 +14,9 @@ let _openPopover = null;
 
 const aiAnalysisSettingsKey = 'aiHoldingsAnalysisSettings';
 const aiAnalysisAPIKeyStorageKey = 'aiHoldingsAnalysisApiKey';
-const defaultOpenAIBaseURL = 'https://api.openai.com/v1';
-const defaultGeminiBaseURL = 'https://generativelanguage.googleapis.com/v1beta';
-const perplexityAPIKeyStorageKey = 'aiPerplexityAPIKey';
-const symbolAnalysisUsePerplexityKey = 'symbolAnalysisUsePerplexity';
-const defaultPerplexityBaseURL = 'https://api.perplexity.ai';
-const defaultPerplexityModel = 'sonar-pro';
+const legacyOpenAIBaseURL = 'https://api.openai.com/v1';
+const legacyGoogleGeminiBaseURL = 'https://generativelanguage.googleapis.com/v1beta';
+const defaultGeminiBaseURL = 'https://api.aicodemirror.com/api/gemini';
 
 const view = document.getElementById('view');
 const toastEl = document.getElementById('toast');
@@ -45,4 +42,3 @@ const chartPalette = [
   '#8a6bd4',
   '#3f463e'
 ];
-

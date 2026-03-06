@@ -8,35 +8,17 @@ async function renderSymbolAnalysis() {
     return;
   }
 
-  const hasPerplexityKey = !!getPerplexityAPIKey();
-  const usePerplexity = hasPerplexityKey && getSymbolAnalysisUsePerplexity();
-  const perplexityToggleHTML = hasPerplexityKey
-    ? `<button class="btn secondary${usePerplexity ? ' active' : ''}" id="toggle-perplexity-provider" title="使用 Perplexity 做最新信息检索增强（综合分析仍用主模型）">Perplexity Retrieval: ${usePerplexity ? 'ON' : 'OFF'}</button>`
-    : '';
-
   view.innerHTML = `
     <div class="section-title">${escapeHtml(symbol)} Analysis</div>
     <div class="section-sub">Multi-dimensional AI deep analysis · ${escapeHtml(currency)}</div>
     <div class="symbol-analysis-actions">
       <a href="#/holdings" class="btn secondary">Back to Holdings</a>
-      ${perplexityToggleHTML}
       <button class="btn primary" id="run-symbol-analysis">Run Analysis</button>
     </div>
     <div id="symbol-analysis-content">
       <div class="card">Loading latest analysis...</div>
     </div>
   `;
-
-  const toggleBtn = document.getElementById('toggle-perplexity-provider');
-  if (toggleBtn) {
-    toggleBtn.addEventListener('click', () => {
-      const current = getSymbolAnalysisUsePerplexity();
-      setSymbolAnalysisUsePerplexity(!current);
-      toggleBtn.textContent = `Perplexity Retrieval: ${!current ? 'ON' : 'OFF'}`;
-      toggleBtn.classList.toggle('active', !current);
-    });
-  }
-
   const runBtn = document.getElementById('run-symbol-analysis');
   runBtn.addEventListener('click', async () => {
     runBtn.disabled = true;
@@ -149,9 +131,6 @@ function renderSymbolAnalysisStreamingCard(streamState) {
 async function runSymbolAnalysis(symbol, currency, handlers = {}) {
   const settings = await loadAIAnalysisSettings();
 
-  // Main model always drives framework+synthesis.
-  const perplexityKey = getPerplexityAPIKey();
-  const usePerplexity = !!perplexityKey && getSymbolAnalysisUsePerplexity();
   const mainModel = (settings.model || '').trim();
 
   const normalizedSettings = {
@@ -170,15 +149,6 @@ async function runSymbolAnalysis(symbol, currency, handlers = {}) {
     showToast('Set AI model and API Key in Settings > API');
     throw new Error('AI settings not configured');
   }
-
-  const retrievalPayload = usePerplexity
-    ? {
-      retrieval_base_url: defaultPerplexityBaseURL,
-      retrieval_api_key: perplexityKey,
-      retrieval_model: defaultPerplexityModel,
-    }
-    : {};
-
   let result = null;
   let streamError = '';
 
@@ -192,7 +162,6 @@ async function runSymbolAnalysis(symbol, currency, handlers = {}) {
     horizon: normalizedSettings.horizon,
     advice_style: normalizedSettings.adviceStyle,
     strategy_prompt: normalizedSettings.strategyPrompt,
-    ...retrievalPayload,
   }, {
     onProgress: (payload) => {
       if (handlers.onProgress) handlers.onProgress(payload);

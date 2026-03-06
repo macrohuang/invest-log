@@ -7,6 +7,7 @@ import (
 
 func normalizeSymbolAnalysisRequest(req SymbolAnalysisRequest) (SymbolAnalysisRequest, error) {
 	normalized := req
+	normalized.BaseURL = normalizeAIBaseURL(req.BaseURL)
 	normalized.APIKey = strings.TrimSpace(req.APIKey)
 	if normalized.APIKey == "" {
 		return SymbolAnalysisRequest{}, fmt.Errorf("api_key is required")
@@ -15,9 +16,7 @@ func normalizeSymbolAnalysisRequest(req SymbolAnalysisRequest) (SymbolAnalysisRe
 	if normalized.Model == "" {
 		return SymbolAnalysisRequest{}, fmt.Errorf("model is required")
 	}
-	normalized.RetrievalBaseURL = strings.TrimSpace(req.RetrievalBaseURL)
-	normalized.RetrievalAPIKey = strings.TrimSpace(req.RetrievalAPIKey)
-	normalized.RetrievalModel = strings.TrimSpace(req.RetrievalModel)
+	normalized.Model = normalizeAIModel(normalized.Model)
 	normalized.Symbol = strings.TrimSpace(strings.ToUpper(req.Symbol))
 	if normalized.Symbol == "" {
 		return SymbolAnalysisRequest{}, fmt.Errorf("symbol is required")

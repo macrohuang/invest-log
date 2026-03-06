@@ -61,18 +61,15 @@ type aiSettingsPayload struct {
 }
 
 type aiSymbolAnalysisPayload struct {
-	BaseURL          string `json:"base_url"`
-	APIKey           string `json:"api_key"`
-	Model            string `json:"model"`
-	RetrievalBaseURL string `json:"retrieval_base_url"`
-	RetrievalAPIKey  string `json:"retrieval_api_key"`
-	RetrievalModel   string `json:"retrieval_model"`
-	Symbol           string `json:"symbol"`
-	Currency         string `json:"currency"`
-	RiskProfile      string `json:"risk_profile"`
-	Horizon          string `json:"horizon"`
-	AdviceStyle      string `json:"advice_style"`
-	StrategyPrompt   string `json:"strategy_prompt"`
+	BaseURL        string `json:"base_url"`
+	APIKey         string `json:"api_key"`
+	Model          string `json:"model"`
+	Symbol         string `json:"symbol"`
+	Currency       string `json:"currency"`
+	RiskProfile    string `json:"risk_profile"`
+	Horizon        string `json:"horizon"`
+	AdviceStyle    string `json:"advice_style"`
+	StrategyPrompt string `json:"strategy_prompt"`
 }
 
 type addAccountPayload struct {
