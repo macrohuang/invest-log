@@ -271,11 +271,11 @@ func TestAddTransaction_AllTransactionTypes(t *testing.T) {
 	}{
 		{"SELL", 100, 11, true},
 		{"DIVIDEND", 50, 0, true},
-		{"SPLIT", 100, 0, true},          // Add 100 shares via split
-		{"TRANSFER_IN", 50, 10, true},    // Transfer in 50 shares
-		{"TRANSFER_OUT", 50, 10, true},   // Transfer out 50 shares
-		{"ADJUST", 0, 100, true},         // Value adjustment
-		{"INCOME", 1000, 1, true},        // Cash income (auto-sets symbol to CASH)
+		{"SPLIT", 100, 0, true},        // Add 100 shares via split
+		{"TRANSFER_IN", 50, 10, true},  // Transfer in 50 shares
+		{"TRANSFER_OUT", 50, 10, true}, // Transfer out 50 shares
+		{"ADJUST", 0, 100, true},       // Value adjustment
+		{"INCOME", 1000, 1, true},      // Cash income (auto-sets symbol to CASH)
 	}
 
 	for _, tt := range types {
@@ -549,6 +549,43 @@ func TestDeleteTransaction(t *testing.T) {
 	assertNoError(t, err, "delete non-existent")
 	if deleted {
 		t.Error("expected false for non-existent transaction")
+	}
+}
+
+func TestDeleteTransaction_CascadesReverseLinkedRecord(t *testing.T) {
+	core, cleanup := setupTestDB(t)
+	defer cleanup()
+
+	testAccount(t, core, "acct-a", "Account A")
+	testAccount(t, core, "acct-b", "Account B")
+
+	primaryID := testBuyTransaction(t, core, "AAPL", 100, 150, "USD", "acct-a")
+	linkedID := testBuyTransaction(t, core, "AAPL", 50, 155, "USD", "acct-b")
+
+	if _, err := core.db.Exec(
+		"UPDATE transactions SET linked_transaction_id = ? WHERE id = ?",
+		primaryID,
+		linkedID,
+	); err != nil {
+		t.Fatalf("set reverse linked transaction: %v", err)
+	}
+
+	deleted, err := core.DeleteTransaction(primaryID)
+	assertNoError(t, err, "delete transaction with reverse linked record")
+	if !deleted {
+		t.Fatal("expected transaction to be deleted")
+	}
+
+	tx, err := core.GetTransaction(primaryID)
+	assertNoError(t, err, "get primary transaction after delete")
+	if tx != nil {
+		t.Error("expected primary transaction to be deleted")
+	}
+
+	tx, err = core.GetTransaction(linkedID)
+	assertNoError(t, err, "get reverse linked transaction after delete")
+	if tx != nil {
+		t.Error("expected reverse linked transaction to be cascade deleted")
 	}
 }
 
