@@ -168,6 +168,100 @@ func TestTransactionsEndpoints(t *testing.T) {
 	}
 }
 
+func TestModifyHoldingEndpoint(t *testing.T) {
+	router, cleanup := setupTestRouter(t)
+	defer cleanup()
+
+	doRequest(router, "POST", "/api/accounts", map[string]interface{}{
+		"account_id":   "test-account",
+		"account_name": "Test Account",
+	})
+	doRequest(router, "POST", "/api/transactions", map[string]interface{}{
+		"symbol":           "AAPL",
+		"transaction_type": "BUY",
+		"quantity":         100,
+		"price":            10,
+		"currency":         "USD",
+		"account_id":       "test-account",
+		"asset_type":       "stock",
+	})
+
+	rr := doRequest(router, "POST", "/api/holdings/modify", map[string]interface{}{
+		"symbol":           "AAPL",
+		"account_id":       "test-account",
+		"currency":         "USD",
+		"asset_type":       "stock",
+		"target_shares":    120,
+		"target_avg_cost":  12,
+		"transaction_date": "2024-02-01",
+	})
+	if rr.Code != http.StatusOK {
+		t.Fatalf("POST /api/holdings/modify: expected 200, got %d, body: %s", rr.Code, rr.Body.String())
+	}
+
+	rr = doRequest(router, "GET", "/api/transactions?paged=1", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /api/transactions: expected 200, got %d", rr.Code)
+	}
+
+	var payload struct {
+		Items []struct {
+			TransactionType string  `json:"transaction_type"`
+			Quantity        float64 `json:"quantity"`
+			TotalAmount     float64 `json:"total_amount"`
+		} `json:"items"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode transactions: %v", err)
+	}
+	if len(payload.Items) != 2 {
+		t.Fatalf("expected 2 transactions, got %d", len(payload.Items))
+	}
+
+	var modifyItem *struct {
+		TransactionType string  `json:"transaction_type"`
+		Quantity        float64 `json:"quantity"`
+		TotalAmount     float64 `json:"total_amount"`
+	}
+	for i := range payload.Items {
+		if payload.Items[i].TransactionType == "MODIFY" {
+			modifyItem = &payload.Items[i]
+			break
+		}
+	}
+	if modifyItem == nil {
+		t.Fatal("expected MODIFY transaction in response")
+	}
+	if modifyItem.Quantity != 20 {
+		t.Fatalf("expected modify quantity 20, got %v", modifyItem.Quantity)
+	}
+	if modifyItem.TotalAmount != 440 {
+		t.Fatalf("expected modify total_amount 440, got %v", modifyItem.TotalAmount)
+	}
+
+	rr = doRequest(router, "GET", "/api/holdings?account_id=test-account", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("GET /api/holdings: expected 200, got %d", rr.Code)
+	}
+
+	var holdings []struct {
+		TotalShares float64 `json:"total_shares"`
+		AvgCost     float64 `json:"avg_cost"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&holdings); err != nil {
+		t.Fatalf("decode holdings: %v", err)
+	}
+	if len(holdings) != 1 {
+		t.Fatalf("expected 1 holding, got %d", len(holdings))
+	}
+	if holdings[0].TotalShares != 120 {
+		t.Fatalf("expected holdings shares 120, got %v", holdings[0].TotalShares)
+	}
+	if holdings[0].AvgCost != 12 {
+		t.Fatalf("expected holdings avg cost 12, got %v", holdings[0].AvgCost)
+	}
+}
+
 func TestTransactionsEndpoints_ValidationErrors(t *testing.T) {
 	router, cleanup := setupTestRouter(t)
 	defer cleanup()

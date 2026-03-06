@@ -68,6 +68,8 @@ func (c *Core) AddTransaction(req AddTransactionRequest) (int64, error) {
 		// SPLIT quantity can be positive (adding shares) or negative (reverse split)
 	case "ADJUST":
 		// ADJUST can have any quantity value
+	case "MODIFY":
+		// MODIFY records a delta against the current holding snapshot.
 	}
 
 	// Validate price is not negative
@@ -436,7 +438,7 @@ func (c *Core) getCurrentShares(symbol, currency, accountID string) (Amount, err
 		SELECT COALESCE(SUM(CASE
 			WHEN t.transaction_type IN ('BUY', 'TRANSFER_IN', 'INCOME') THEN t.quantity
 			WHEN t.transaction_type IN ('SELL', 'TRANSFER_OUT') THEN -t.quantity
-			WHEN t.transaction_type IN ('SPLIT', 'ADJUST') THEN t.quantity
+			WHEN t.transaction_type IN ('SPLIT', 'ADJUST', 'MODIFY') THEN t.quantity
 			ELSE 0
 		END), 0) as total_shares
 		FROM transactions t

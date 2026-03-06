@@ -19,6 +19,7 @@ var TransactionTypes = []string{
 	"TRANSFER_IN",
 	"TRANSFER_OUT",
 	"ADJUST",
+	"MODIFY",
 	"INCOME",
 }
 
@@ -84,6 +85,21 @@ type TransferResult struct {
 	TransferOutID int64  `json:"transfer_out_id"`
 	TransferInID  int64  `json:"transfer_in_id"`
 	ExchangeRate  Amount `json:"exchange_rate,omitempty"`
+}
+
+// ModifyHoldingRequest defines inputs for modifying an existing holding.
+type ModifyHoldingRequest struct {
+	TransactionDate string
+	TransactionTime *string
+	Symbol          string
+	AccountID       string
+	Currency        string
+	AssetType       string
+	TargetShares    Amount
+	TargetAvgCost   Amount
+	AccountName     *string
+	Notes           *string
+	Tags            *string
 }
 
 // Holding represents a current holding snapshot.

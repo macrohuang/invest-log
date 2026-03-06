@@ -20,6 +20,20 @@ type addTransactionPayload struct {
 	LinkCash        bool              `json:"link_cash"`
 }
 
+type modifyHoldingPayload struct {
+	TransactionDate string           `json:"transaction_date"`
+	TransactionTime *string          `json:"transaction_time"`
+	Symbol          string           `json:"symbol"`
+	AccountID       string           `json:"account_id"`
+	Currency        string           `json:"currency"`
+	AssetType       string           `json:"asset_type"`
+	TargetShares    investlog.Amount `json:"target_shares"`
+	TargetAvgCost   investlog.Amount `json:"target_avg_cost"`
+	AccountName     *string          `json:"account_name"`
+	Notes           *string          `json:"notes"`
+	Tags            *string          `json:"tags"`
+}
+
 type pricePayload struct {
 	Symbol    string `json:"symbol"`
 	Currency  string `json:"currency"`

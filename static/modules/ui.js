@@ -8,7 +8,7 @@ function showToast(message) {
  * Custom prompt modal to replace window.prompt(), which is blocked in WKWebView.
  * Returns a Promise that resolves with the entered string, or null if cancelled.
  */
-function showPromptModal(label) {
+function showPromptModal(label, initialValue = '') {
   return new Promise((resolve) => {
     const overlay = document.getElementById('prompt-overlay');
     const labelEl = document.getElementById('prompt-label');
@@ -17,9 +17,10 @@ function showPromptModal(label) {
     const cancelBtn = document.getElementById('prompt-cancel');
 
     labelEl.textContent = label;
-    input.value = '';
+    input.value = initialValue;
     overlay.classList.remove('hidden');
     input.focus();
+    input.select();
 
     function cleanup() {
       overlay.classList.add('hidden');

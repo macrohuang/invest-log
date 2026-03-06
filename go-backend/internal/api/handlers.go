@@ -53,6 +53,32 @@ func (h *handler) getHoldingsByCurrencyAndAccount(w http.ResponseWriter, r *http
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (h *handler) modifyHolding(w http.ResponseWriter, r *http.Request) {
+	var payload modifyHoldingPayload
+	if err := decodeJSON(r, &payload); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	id, err := h.core.ModifyHolding(investlog.ModifyHoldingRequest{
+		TransactionDate: payload.TransactionDate,
+		TransactionTime: payload.TransactionTime,
+		Symbol:          payload.Symbol,
+		AccountID:       payload.AccountID,
+		Currency:        payload.Currency,
+		AssetType:       payload.AssetType,
+		TargetShares:    payload.TargetShares,
+		TargetAvgCost:   payload.TargetAvgCost,
+		AccountName:     payload.AccountName,
+		Notes:           payload.Notes,
+		Tags:            payload.Tags,
+	})
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id})
+}
+
 func (h *handler) getTransactions(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	filter := investlog.TransactionFilter{
