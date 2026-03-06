@@ -70,7 +70,7 @@ func formatAIRequestForLog(httpReq *http.Request, body []byte) string {
 		}
 	}
 
-	encoded, err := json.MarshalIndent(logPayload, "", "  ")
+	encoded, err := json.Marshal(logPayload)
 	if err != nil {
 		return fmt.Sprintf(`{"error":"marshal ai request log failed","detail":%q}`, err.Error())
 	}
@@ -109,4 +109,3 @@ func logAIRawResponseDebug(logger *slog.Logger, endpoint string, statusCode int,
 		"raw_body", string(body),
 	)
 }
-
