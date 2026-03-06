@@ -23,6 +23,10 @@ function renderRoute() {
       setActiveRoute('holdings');
       renderHoldings();
       break;
+    case 'ai-analysis':
+      setActiveRoute('ai-analysis');
+      renderAIAnalysis();
+      break;
     case 'transactions':
       setActiveRoute('transactions');
       renderTransactions();

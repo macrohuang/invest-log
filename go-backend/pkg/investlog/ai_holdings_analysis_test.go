@@ -264,6 +264,7 @@ func TestRequestAIChatCompletion(t *testing.T) {
 		if reqBody["model"] != "model-x" {
 			t.Fatalf("expected model-x, got %v", reqBody["model"])
 		}
+		assertGoogleSearchToolEnabled(t, reqBody)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"model":"model-x","choices":[{"message":{"content":"{\"overall_summary\":\"ok\",\"risk_level\":\"balanced\",\"key_findings\":[\"x\"],\"recommendations\":[{\"action\":\"hold\",\"theory_tag\":\"Buffett\",\"rationale\":\"wait\"}],\"disclaimer\":\"d\"}"}}]}`))
 	}))
@@ -308,6 +309,7 @@ func TestRequestAIChatCompletion_FallbackToResponses(t *testing.T) {
 		if reqBody["input"] == nil {
 			t.Fatalf("expected input field in responses payload")
 		}
+		assertGoogleSearchToolEnabled(t, reqBody)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"model":"model-y","output_text":"{\"overall_summary\":\"ok\",\"risk_level\":\"balanced\",\"key_findings\":[\"x\"],\"recommendations\":[{\"action\":\"hold\",\"theory_tag\":\"Buffett\",\"rationale\":\"wait\"}],\"disclaimer\":\"d\"}"}`))
 	}))
@@ -536,6 +538,7 @@ func TestRequestAIChatCompletion_GeminiStreamGenerateContent(t *testing.T) {
 		if int(maxOutputTokens) != 32768 {
 			t.Fatalf("expected safe Gemini maxOutputTokens 32768, got %v", maxOutputTokens)
 		}
+		assertGoogleSearchToolEnabled(t, reqBody)
 
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = w.Write([]byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"{\\\"overall_summary\\\":\\\"ok\\\"\"}]}}],\"modelVersion\":\"gemini-2.5-flash\"}\n\n"))
@@ -718,6 +721,7 @@ func TestRequestAIChatCompletion_SameEndpointResponsesPayload(t *testing.T) {
 		if reqBody["input"] == nil && reqBody["messages"] == nil {
 			t.Fatalf("expected input or messages")
 		}
+		assertGoogleSearchToolEnabled(t, reqBody)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"model":"model-r","choices":[{"message":{"content":"{\"overall_summary\":\"ok\",\"risk_level\":\"balanced\",\"key_findings\":[\"x\"],\"recommendations\":[{\"action\":\"hold\",\"theory_tag\":\"Buffett\",\"rationale\":\"wait\"}],\"disclaimer\":\"d\"}"}}]}`))
 	}))
@@ -926,6 +930,26 @@ func TestDecodeAIModelAndContent(t *testing.T) {
 	}
 	if model != "m1" || content != "hello" {
 		t.Fatalf("unexpected decode result: model=%q content=%q", model, content)
+	}
+}
+
+func assertGoogleSearchToolEnabled(t *testing.T, reqBody map[string]any) {
+	t.Helper()
+
+	tools, ok := reqBody["tools"].([]any)
+	if !ok || len(tools) != 1 {
+		t.Fatalf("expected tools array, got %#v", reqBody["tools"])
+	}
+	tool, ok := tools[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected tools[0] object, got %#v", tools[0])
+	}
+	searchConfig, ok := tool["google_search"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected google_search config, got %#v", tool)
+	}
+	if len(searchConfig) != 0 {
+		t.Fatalf("expected empty google_search config, got %#v", searchConfig)
 	}
 }
 

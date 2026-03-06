@@ -7,6 +7,12 @@ const state = {
   holdingsFilters: {}, // { currency: { accountIds: [], symbols: [] } }
   aiSettings: null,
   aiSettingsLoaded: false,
+  aiAnalysisMethods: [],
+  aiAnalysisMethodsLoaded: false,
+  aiAnalysisSelectedMethodId: 0,
+  aiAnalysisSelectedRunId: 0,
+  aiAnalysisDraftValuesByMethod: {},
+  aiAnalysisStreaming: null,
 };
 
 // Tracks which filter popover is open across re-renders: { filterType, currency } | null

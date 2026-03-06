@@ -181,3 +181,168 @@ function formatValue(value, currency) {
   return formatNumber(value);
 }
 
+function renderMarkdownLite(value) {
+  const source = String(value || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').trim();
+  if (!source) {
+    return '<p class="md-paragraph">—</p>';
+  }
+
+  const lines = source.split('\n');
+  const html = [];
+  let paragraph = [];
+  let listItems = [];
+  let listType = '';
+  let blockquote = [];
+  let inCodeBlock = false;
+  let codeLines = [];
+
+  const flushParagraph = () => {
+    if (!paragraph.length) {
+      return;
+    }
+    html.push(`<p class="md-paragraph">${renderMarkdownInline(paragraph.join(' '))}</p>`);
+    paragraph = [];
+  };
+
+  const flushList = () => {
+    if (!listItems.length) {
+      return;
+    }
+    const tag = listType === 'ol' ? 'ol' : 'ul';
+    html.push(`<${tag} class="md-list">${listItems.map((item) => `<li>${renderMarkdownInline(item)}</li>`).join('')}</${tag}>`);
+    listItems = [];
+    listType = '';
+  };
+
+  const flushBlockquote = () => {
+    if (!blockquote.length) {
+      return;
+    }
+    html.push(`<blockquote class="md-blockquote">${blockquote.map((item) => `<p>${renderMarkdownInline(item)}</p>`).join('')}</blockquote>`);
+    blockquote = [];
+  };
+
+  const flushCodeBlock = () => {
+    if (!codeLines.length) {
+      html.push('<pre class="md-code-block"><code></code></pre>');
+    } else {
+      html.push(`<pre class="md-code-block"><code>${escapeHtml(codeLines.join('\n'))}</code></pre>`);
+    }
+    codeLines = [];
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trimEnd();
+    const trimmed = line.trim();
+
+    if (trimmed.startsWith('```')) {
+      flushParagraph();
+      flushList();
+      flushBlockquote();
+      if (inCodeBlock) {
+        flushCodeBlock();
+        inCodeBlock = false;
+      } else {
+        inCodeBlock = true;
+      }
+      continue;
+    }
+
+    if (inCodeBlock) {
+      codeLines.push(rawLine);
+      continue;
+    }
+
+    if (!trimmed) {
+      flushParagraph();
+      flushList();
+      flushBlockquote();
+      continue;
+    }
+
+    const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
+    if (headingMatch) {
+      flushParagraph();
+      flushList();
+      flushBlockquote();
+      const level = Math.min(headingMatch[1].length, 6);
+      html.push(`<h${level} class="md-heading md-heading-${level}">${renderMarkdownInline(headingMatch[2])}</h${level}>`);
+      continue;
+    }
+
+    if (/^(-{3,}|\*{3,}|_{3,})$/.test(trimmed)) {
+      flushParagraph();
+      flushList();
+      flushBlockquote();
+      html.push('<hr class="md-divider">');
+      continue;
+    }
+
+    const blockquoteMatch = trimmed.match(/^>\s?(.*)$/);
+    if (blockquoteMatch) {
+      flushParagraph();
+      flushList();
+      blockquote.push(blockquoteMatch[1]);
+      continue;
+    }
+    flushBlockquote();
+
+    const unorderedMatch = trimmed.match(/^[-*+]\s+(.+)$/);
+    if (unorderedMatch) {
+      flushParagraph();
+      if (listType && listType !== 'ul') {
+        flushList();
+      }
+      listType = 'ul';
+      listItems.push(unorderedMatch[1]);
+      continue;
+    }
+
+    const orderedMatch = trimmed.match(/^\d+\.\s+(.+)$/);
+    if (orderedMatch) {
+      flushParagraph();
+      if (listType && listType !== 'ol') {
+        flushList();
+      }
+      listType = 'ol';
+      listItems.push(orderedMatch[1]);
+      continue;
+    }
+
+    flushList();
+    paragraph.push(trimmed);
+  }
+
+  if (inCodeBlock) {
+    flushCodeBlock();
+  }
+  flushParagraph();
+  flushList();
+  flushBlockquote();
+
+  return html.join('');
+}
+
+function renderMarkdownInline(value) {
+  const placeholders = [];
+  let html = escapeHtml(String(value || ''));
+
+  html = html.replace(/`([^`]+)`/g, (_, content) => {
+    const token = `__MD_CODE_${placeholders.length}__`;
+    placeholders.push(`<code class="md-inline-code">${escapeHtml(content)}</code>`);
+    return token;
+  });
+
+  html = html.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g, (_, label, url) => {
+    const safeURL = escapeHtml(url);
+    return `<a class="md-link" href="${safeURL}" target="_blank" rel="noreferrer noopener">${escapeHtml(label)}</a>`;
+  });
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/(^|[\s(])\*([^*]+)\*(?=$|[\s).,!?:;])/g, '$1<em>$2</em>');
+
+  placeholders.forEach((replacement, index) => {
+    html = html.replace(`__MD_CODE_${index}__`, replacement);
+  });
+
+  return html;
+}

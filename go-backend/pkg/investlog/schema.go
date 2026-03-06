@@ -213,6 +213,40 @@ func initDatabase(db *sql.DB) error {
 		return err
 	}
 
+	if err := exec(tx, `
+		CREATE TABLE IF NOT EXISTS ai_analysis_methods (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			name TEXT NOT NULL UNIQUE,
+			system_prompt TEXT NOT NULL,
+			user_prompt TEXT NOT NULL,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)
+	`); err != nil {
+		return err
+	}
+
+	if err := exec(tx, `
+		CREATE TABLE IF NOT EXISTS ai_analysis_runs (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			method_id INTEGER,
+			method_name TEXT NOT NULL,
+			system_prompt_template TEXT NOT NULL,
+			user_prompt_template TEXT NOT NULL,
+			variables_json TEXT NOT NULL,
+			rendered_system_prompt TEXT NOT NULL,
+			rendered_user_prompt TEXT NOT NULL,
+			model TEXT NOT NULL,
+			status TEXT NOT NULL CHECK(status IN ('running', 'completed', 'failed')),
+			result_text TEXT,
+			error_message TEXT,
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			completed_at DATETIME
+		)
+	`); err != nil {
+		return err
+	}
+
 	var assetTypeCount int
 	if err := tx.QueryRow("SELECT COUNT(*) FROM asset_types").Scan(&assetTypeCount); err != nil {
 		return err
@@ -356,6 +390,8 @@ func initDatabase(db *sql.DB) error {
 		"CREATE INDEX IF NOT EXISTS idx_linked_txn ON transactions(linked_transaction_id)",
 		"CREATE INDEX IF NOT EXISTS idx_symbol_analyses_lookup ON symbol_analyses(symbol, currency, created_at DESC)",
 		"CREATE INDEX IF NOT EXISTS idx_holdings_analyses_lookup ON holdings_analyses(currency, created_at DESC)",
+		"CREATE INDEX IF NOT EXISTS idx_ai_analysis_methods_name ON ai_analysis_methods(name)",
+		"CREATE INDEX IF NOT EXISTS idx_ai_analysis_runs_method_created ON ai_analysis_runs(method_id, created_at DESC)",
 	}
 	for _, idx := range indexes {
 		if err := exec(tx, idx); err != nil {
