@@ -195,6 +195,40 @@ function renderMarkdownLite(value) {
   let blockquote = [];
   let inCodeBlock = false;
   let codeLines = [];
+  let tableRows = [];
+
+  const parseTableCells = (line) => {
+    return line.replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+  };
+
+  const isTableSeparator = (line) => /^\|?[\s:|-]+\|[\s:|-]*(\|[\s:|-]*)*\|?$/.test(line.trim());
+
+  const flushTable = () => {
+    if (!tableRows.length) return;
+    let thead = '';
+    let tbody = '';
+    let headerDone = false;
+    for (const row of tableRows) {
+      if (row.isSeparator) {
+        headerDone = true;
+        continue;
+      }
+      const tag = !headerDone ? 'th' : 'td';
+      const cells = row.cells.map((c) => `<${tag} class="md-td">${renderMarkdownInline(c)}</${tag}>`).join('');
+      const tr = `<tr class="md-tr">${cells}</tr>`;
+      if (!headerDone) {
+        thead += tr;
+      } else {
+        tbody += tr;
+      }
+    }
+    let tableHtml = '<div class="md-table-wrap"><table class="md-table">';
+    if (thead) tableHtml += `<thead>${thead}</thead>`;
+    if (tbody) tableHtml += `<tbody>${tbody}</tbody>`;
+    tableHtml += '</table></div>';
+    html.push(tableHtml);
+    tableRows = [];
+  };
 
   const flushParagraph = () => {
     if (!paragraph.length) {
@@ -239,6 +273,7 @@ function renderMarkdownLite(value) {
       flushParagraph();
       flushList();
       flushBlockquote();
+      flushTable();
       if (inCodeBlock) {
         flushCodeBlock();
         inCodeBlock = false;
@@ -257,8 +292,23 @@ function renderMarkdownLite(value) {
       flushParagraph();
       flushList();
       flushBlockquote();
+      flushTable();
       continue;
     }
+
+    // Table row detection
+    if (trimmed.startsWith('|') || trimmed.endsWith('|')) {
+      flushParagraph();
+      flushList();
+      flushBlockquote();
+      if (isTableSeparator(trimmed)) {
+        tableRows.push({ isSeparator: true });
+      } else {
+        tableRows.push({ cells: parseTableCells(trimmed), isSeparator: false });
+      }
+      continue;
+    }
+    flushTable();
 
     const headingMatch = trimmed.match(/^(#{1,6})\s+(.+)$/);
     if (headingMatch) {
@@ -319,6 +369,7 @@ function renderMarkdownLite(value) {
   flushParagraph();
   flushList();
   flushBlockquote();
+  flushTable();
 
   return html.join('');
 }
