@@ -57,6 +57,9 @@
   .symbol-analysis-grid {
     grid-template-columns: 1fr;
   }
+  .ai-analysis-variable-grid {
+    grid-template-columns: 1fr;
+  }
   .actions-column {
     min-width: 192px;
   }

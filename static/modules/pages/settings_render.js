@@ -6,7 +6,7 @@ async function renderSettingsPage() {
   `;
 
   try {
-    const [accounts, assetTypes, allocationSettings, exchangeRates, symbols, holdings, storageInfo, aiSettings] = await Promise.all([
+    const [accounts, assetTypes, allocationSettings, exchangeRates, symbols, holdings, storageInfo, aiSettings, aiAnalysisMethods] = await Promise.all([
       fetchJSON('/api/accounts'),
       fetchJSON('/api/asset-types'),
       fetchJSON('/api/allocation-settings'),
@@ -15,6 +15,7 @@ async function renderSettingsPage() {
       fetchJSON('/api/holdings'),
       fetchJSON('/api/storage'),
       loadAIAnalysisSettings({ forceRefresh: true }),
+      loadAIAnalysisMethods({ forceRefresh: true }),
     ]);
 
     const settingsMap = {};
@@ -110,6 +111,55 @@ async function renderSettingsPage() {
             </div>
           </div>
         </div>
+      </div>
+    `;
+
+    const aiAnalysisMethodRows = (aiAnalysisMethods || []).map((method) => `
+      <div class="list-item">
+        <div>
+          <strong>${escapeHtml(method.name)}</strong>
+          <div class="section-sub">Updated ${escapeHtml(formatDateTimeInDisplayTimezone(method.updatedAt || method.createdAt))}</div>
+          <div class="section-sub">Variables: ${method.variables.length ? method.variables.map((item) => escapeHtml(item)).join(', ') : 'None'}</div>
+        </div>
+        <div class="card-actions">
+          <button class="btn secondary" data-ai-method-edit="${method.id}" type="button">Edit</button>
+          <button class="btn danger" data-ai-method-delete="${method.id}" type="button">Delete</button>
+        </div>
+      </div>
+    `).join('');
+
+    const aiAnalysisMethodsSection = `
+      <div class="card">
+        <h3>Analysis Methods</h3>
+        <div class="section-sub">Manage reusable prompt templates for the AI Analysis workspace. Variables are extracted from \${VAR} placeholders.</div>
+        <div class="list">${aiAnalysisMethodRows || '<div class="section-sub">No methods yet.</div>'}</div>
+        <form id="ai-analysis-method-form" class="form">
+          <input id="ai-analysis-method-id" type="hidden">
+          <div class="form-row">
+            <div class="field">
+              <label>Name</label>
+              <input id="ai-analysis-method-name" type="text" placeholder="例如：财报拆解" required>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="field">
+              <label>System Prompt</label>
+              <textarea id="ai-analysis-method-system-prompt" rows="5" placeholder="You are an investment analyst for \${SYMBOL}."></textarea>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="field">
+              <label>User Prompt</label>
+              <textarea id="ai-analysis-method-user-prompt" rows="6" placeholder="Please analyze \${SYMBOL} and answer \${QUESTION}."></textarea>
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="actions">
+              <button class="btn" id="save-ai-analysis-method" type="submit">Save Method</button>
+              <button class="btn secondary" id="reset-ai-analysis-method" type="button">Clear</button>
+            </div>
+          </div>
+        </form>
       </div>
     `;
 
@@ -448,7 +498,7 @@ async function renderSettingsPage() {
       {
         key: 'api',
         label: 'API',
-        content: `<div class="grid two">${apiSection}${aiAnalysisSection}</div>`,
+        content: `<div class="grid two">${apiSection}${aiAnalysisSection}${aiAnalysisMethodsSection}</div>`,
       },
     ];
 
@@ -470,9 +520,8 @@ async function renderSettingsPage() {
     `;
 
     initSettingsTabs();
-    bindSettingsActions(assetTypes);
+    bindSettingsActions(assetTypes, aiAnalysisMethods || []);
   } catch (err) {
     view.innerHTML = renderEmptyState('Unable to load settings.');
   }
 }
-

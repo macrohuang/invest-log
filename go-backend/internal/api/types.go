@@ -74,6 +74,17 @@ type aiSettingsPayload struct {
 	APIKey          string `json:"api_key"`
 }
 
+type aiAnalysisMethodPayload struct {
+	Name         string `json:"name"`
+	SystemPrompt string `json:"system_prompt"`
+	UserPrompt   string `json:"user_prompt"`
+}
+
+type aiAnalysisStreamPayload struct {
+	MethodID  int64             `json:"method_id"`
+	Variables map[string]string `json:"variables"`
+}
+
 type aiSymbolAnalysisPayload struct {
 	BaseURL        string `json:"base_url"`
 	APIKey         string `json:"api_key"`

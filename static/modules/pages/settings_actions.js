@@ -27,7 +27,7 @@ function initSettingsTabs() {
   setActive(initial);
 }
 
-function bindSettingsActions(assetTypes) {
+function bindSettingsActions(assetTypes, aiAnalysisMethods = []) {
   const saveApi = document.getElementById('save-api');
   if (saveApi) {
     saveApi.addEventListener('click', () => {
@@ -97,6 +97,79 @@ function bindSettingsActions(assetTypes) {
       }
     });
   }
+
+  const aiAnalysisMethodForm = document.getElementById('ai-analysis-method-form');
+  const aiAnalysisMethodIDInput = document.getElementById('ai-analysis-method-id');
+  const aiAnalysisMethodNameInput = document.getElementById('ai-analysis-method-name');
+  const aiAnalysisMethodSystemPromptInput = document.getElementById('ai-analysis-method-system-prompt');
+  const aiAnalysisMethodUserPromptInput = document.getElementById('ai-analysis-method-user-prompt');
+  const resetAIAnalysisMethodBtn = document.getElementById('reset-ai-analysis-method');
+
+  const resetAIAnalysisMethodForm = () => {
+    if (aiAnalysisMethodIDInput) aiAnalysisMethodIDInput.value = '';
+    if (aiAnalysisMethodNameInput) aiAnalysisMethodNameInput.value = '';
+    if (aiAnalysisMethodSystemPromptInput) aiAnalysisMethodSystemPromptInput.value = '';
+    if (aiAnalysisMethodUserPromptInput) aiAnalysisMethodUserPromptInput.value = '';
+  };
+
+  if (aiAnalysisMethodForm) {
+    aiAnalysisMethodForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const payload = {
+        id: aiAnalysisMethodIDInput && aiAnalysisMethodIDInput.value ? Number(aiAnalysisMethodIDInput.value) : 0,
+        name: aiAnalysisMethodNameInput ? aiAnalysisMethodNameInput.value : '',
+        systemPrompt: aiAnalysisMethodSystemPromptInput ? aiAnalysisMethodSystemPromptInput.value : '',
+        userPrompt: aiAnalysisMethodUserPromptInput ? aiAnalysisMethodUserPromptInput.value : '',
+      };
+      try {
+        await saveAIAnalysisMethod(payload);
+        showToast(payload.id > 0 ? 'AI method updated' : 'AI method created');
+        renderSettings();
+      } catch (err) {
+        showToast('AI method save failed');
+      }
+    });
+  }
+
+  if (resetAIAnalysisMethodBtn) {
+    resetAIAnalysisMethodBtn.addEventListener('click', () => {
+      resetAIAnalysisMethodForm();
+    });
+  }
+
+  view.querySelectorAll('[data-ai-method-edit]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const methodID = Number(btn.dataset.aiMethodEdit || 0);
+      const method = aiAnalysisMethods.find((item) => item.id === methodID);
+      if (!method) {
+        return;
+      }
+      if (aiAnalysisMethodIDInput) aiAnalysisMethodIDInput.value = String(method.id);
+      if (aiAnalysisMethodNameInput) aiAnalysisMethodNameInput.value = method.name || '';
+      if (aiAnalysisMethodSystemPromptInput) aiAnalysisMethodSystemPromptInput.value = method.systemPrompt || '';
+      if (aiAnalysisMethodUserPromptInput) aiAnalysisMethodUserPromptInput.value = method.userPrompt || '';
+      if (aiAnalysisMethodNameInput) aiAnalysisMethodNameInput.focus();
+    });
+  });
+
+  view.querySelectorAll('[data-ai-method-delete]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const methodID = Number(btn.dataset.aiMethodDelete || 0);
+      if (!methodID) {
+        return;
+      }
+      if (!await showConfirmModal('Delete this AI analysis method?')) {
+        return;
+      }
+      try {
+        await removeAIAnalysisMethod(methodID);
+        showToast('AI method deleted');
+        renderSettings();
+      } catch (err) {
+        showToast('AI method delete failed');
+      }
+    });
+  });
 
   const storageSwitch = document.getElementById('storage-switch');
   if (storageSwitch) {
@@ -434,4 +507,3 @@ function bindSettingsActions(assetTypes) {
     });
   });
 }
-

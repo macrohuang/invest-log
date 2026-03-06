@@ -18,13 +18,14 @@ const (
 )
 
 type aiChatCompletionRequest struct {
-	EndpointURL  string
-	APIKey       string
-	Model        string
-	SystemPrompt string
-	UserPrompt   string
-	Logger       *slog.Logger
-	OnDelta      func(string)
+	EndpointURL         string
+	APIKey              string
+	Model               string
+	SystemPrompt        string
+	UserPrompt          string
+	Logger              *slog.Logger
+	OnDelta             func(string)
+	UseGoogleSearchTool bool
 }
 
 type aiChatCompletionResult struct {

@@ -32,6 +32,7 @@ func requestAIByChatCompletions(ctx context.Context, req aiChatCompletionRequest
 		"max_completion_tokens": aiMaxOutputTokens,
 		"max_tokens":            aiMaxOutputTokens,
 	}
+	addAIRequestTools(payload, req)
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return aiChatCompletionResult{}, fmt.Errorf("marshal ai request: %w", err)
@@ -148,6 +149,7 @@ func buildGeminiStreamPayload(req aiChatCompletionRequest) map[string]any {
 			},
 		}
 	}
+	addAIRequestTools(payload, req)
 
 	return payload
 }
@@ -266,6 +268,7 @@ func requestAIByResponses(ctx context.Context, req aiChatCompletionRequest, endp
 			{"role": "user", "content": req.UserPrompt},
 		},
 	}
+	addAIRequestTools(payload, req)
 	return requestAIByPayload(ctx, req, endpoint, payload)
 }
 
@@ -284,7 +287,16 @@ func requestAIByHybridPayload(ctx context.Context, req aiChatCompletionRequest, 
 		"max_completion_tokens": aiMaxOutputTokens,
 		"max_output_tokens":     aiMaxOutputTokens,
 	}
+	addAIRequestTools(payload, req)
 	return requestAIByPayload(ctx, req, endpoint, payload)
+}
+
+func addAIRequestTools(payload map[string]any, req aiChatCompletionRequest) {
+	payload["tools"] = []map[string]any{
+		{
+			"google_search": map[string]any{},
+		},
+	}
 }
 
 func requestAIByPayload(ctx context.Context, req aiChatCompletionRequest, endpoint string, payload map[string]any) (aiChatCompletionResult, error) {
@@ -320,7 +332,6 @@ func requestAIByPayload(ctx context.Context, req aiChatCompletionRequest, endpoi
 	}
 	return aiChatCompletionResult{Model: model, Content: content}, nil
 }
-
 
 func executeAIRequest(httpReq *http.Request, logger *slog.Logger) ([]byte, error) {
 	client := &http.Client{Timeout: aiRequestTimeout}

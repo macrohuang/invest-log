@@ -2,7 +2,7 @@
  * Service Worker for Invest Log SPA
  */
 
-const CACHE_NAME = 'invest-log-v4';
+const CACHE_NAME = 'invest-log-v6';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -14,15 +14,20 @@ const STATIC_ASSETS = [
   './modules/ui.js',
   './modules/charts.js',
   './modules/ai-settings.js',
+  './modules/ai-analysis-methods.js',
   './modules/ai-analysis.js',
   './modules/router.js',
   './modules/pages/overview.js',
   './modules/pages/holdings.js',
+  './modules/pages/ai-analysis.js',
   './modules/pages/symbol-analysis.js',
   './modules/pages/transactions.js',
   './modules/pages/charts.js',
   './modules/pages/add-transaction.js',
   './modules/pages/transfer.js',
+  './modules/pages/settings_render.js',
+  './modules/pages/settings_actions.js',
+  './modules/pages/settings_ai_advisor.js',
   './modules/pages/settings.js',
   './manifest.json',
   './icons/icon-192.png',
